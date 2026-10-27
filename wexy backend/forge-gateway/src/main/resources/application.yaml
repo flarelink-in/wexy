@@ -1,0 +1,85 @@
+# forge-gateway. Secrets come from the environment: Infisical in deploys, and locally the untracked
+# .env that the local profile imports. Every wexy.* value can also be set as an environment
+# variable, e.g. WEXY_SHIELD_EDGE_REFILLPERSECOND=10.
+spring:
+  application:
+    name: forge-gateway
+  main:
+    web-application-type: reactive
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6390}
+      # Fail fast onto the outage policy rather than stall the edge.
+      timeout: 500ms
+      connect-timeout: 500ms
+  cloud:
+    gateway:
+      filter:
+        json-to-grpc:
+          # firebase-admin brings gRPC onto the classpath (through Storage and Firestore, which
+          # Wexy does not use), and this filter's SSL configurer then needs grpc-netty, which is
+          # not there: the context fails to start. Wexy proxies no gRPC.
+          enabled: false
+      httpclient:
+        connect-timeout: 2000
+        # Idle time between reads, not a deadline: model streams send a heartbeat every 15 s.
+        response-timeout: 60s
+        pool:
+          type: elastic
+          max-idle-time: 30s
+          max-life-time: 5m
+          acquire-timeout: 2000
+
+server:
+  port: 8400
+  netty:
+    connection-timeout: 5s
+    # Above the 15 s stream heartbeat.
+    idle-timeout: 60s
+  max-http-request-header-size: 16KB
+
+wexy:
+  forge-service:
+    url: ${WEXY_FORGE_SERVICE_URL:http://localhost:8410}
+  internal-jwt:
+    # Base64 PKCS#8 RSA key, shared by every instance. Empty generates an ephemeral one (local only).
+    private-key: ${WEXY_INTERNAL_JWT_PRIVATE_KEY:}
+  firebase:
+    service-account-b64: ${FIREBASE_SERVICE_ACCOUNT_B64:}
+    required: true
+  auth:
+    # Comma-separated Firebase uids allowed on /v1/admin/**.
+    admin-uids: ${WEXY_ADMIN_UIDS:}
+  cors:
+    allowed-origins: ${WEXY_CORS_ALLOWED_ORIGINS:https://wexy.ai,https://www.wexy.ai}
+  appcheck:
+    enabled: true
+    # Monitor first: count what would be refused until real traffic is near 100% attested.
+    enforce: ${WEXY_APPCHECK_ENFORCE:false}
+    project-number: ${WEXY_APPCHECK_PROJECT_NUMBER:}
+    allowed-app-ids: ${WEXY_APPCHECK_ALLOWED_APP_IDS:}
+    replay-protection:
+      enabled: true
+      enforce: ${WEXY_APPCHECK_REPLAY_ENFORCE:false}
+      timeout-millis: 2000
+  shield:
+    enabled: true
+    # Behind Cloudflare and nginx in production: set per deployment (see ClientAddressResolver).
+    trusted-proxy-count: ${WEXY_SHIELD_TRUSTED_PROXY_COUNT:0}
+    trusted-client-ip-header: ${WEXY_SHIELD_TRUSTED_CLIENT_IP_HEADER:}
+    redis-outage-policy: LOCAL_FALLBACK
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      show-details: never
+    gateway:
+      enabled: false
+  metrics:
+    tags:
+      application: forge-gateway

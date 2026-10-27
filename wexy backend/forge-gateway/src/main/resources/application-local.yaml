@@ -1,0 +1,31 @@
+# Local development: the dev token verifier for sign-in while there are no Firebase credentials
+# (DevTokenVerifier, forge-loop design §9), the Vite dev server's origins, and limits loose enough
+# that poking by hand, or a smoke run, never trips a ban or a 429 from your own gateway.
+spring:
+  config:
+    # The repository's untracked .env, whether the gateway starts from the root or its module
+    # folder. Only this profile reads it, so tests never pick up a real secret.
+    import: "optional:file:.env[.properties],optional:file:../.env[.properties]"
+
+wexy:
+  firebase:
+    required: false
+  cors:
+    allowed-origins: http://localhost:5173,http://127.0.0.1:5173
+  appcheck:
+    enabled: false
+  shield:
+    edge:
+      refill-per-second: 100
+      burst-capacity: 500
+    ban:
+      enabled: false
+    # Development is never rate limited by its own gateway (forge-loop design §9): a smoke run makes
+    # four creates at once, and the compiled defaults (0.05 to 0.5 a second) answer 429 to a second
+    # run. Everything here comes from one address, so the address-keyed buckets are raised too.
+    buckets:
+      forge-create: { refill-per-second: 5, burst-capacity: 100 }
+      forge-create-user: { refill-per-second: 5, burst-capacity: 100 }
+      forge-create-anonymous: { refill-per-second: 5, burst-capacity: 100 }
+      forge-edit: { refill-per-second: 5, burst-capacity: 100 }
+      forge-edit-user: { refill-per-second: 5, burst-capacity: 100 }
