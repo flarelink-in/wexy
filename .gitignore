@@ -1,0 +1,38 @@
+# Machine-local editor state, reports and credentials.
+.idea/
+.vscode/
+*.log
+*.exit
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+*-firebase-adminsdk-*.json
+*service_account*.json
+*service-account*.json
+.infisical.json
+.firebaserc
+.clinerules/
+
+# Private documentation and tests stay local; README is the published documentation.
+docs/
+test/
+tests/
+testing/
+**/src/test/
+*.test.*
+*.spec.*
+*.properties
+!/wexy backend/.mvn/wrapper/maven-wrapper.properties
+
+# Both subprojects supply their additional build/output and runtime-resource rules.
+node_modules/
+target/
+dist/
+out/
+coverage/

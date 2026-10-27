@@ -1,0 +1,22 @@
+# Local Redis for the gateway's limits and forge-service's spend meter:
+#   docker compose -f compose.local.yaml up -d
+#
+# Redis 7 or newer: SpendGuard's script uses EXPIRE ... NX, and on Redis 6 every charge fails closed.
+# Persistent (append-only file in a named volume): the spend counters live here, and a restart that
+# emptied them would hand out the day's budget again, with a real key.
+# Port 6390 on the loopback only, so it does not collide with another project's Redis on 6379.
+name: wexy
+
+services:
+  redis:
+    image: redis:7.2-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6390:6379"
+    volumes:
+      - wexy-redis:/data
+    mem_limit: 128m
+    restart: unless-stopped
+
+volumes:
+  wexy-redis:

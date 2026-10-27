@@ -1,0 +1,58 @@
+# Build output
+target/
+build/
+out/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# Logs
+*.log
+logs/
+
+# Environment: real values are never committed; .env.example lists the names. Secrets live only
+# here, never in application-*.yaml, so the profile files are tracked.
+.env
+.env.*
+!.env.example
+
+# Credentials, wherever they land
+*.pem
+*.key
+*.p12
+*.jks
+*-firebase-adminsdk-*.json
+*service_account*.json
+*service-account*.json
+
+# Database dumps never enter the repository
+*.sql.gz
+*.dump
+
+# Editors and operating systems
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Private documentation and agent instructions stay on this machine.
+/docs/
+*.md
+!/README.md
+!/forge-service/src/main/resources/prompts/*.md
+!/forge-service/src/main/resources/host/h1/rules.md
+/.clinerules/
+/.infisical.json
+
+# Tests, harnesses and their evidence remain local (runtime mocks are application code).
+**/src/test/
+test/
+tests/
+testing/
+/tools/
+coverage/
+
+# Local properties, except the public Maven wrapper distribution configuration.
+*.properties
+!/.mvn/wrapper/maven-wrapper.properties

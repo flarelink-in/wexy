@@ -1,0 +1,16 @@
+# LF in the repository and the working tree, whatever core.autocrlf says (it is true system-wide on
+# this laptop). A mvnw checked out with CRLF fails inside a Linux container.
+* text=auto eol=lf
+mvnw text eol=lf
+*.sh text eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binary: never converted
+*.jar binary
+*.png binary
+*.jpg binary
+*.webp binary
+*.ico binary
+*.zip binary
+*.gz binary
