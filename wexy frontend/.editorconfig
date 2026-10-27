@@ -1,0 +1,18 @@
+# Whitespace only. The code style is the playground's (docs/coding-principles.md §13); no formatter
+# runs over the code.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+max_line_length = 110
+
+[*.{json,yml,yaml}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false

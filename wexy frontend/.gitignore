@@ -1,0 +1,56 @@
+# Dependencies and builds
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Logs and local run output (screenshots, films, reports)
+*.log
+dev/out/
+out/
+coverage/
+
+# Environment: real values are never committed; .env.example lists the names
+.env
+.env.*
+!.env.example
+
+# Credentials, wherever they land
+*.pem
+*.key
+*.p12
+*-firebase-adminsdk-*.json
+*service_account*.json
+*service-account*.json
+
+# 3D models stay local: copy them in, never commit them
+*.glb
+*.gltf
+*.fbx
+*.obj
+*.blend
+
+# Editors and operating systems
+.idea/
+*.iml
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+
+# Private documentation and agent instructions stay on this machine.
+/docs/
+*.md
+!/README.md
+!/src/contract/h1/rules.md
+/.clinerules/
+/.infisical.json
+/.firebaserc
+
+# Tests, GPU harnesses and local properties are not published.
+/test/
+/tests/
+/testing/
+/dev/
+*.test.*
+*.spec.*
+*.properties

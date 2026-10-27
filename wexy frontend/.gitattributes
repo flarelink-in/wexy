@@ -1,0 +1,23 @@
+# LF in the repository and the working tree, whatever core.autocrlf says. It is true system-wide on
+# this laptop, and without these rules git once rewrote a small binary file in null-graph.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binary: never converted
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.mp4 binary
+*.webm binary
+*.wasm binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.zip binary
+*.tgz binary
+*.bin binary

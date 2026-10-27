@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Wexy Studio</title>
+    <meta name="description" content="Describe a world in one sentence, fly through it live, and share it as a video for YouTube, Reels or TikTok. It renders on your own computer.">
+    <meta name="theme-color" content="#07080b">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <meta property="og:title" content="Wexy Studio">
+    <meta property="og:description" content="Describe a world. Fly through it. Share the film.">
+    <meta property="og:image" content="/showcase/kerr-black-hole.webp">
+</head>
+<body class="site">
+    <header class="nav" id="nav">
+        <div class="wrap nav-inner">
+            <a class="brand" href="./" aria-label="Wexy home"><span data-logo></span><span class="brand-name">Wexy</span></a>
+            <nav class="nav-links" aria-label="Sections">
+                <a href="#how">How it works</a>
+                <a href="#showcase">Showcase</a>
+                <a href="#share">Made to share</a>
+                <a href="#models">Meta AI</a>
+            </nav>
+            <a class="btn btn-primary btn-sm-nav" href="./studio.html">Open Studio <span data-icon="arrow"></span></a>
+        </div>
+    </header>
+
+    <main>
+        <!-- Hero: a live NullGraph render behind the copy, with a still for browsers without WebGPU. -->
+        <section class="hero" aria-labelledby="hero-title">
+            <div class="hero-media" aria-hidden="true">
+                <img class="hero-still" src="/showcase/kerr-black-hole-hero.webp" alt="">
+                <canvas id="hero-canvas"></canvas>
+                <div class="hero-shade"></div>
+            </div>
+            <div class="wrap hero-content">
+                <p class="eyebrow"><span class="eyebrow-dot"></span>Meta Global AI Developer Hackathon 2026 · Indie track</p>
+                <h1 id="hero-title">Describe a world.<br>Fly through it.<br><span class="grad">Share the film.</span></h1>
+                <p class="lede">Type one sentence and Wexy builds a living 3D world in your browser. Drag to look around, slide to change the spin or the glow, then save it as a video for YouTube, Reels or TikTok. It renders on your own computer; your idea is sent to Meta's models.</p>
+
+                <form class="prompt-bar" id="prompt-bar" action="./studio.html" method="get">
+                    <span class="prompt-glyph" data-icon="spark"></span>
+                    <label class="sr-only" for="hero-prompt">Describe a world</label>
+                    <input id="hero-prompt" name="prompt" type="text" autocomplete="off" spellcheck="false" placeholder="Describe a world…">
+                    <input type="hidden" name="autorun" value="1">
+                    <button type="submit" class="btn btn-primary">Create <span data-icon="arrow"></span></button>
+                </form>
+                <p class="hero-ideas"><span>Or try</span>
+                    <a class="chip" href="./studio.html?scene=kerr-black-hole">Black hole</a>
+                    <a class="chip" href="./studio.html?scene=celestial-torii">Sakura shrine</a>
+                    <a class="chip" href="./studio.html?scene=magnetic-star">Magnetar</a>
+                </p>
+            </div>
+            <p class="hero-live wrap" id="hero-live" hidden><span class="rec"></span><span id="hero-live-text">Running live on your computer · this is not a video</span></p>
+        </section>
+
+        <!-- How -->
+        <section class="section" id="how" aria-labelledby="how-title">
+            <div class="wrap">
+                <p class="kicker">How it works</p>
+                <h2 id="how-title">Three steps.<br>No skills needed.</h2>
+                <ol class="stages">
+                    <li class="stage-card">
+                        <span class="stage-no">01</span>
+                        <h3>Describe it</h3>
+                        <p>Type an idea, or pick one. Meta's models plan the scene and write how it moves and how it looks, and your browser checks that code on your device before it runs.</p>
+                        <div class="mini mini-plan" aria-hidden="true">
+                            <div class="bubble">“A sakura shrine at twilight, with spirit dragons”</div>
+                            <ol>
+                                <li class="done"><span data-icon="check"></span>Planning the scene</li>
+                                <li class="done"><span data-icon="check"></span>Building the world</li>
+                                <li class="now"><i></i>Testing it on your device</li>
+                            </ol>
+                        </div>
+                    </li>
+                    <li class="stage-card">
+                        <span class="stage-no">02</span>
+                        <h3>Play with it</h3>
+                        <p>It's alive, not a recording. Drag to look around. Slide to change the spin, the wind or the glow. Save a few camera views and the camera glides between them.</p>
+                        <div class="mini mini-sliders" aria-hidden="true">
+                            <div><span>Disk spin</span><i style="--v: 0.42"></i></div>
+                            <div><span>Jet power</span><i style="--v: 0.68"></i></div>
+                            <div><span>Glow</span><i style="--v: 0.3"></i></div>
+                            <div class="keys"><b></b><b style="left: 46%"></b><b style="left: 92%"></b><em></em></div>
+                        </div>
+                    </li>
+                    <li class="stage-card">
+                        <span class="stage-no">03</span>
+                        <h3>Share it</h3>
+                        <p>Pick wide, vertical or square. Snap a photo, or record a video in HD or Full HD. Your computer draws every frame at full quality.</p>
+                        <div class="mini mini-shapes" aria-hidden="true">
+                            <div class="shapes">
+                                <span class="shape shape-wide"><i></i>Wide</span>
+                                <span class="shape shape-tall on"><i></i>Vertical</span>
+                                <span class="shape shape-square"><i></i>Square</span>
+                            </div>
+                            <div class="film-meta"><span>Reels · Shorts · TikTok · YouTube</span><b>1080p</b></div>
+                        </div>
+                    </li>
+                </ol>
+            </div>
+        </section>
+
+        <!-- Showcase -->
+        <section class="section" id="showcase" aria-labelledby="show-title">
+            <div class="wrap">
+                <p class="kicker">Showcase</p>
+                <h2 id="show-title">Three worlds<br>to start from.</h2>
+                <p class="section-lede">Playground examples, written by hand to show what the studio runs. Open any of them in the studio and make it yours. These frames are real renders, not concept art.</p>
+                <div class="shots">
+                    <article class="shot shot-wide">
+                        <a href="./studio.html?scene=kerr-black-hole" aria-label="Open the black hole in the studio">
+                            <img src="/showcase/kerr-black-hole.webp" alt="A black hole with a glowing, lensed accretion disk and two blue polar jets" loading="lazy" width="1280" height="720">
+                        </a>
+                        <div class="shot-body">
+                            <div class="shot-tags"><span class="tag tag-spark">Space</span><span class="tag tag-gpu">1 million glowing particles</span></div>
+                            <h3>Spinning black hole</h3>
+                            <p>“A spinning Kerr black hole with a Doppler-beamed accretion disk, a tidal disruption stream and braided polar jets.”</p>
+                            <a class="shot-link" href="./studio.html?scene=kerr-black-hole">Open in the studio <span data-icon="arrow"></span></a>
+                        </div>
+                    </article>
+                    <article class="shot">
+                        <a href="./studio.html?scene=celestial-torii" aria-label="Open the sakura shrine in the studio">
+                            <img src="/showcase/celestial-torii.webp" alt="An anime-style vermilion torii gate on a stone island under a sakura tree at twilight, with glowing spirit streams and a comet" loading="lazy" width="1280" height="720">
+                        </a>
+                        <div class="shot-body">
+                            <div class="shot-tags"><span class="tag tag-spark">Anime</span><span class="tag tag-gate">Painted sky · 65,000 petals and spirits</span></div>
+                            <h3>Sakura shrine</h3>
+                            <p>“An anime shrine at twilight: a vermilion water torii under a sakura tree, spirit dragons and a split comet overhead.”</p>
+                            <a class="shot-link" href="./studio.html?scene=celestial-torii">Open in the studio <span data-icon="arrow"></span></a>
+                        </div>
+                    </article>
+                    <article class="shot">
+                        <a href="./studio.html?scene=magnetic-star" aria-label="Open the magnetar in the studio">
+                            <img src="/showcase/magnetic-star.webp" alt="A bright star inside an orange plasma disk, wrapped in looping blue magnetic field lines" loading="lazy" width="1280" height="720">
+                        </a>
+                        <div class="shot-body">
+                            <div class="shot-tags"><span class="tag tag-spark">Space</span><span class="tag tag-gpu">1 million glowing particles</span></div>
+                            <h3>Magnetar</h3>
+                            <p>“A magnetar wrapped in a molten plasma disk, with glowing dipole filaments arching between its poles.”</p>
+                            <a class="shot-link" href="./studio.html?scene=magnetic-star">Open in the studio <span data-icon="arrow"></span></a>
+                        </div>
+                    </article>
+                </div>
+            </div>
+        </section>
+
+        <!-- Why -->
+        <section class="section" aria-labelledby="why-title">
+            <div class="wrap">
+                <p class="kicker">Why it's different</p>
+                <h2 id="why-title">Video AI paints pixels.<br>Wexy builds worlds.</h2>
+                <div class="compare" role="table" aria-label="AI video generators compared with Wexy">
+                    <div class="compare-row compare-head" role="row">
+                        <span role="columnheader"></span>
+                        <span role="columnheader">AI video generators</span>
+                        <span role="columnheader" class="ours">Wexy</span>
+                    </div>
+                    <div class="compare-row" role="row">
+                        <span role="rowheader">Cost</span>
+                        <span role="cell">You pay per clip for time on cloud GPUs</span>
+                        <span role="cell" class="ours"><b>No per-clip fee.</b> Your own computer makes the video.</span>
+                    </div>
+                    <div class="compare-row" role="row">
+                        <span role="rowheader">Camera</span>
+                        <span role="cell">Fixed once the clip is made</span>
+                        <span role="cell" class="ours">Fly anywhere and re-shoot as often as you like. The world is still there.</span>
+                    </div>
+                    <div class="compare-row" role="row">
+                        <span role="rowheader">Over time</span>
+                        <span role="cell">Things melt and morph after a few seconds</span>
+                        <span role="cell" class="ours">The same rules from the first second to the last</span>
+                    </div>
+                    <div class="compare-row" role="row">
+                        <span role="rowheader">Shapes</span>
+                        <span role="cell">Often one size, upscaled</span>
+                        <span role="cell" class="ours">Wide, vertical or square, drawn at HD or Full HD</span>
+                    </div>
+                    <div class="compare-row" role="row">
+                        <span role="rowheader">Where it's made</span>
+                        <span role="cell">On someone else's server</span>
+                        <span role="cell" class="ours">Renders on your device. Your instructions are sent to Meta's models.</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Share -->
+        <section class="section" id="share" aria-labelledby="share-title">
+            <div class="wrap">
+                <p class="kicker">Made to share</p>
+                <h2 id="share-title">From an idea<br>to a Reel.</h2>
+                <div class="perks">
+                    <article class="perk">
+                        <span class="perk-icon"><span data-icon="tall"></span></span>
+                        <h3>Vertical, wide or square</h3>
+                        <p>Framed for Reels, Shorts and TikTok as well as YouTube. The frame guide shows exactly what will be in the shot before you press Record.</p>
+                    </article>
+                    <article class="perk">
+                        <span class="perk-icon"><span data-icon="eye"></span></span>
+                        <h3>Made on your device</h3>
+                        <p>No per-video fee. Your graphics card makes the video; your instructions are sent to Meta's models.</p>
+                    </article>
+                    <article class="perk">
+                        <span class="perk-icon"><span data-icon="film"></span></span>
+                        <h3>Every frame at full quality</h3>
+                        <p>Every frame is drawn at full quality, even on a modest laptop. A slower computer just takes a little longer to finish.</p>
+                    </article>
+                </div>
+            </div>
+        </section>
+
+        <!-- Models -->
+        <section class="section" id="models" aria-labelledby="models-title">
+            <div class="wrap">
+                <p class="kicker">Built with Meta AI</p>
+                <h2 id="models-title">Meta's AI does the hard parts.</h2>
+                <div class="models">
+                    <article class="model">
+                        <span class="tag tag-spark">Muse Spark</span>
+                        <h3>The director</h3>
+                        <p>Turns your sentence into a plan: what's in the scene, how it moves, how it's lit and where the camera goes.</p>
+                    </article>
+                    <article class="model">
+                        <span class="tag tag-spark">Muse Spark</span>
+                        <h3>The builder</h3>
+                        <p>Writes the code that brings the plan to life on your graphics card, and fixes it if a check fails.</p>
+                    </article>
+                </div>
+                <p class="note">In this preview, the studio's worlds are playground examples written by hand; live creation with Meta's models is being connected. The 3D worlds, the controls and the video export are real, and they run on your computer.</p>
+                <p class="note note-dev">For developers: Wexy runs on <a href="https://github.com/Vikas593-cloud/NullGraph">NullGraph</a>, an open-source WebGPU engine.</p>
+            </div>
+        </section>
+
+        <section class="cta">
+            <div class="wrap cta-inner">
+                <h2>Describe a world.<br>Share the film.</h2>
+                <a class="btn btn-primary btn-lg" href="./studio.html">Open Wexy Studio <span data-icon="arrow"></span></a>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <div class="wrap footer-inner">
+            <span class="brand brand-sm"><span data-logo></span><span class="brand-name">Wexy</span></span>
+            <p>An independent project built for the Meta Global AI Developer Hackathon 2026, Indie track. Not affiliated with or endorsed by Meta. Rendering by <a href="https://github.com/Vikas593-cloud/NullGraph">NullGraph</a> (MIT).</p>
+        </div>
+    </footer>
+
+    <script type="module" src="/src/shell/landing/main.ts"></script>
+</body>
+</html>

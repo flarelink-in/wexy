@@ -1,0 +1,34 @@
+{
+  "name": "wexy-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Wexy's browser half: worlds planned and written by Meta's models, checked and run live on the viewer's graphics card, filmed and shared as links.",
+  "type": "module",
+  "author": "Vikas Kumar Singh",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.12.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import ./test/register.mjs --test \"test/**/*.test.mjs\"",
+    "contrast": "node dev/contrast.mjs",
+    "verify": "npm test && npm run contrast && npm run build"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "firebase": "13.1.0",
+    "mediabunny": "1.61.3",
+    "null-graph": "1.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@webgpu/types": "^0.1.74",
+    "typescript": "^5.9.3",
+    "vite": "8.3.4"
+  }
+}
