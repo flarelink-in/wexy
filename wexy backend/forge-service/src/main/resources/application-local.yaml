@@ -1,0 +1,5 @@
+# Local development. The repository's untracked .env holds the key, whether the service starts from
+# the root or its module folder. Only this profile reads it, so tests never pick up a real secret.
+spring:
+  config:
+    import: "optional:file:.env[.properties],optional:file:../.env[.properties]"

@@ -1,0 +1,20 @@
+# The mock profile (forge-loop design §8), run as local,mock: the service's real path with a fake
+# Meta API behind it. MockMetaApi (B0.3) answers on the loopback with the recordings in
+# resources/mock (the planner's plans, the h1 exemplars as functions, a fault for the repair path, an
+# edit for the director). Nothing else changes: the roles, prices and caps are the real ones, and
+# SpendGuard meters every mock call in Redis (Q23), so a cap denial can be rehearsed here.
+# The key below is not a secret: the mock ignores it, and it refuses to start for any base URL off
+# 127.0.0.1, so it can never answer a deployment.
+wexy:
+  meta-api:
+    base-url: http://127.0.0.1:8420/v1
+    api-key: mock-key-not-a-secret
+  mock:
+    port: 8420
+    # 0 answers at once; 80 is about a model's pace, so the studio's progress can be watched.
+    tokens-per-second: 80
+    # ok, fault (an evolve that fails to compile, so the repair path runs), slow (40 s of silence
+    # after the first chunk), error-mid-stream (Meta's in-stream error event).
+    scenario: ok
+    # How long `slow` stays quiet: past the planner's 30 s deadline, under the author's 60 s.
+    slow-millis: 40000

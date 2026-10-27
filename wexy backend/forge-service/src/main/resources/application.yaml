@@ -1,0 +1,82 @@
+# forge-service. Secrets come from the environment: Infisical in deploys, and locally the untracked
+# .env that the local profile imports. Never publish this service's port: it trusts the gateway.
+spring:
+  application:
+    name: forge-service
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6390}
+      # A lost meter must refuse quickly, not hang a request.
+      timeout: 500ms
+      connect-timeout: 500ms
+
+server:
+  port: 8410
+
+wexy:
+  internal-jwt:
+    # The gateway's published key set (InternalToken.JWKS_PATH).
+    jwks-uri: ${WEXY_GATEWAY_URL:http://localhost:8400}/.well-known/jwks.json
+
+  meta-api:
+    base-url: ${WEXY_META_API_BASE_URL:https://api.meta.ai/v1}
+    api-key: ${WEXY_META_API_KEY:}
+    connect-timeout: 5s
+    read-idle-timeout: 30s
+
+  # Roles bound to models by configuration (backend architecture §6.1). The caps hold reasoning plus
+  # the answer, because Meta bills reasoning as output inside max_completion_tokens; each role names
+  # its reasoning effort. Starting values (forge-loop design §11, Q25), tuned from hour one's
+  # reasoning_tokens and the Day-2 benchmark. Timeouts are each call's whole deadline.
+  roles:
+    planner:   { model: muse-spark-1.3,  provider: meta-spark,  max-output-tokens: 2500, timeout: 30s, reasoning-effort: low,    response: scene-draft.v1 }
+    author:    { model: muse-spark-1.3,  provider: meta-spark,  max-output-tokens: 3000, timeout: 60s, reasoning-effort: medium }
+    repairer:  { model: muse-spark-1.3,  provider: meta-spark,  max-output-tokens: 3000, timeout: 45s, reasoning-effort: low }
+    escalator: { model: muse-wonder-1.0, provider: meta-wonder, max-output-tokens: 4000, timeout: 60s, reasoning-effort: high }
+    director:  { model: muse-spark-1.3,  provider: meta-spark,  max-output-tokens: 1500, timeout: 20s, reasoning-effort: low,    response: edit-plan.v1 }
+
+  # USD per million tokens (= micro-USD per token), as Meta's pricing page lists them (forge-loop
+  # design §4.1); cached is the price of input served from the prompt cache. Model ids contain
+  # dots, so the keys are bracketed (gotchas).
+  prices:
+    "[muse-spark-1.3]":  { input: 1.25, output: 4.25, cached: 0.15 }
+    "[muse-wonder-1.0]": { input: 4.00, output: 20.00, cached: 0.20 }
+
+  # The loop's limits (forge-loop design §5): over a cap is 413 before any charge. strict-schemas
+  # waits for hour one to show Meta accepts the real schemas under strict: true (Q24); Meta keeps the
+  # answer to the schema either way, and the service validates it regardless.
+  loop:
+    caps: { prompt-chars: 600, min-seconds: 4, max-seconds: 30, diagnostics: 20, diagnostic-chars: 300, snippet-chars: 200,
+            spec-bytes: 65536, turn-chars: 400, outcome-ids: 16, ladder-bytes: 4096, label-chars: 64 }
+    heartbeat: 15s
+    store: { max-entries: 10000, ttl: 2h }
+    strict-schemas: false
+
+  # Ceilings in micro-USD ($1 = 1,000,000). Every one is required; there is no unlimited.
+  # Development values, inside the $150 credit (plan §4): raise them for the beta (Day 7) and set
+  # the judging lane, meta-demo, with Q9.
+  spend:
+    zone: Asia/Kolkata
+    global:
+      monthly-micro-usd: 40000000
+      daily-micro-usd: 10000000
+    provider:
+      meta-spark:
+        monthly-micro-usd: 35000000
+        daily-micro-usd: 9000000
+      meta-wonder:
+        monthly-micro-usd: 5000000
+        daily-micro-usd: 1000000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      show-details: never
+  metrics:
+    tags:
+      application: forge-service

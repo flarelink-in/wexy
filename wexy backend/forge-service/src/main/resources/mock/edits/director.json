@@ -1,0 +1,7 @@
+{
+  "edit": {
+    "kind": "patch",
+    "ops": [ { "path": "post.bloom.intensity", "value": 0.9 } ],
+    "summary": "The glow is stronger."
+  }
+}
