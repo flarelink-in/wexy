@@ -7,7 +7,7 @@ import type { Source } from '../forge-client/client';
 
 /** Why a world did not arrive, as the loop classifies it. */
 export type FailureKind =
-    | 'cancelled' | 'plan' | 'author-slow' | 'ran-out' | 'paused' | 'budget' | 'rate' | 'offline' | 'sign-in'
+    | 'cancelled' | 'plan' | 'author-slow' | 'author-failed' | 'ran-out' | 'paused' | 'budget' | 'rate' | 'offline' | 'sign-in'
     | 'too-heavy' | 'verify' | 'internal';
 
 export const COPY = {
@@ -51,6 +51,7 @@ export const COPY = {
         'cancelled': '',
         'plan': 'Your idea didn\'t come through. Try again, or pick a starter.',
         'author-slow': 'That took too long. Try again, or try a simpler idea.',
+        'author-failed': 'The AI couldn\'t write this one just now. Try again, or try a simpler idea.',
         'ran-out': 'The AI couldn\'t finish writing this one. Try a simpler idea.',
         'paused': 'Live creation is paused right now. Try again in a little while, or open a starter.',
         'budget': 'Live creation is paused right now. Try again in a little while, or open a starter.',

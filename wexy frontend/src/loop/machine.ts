@@ -5,7 +5,7 @@
 
 import { specFromDraft, type Draft } from '../contract/draft';
 import { functionsOf, withProgramText, type FunctionName, type Program, type SceneSpec, type Style } from '../contract/spec';
-import { toRepairDiagnostics, type ForgeClient, type GenerationInfo, type OutcomeReport } from '../forge-client/client';
+import { toRepairDiagnostics, type ForgeClient, type FunctionResult, type GenerationInfo, type OutcomeReport } from '../forge-client/client';
 import { ForgeError } from '../forge-client/errors';
 import { COPY, type FailureKind } from './copy';
 import { buildOutcome } from './outcome';
@@ -20,6 +20,9 @@ export interface LoopRequest {
 /** The ladder's rungs (core-loop-frontend.md §7); L4 (pipelines) happens inside L6's build, L8 is the studio's swap. */
 export type Rung = 'L0' | 'L1' | 'L2' | 'L3' | 'L5' | 'L6' | 'L7';
 
+/** Each rung's name, for a developer's line beside its id (core-loop-frontend.md §7). */
+export const RUNG_NAMES: Record<Rung, string> = { L0: 'parse', L1: 'lint', L2: 'auto-fix', L3: 'compile', L5: 'probe', L6: 'build', L7: 'sanity' };
+
 export interface RungResult {
     rung: Rung;
     ok: boolean;
@@ -30,13 +33,13 @@ export interface RungResult {
 export interface ProbeNumbers {
     /** One full-size step, predicted from the probe's small world. */
     stepMs: number;
-    /** One full-size frame's draws, predicted. */
-    frameMs: number;
+    /** One full-size frame's draws, predicted; null when a step was refused before any frame was timed (F4). */
+    frameMs: number | null;
     predictedMs: number;
     budgetMs: number;
     /** What the probe itself measured, per step and per frame, at its size. */
     measuredStepMs: number;
-    measuredFrameMs: number;
+    measuredFrameMs: number | null;
 }
 
 export interface LadderReport {
@@ -60,7 +63,8 @@ export interface VerifyFailure {
 }
 
 export type VerifyResult<W> =
-    | { ok: true; world: W; report: LadderReport }
+    /** `spec` is the world as compiled, auto-fixes applied: what runs, shows its code and films (invariant I5). */
+    | { ok: true; world: W; report: LadderReport; spec: SceneSpec }
     | { ok: false; report: LadderReport; failure: VerifyFailure };
 
 /** The ladder, L1 to L7, on a device: verify/ladder.ts in the studio, a fake under test. */
@@ -102,6 +106,11 @@ export interface LoopFailure {
     detail: string;
     generations: GenerationInfo[];
     failure?: VerifyFailure;
+    /**
+     * The report for the backend when the ladder ran at least once: a failed world's evidence (F6), the last
+     * ladder with every generation and the repairs that came back. None for a cancel, or before the ladder.
+     */
+    outcome?: OutcomeReport;
     error?: unknown;
 }
 
@@ -161,8 +170,9 @@ export function classifyError(error: unknown, stage: 'plan' | 'author' | 'repair
             case 'auth': case 'appcheck': case 'account-required': case 'forbidden': return sentence('sign-in');
             case 'timeout': return stage === 'plan' ? sentence('plan') : sentence('author-slow');
             case 'upstream':
+                // The backend judged the answer (empty, no function, declined) or Meta failed, twice: not slowness.
                 if (/ran out of room/i.test(error.message)) return sentence('ran-out');
-                return stage === 'plan' ? sentence('plan') : sentence('author-slow');
+                return stage === 'plan' ? sentence('plan') : sentence('author-failed');
             case 'not-found': return sentence('plan');
             default: return sentence('internal');
         }
@@ -177,8 +187,16 @@ export async function runLoop<W>(deps: LoopDeps<W>, req: LoopRequest, onEvent: (
     const slowMs = deps.slowAfterMs ?? DEFAULT_SLOW_MS;
     const generations: GenerationInfo[] = [];
     const emit = onEvent;
+    let repairs = 0;
+    let lastReport: LadderReport | null = null;
+    /** What the backend hears of a failed world (F6): every generation and the last ladder, never an fps. */
+    const failedOutcome = (): OutcomeReport | undefined => {
+        if (!lastReport) return undefined;
+        const autofixes = Object.values(lastReport.autofixes).reduce((n, f) => n + (f?.length ?? 0), 0);
+        return buildOutcome(generations, lastReport, { repairs, autofixes, firstPassOk: false });
+    };
     const fail = (kind: FailureKind, detail: string, extra: Partial<LoopFailure> = {}): LoopFailure =>
-        ({ ok: false, kind, sentence: COPY.failures[kind], detail, generations, ...extra });
+        ({ ok: false, kind, sentence: COPY.failures[kind], detail, generations, outcome: failedOutcome(), ...extra });
 
     let stage: 'plan' | 'author' | 'repair' = 'plan';
     try {
@@ -207,39 +225,50 @@ export async function runLoop<W>(deps: LoopDeps<W>, req: LoopRequest, onEvent: (
             const inner = new AbortController();
             const onAbort = () => inner.abort();
             signal.addEventListener('abort', onAbort, { once: true });
-            let results;
+            // Each author is kept as it finishes (F5): a sibling's failure stops the others, but what came back
+            // counts, in the plan's order, and the loop waits for the stopped ones so nothing is heard after it.
+            const done: Partial<Record<FunctionName, FunctionResult>> = {};
+            const calls = fns.map(fn => withSlow(slowMs, () => emit({ type: 'slow', what: fn }), () =>
+                retryOnce(() => client.author(fn, plan.generation.generationId, { onText: soFar => emit({ type: 'function-text', fn, soFar }) }, inner.signal),
+                    error => emit({ type: 'retrying', what: fn, error })))
+                .then(r => {
+                    done[fn] = r;
+                    emit({ type: 'authored', fn, text: r.text, generation: r.generation });
+                }, error => { inner.abort(); throw error; }));
             try {
-                results = await Promise.all(fns.map(fn => withSlow(slowMs, () => emit({ type: 'slow', what: fn }), () =>
-                    retryOnce(() => client.author(fn, plan.generation.generationId, { onText: soFar => emit({ type: 'function-text', fn, soFar }) }, inner.signal),
-                        error => emit({ type: 'retrying', what: fn, error })))
-                    .catch(error => { inner.abort(); throw error; })));
+                await Promise.all(calls);
+            } catch (error) {
+                await Promise.allSettled(calls);
+                throw error;
             } finally {
                 signal.removeEventListener('abort', onAbort);
+                for (const fn of fns) {
+                    const r = done[fn];
+                    if (r) {
+                        generations.push(r.generation);
+                        wrote[fn] = r.generation;
+                    }
+                }
             }
             authorMs = performance.now() - t1;
             const program: Program = { kind: 'functions' };
-            for (const r of results) {
-                generations.push(r.generation);
-                wrote[r.fn] = r.generation;
-                program[r.fn] = r.text;
-                emit({ type: 'authored', fn: r.fn, text: r.text, generation: r.generation });
-            }
+            for (const fn of fns) program[fn] = done[fn]!.text;
             spec = specFromDraft(plan.draft, program);
         }
 
         // 3. Verify, repairing the function the ladder names, until it passes or the repairs run out.
-        let repairs = 0;
         let firstPassOk = false;
         for (let attempt = 1; ; attempt++) {
             signal.throwIfAborted();
             emit({ type: 'verifying', attempt, spec });
             const result = await verifier.verify(spec, signal);
             emit({ type: 'verified', attempt, result });
+            lastReport = result.report;
             if (attempt === 1) firstPassOk = result.ok;
             if (result.ok) {
                 const autofixes = Object.values(result.report.autofixes).reduce((n, f) => n + (f?.length ?? 0), 0);
                 const stats = { planMs, authorMs, repairs, autofixes, firstPassOk };
-                return { ok: true, spec, world: result.world, report: result.report, generations, outcome: buildOutcome(generations, result.report, stats), stats };
+                return { ok: true, spec: result.spec, world: result.world, report: result.report, generations, outcome: buildOutcome(generations, result.report, stats), stats };
             }
             const { failure } = result;
             const written = failure.target ? wrote[failure.target] : undefined;
@@ -250,11 +279,11 @@ export async function runLoop<W>(deps: LoopDeps<W>, req: LoopRequest, onEvent: (
             }
             stage = 'repair';
             const fn = failure.target!;
-            repairs++;
-            emit({ type: 'repairing', fn, attempt: repairs, failure });
+            emit({ type: 'repairing', fn, attempt: repairs + 1, failure });
             const fixed = await withSlow(slowMs, () => emit({ type: 'slow', what: 'repair' }), () =>
                 retryOnce(() => client.repair(fn, written!.generationId, toRepairDiagnostics(failure.diagnostics), { onText: soFar => emit({ type: 'function-text', fn, soFar }) }, signal),
                     error => emit({ type: 'retrying', what: fn, error })));
+            repairs++;
             generations.push(fixed.generation);
             wrote[fn] = fixed.generation;
             spec = withProgramText(spec, fn, fixed.text);
@@ -265,6 +294,6 @@ export async function runLoop<W>(deps: LoopDeps<W>, req: LoopRequest, onEvent: (
             return { ok: false, kind: 'cancelled', sentence: '', detail: 'cancelled', generations, error: abortError() };
         }
         const c = classifyError(error, stage);
-        return { ok: false, ...c, generations, error };
+        return { ok: false, ...c, generations, outcome: c.kind === 'cancelled' ? undefined : failedOutcome(), error };
     }
 }
