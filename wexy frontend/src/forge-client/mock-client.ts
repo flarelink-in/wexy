@@ -7,6 +7,7 @@
 
 import { parseDraft, type Draft } from '../contract/draft';
 import { H1, EXEMPLAR_WORLDS, type ExemplarWorld } from '../contract/h1';
+import { collidingGalaxies, isCollisionPrompt } from './examples/colliding-galaxies';
 import { type FunctionName, type SceneSpec, type Style, programText, withProgramText } from '../contract/spec';
 import { ARCHETYPES, archetypeDraft, archetypeSpec, routePrompt, type Archetype } from './archetypes';
 import type { DirectResult, ForgeClient, FunctionResult, GenerationInfo, OutcomeReport, PlanRequest, PlanResult, RepairDiagnostic, StreamProgress } from './client';
@@ -40,9 +41,19 @@ const EXEMPLAR_WORDS: Record<ExemplarWorld, RegExp> = {
     storm: /storm|thunder|cloud|lightning|cumul|rain/i,
 };
 
+/**
+ * The galaxy's evolve with two GLSL slips rung L2 rewrites on their own lines (`float()`, `vec3<float>`): a world
+ * that passes only through an auto-fix, so what runs and films must be the fixed text (?autofix=1; F2, I5).
+ */
+export const AUTOFIX_EVOLVE = H1.exemplars.galaxy.evolve
+    .replace('let r = p.b.x;', 'let r = float(p.b.x);')
+    .replace('vec3f(r * cos', 'vec3<float>(r * cos');
+
 export interface MockOptions {
     /** Serve the galaxy's evolve with one real WGSL mistake, so the repair path runs (the backend's `fault` scenario). */
     fault?: boolean;
+    /** Serve the galaxy's evolve with GLSL slips the auto-fix rewrites (AUTOFIX_EVOLVE). */
+    autofix?: boolean;
     /** The pacing's multiplier: 1 is the scripted cadence, 0 answers at once (tests). */
     pace?: number;
 }
@@ -76,6 +87,13 @@ export class MockClient implements ForgeClient {
 
     async plan(req: PlanRequest, progress: StreamProgress, signal: AbortSignal): Promise<PlanResult> {
         const t0 = performance.now();
+        if (isCollisionPrompt(req.prompt)) {
+            const { draft, spec } = collidingGalaxies(req.style);
+            const text = JSON.stringify(draft, null, 2);
+            await this.wait(420, signal);
+            await stream(text, jitter(1500), progress.onText, signal, this.pace);
+            return { draft, text, generation: this.generation({ role: 'planner' }, t0, null), clamped: [], ready: spec };
+        }
         const world = EXEMPLAR_WORLDS.find(w => EXEMPLAR_WORDS[w].test(req.prompt));
         const playground = world ? null : routePrompt(req.prompt, req.style).archetype;
         const text = world ? H1.plans[world] : JSON.stringify(archetypeDraft(playground!), null, 2);
@@ -98,8 +116,10 @@ export class MockClient implements ForgeClient {
         const t0 = performance.now();
         const plan = this.planned.get(planId);
         if (!plan) throw new Error(`The mock holds no plan ${planId}.`);
-        const faulted = this.options.fault && fn === 'evolve' && plan.world === 'galaxy';
-        const text = faulted ? H1.faults['galaxy.evolve'] : H1.exemplars[plan.world][fn];
+        const galaxyEvolve = fn === 'evolve' && plan.world === 'galaxy';
+        const text = galaxyEvolve && this.options.fault ? H1.faults['galaxy.evolve']
+            : galaxyEvolve && this.options.autofix ? AUTOFIX_EVOLVE
+                : H1.exemplars[plan.world][fn];
         await this.wait(520, signal);
         const ttft = performance.now();
         await stream(text, jitter(900 + text.length / 2), progress.onText, signal, this.pace);
