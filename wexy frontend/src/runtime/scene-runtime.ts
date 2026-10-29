@@ -96,10 +96,11 @@ export class SceneRuntime {
     /**
      * Build the scene inside validation and out-of-memory scopes, then run the smoke step: seed,
      * warm up and render one frame. Anything the gate could not see (bind-group layouts, blend
-     * targets, memory) fails here instead of as an uncaptured error mid-preview. `countOverride` builds a
-     * smaller world of the same spec (the probe, rung L5).
+     * targets, memory) fails here instead of as an uncaptured error mid-preview. The probe (rung L5) builds
+     * smaller worlds of the same spec (`count`) and only places them (`warmUp: false`): it times a step before
+     * any warm-up runs, and warms up the worlds it keeps in batches of its own (F4).
      */
-    static async build(engine: NullGraph, spec: SceneSpec, width: number, height: number, countOverride?: number): Promise<{ runtime?: SceneRuntime; smoke: SmokeResult }> {
+    static async build(engine: NullGraph, spec: SceneSpec, width: number, height: number, options: { count?: number; warmUp?: boolean } = {}): Promise<{ runtime?: SceneRuntime; smoke: SmokeResult }> {
         const { device } = engine;
         const t0 = performance.now();
         device.pushErrorScope('out-of-memory');
@@ -107,8 +108,9 @@ export class SceneRuntime {
         let runtime: SceneRuntime | undefined;
         let thrown: unknown;
         try {
-            runtime = new SceneRuntime(engine, spec, width, height, countOverride);
-            runtime.reset();
+            runtime = new SceneRuntime(engine, spec, width, height, options.count);
+            if (options.warmUp === false) runtime.place();
+            else runtime.reset();
             runtime.view(firstView(spec.camera.keyframes), 0);
             engine.render(runtime.draw());
         } catch (error) {
@@ -246,11 +248,15 @@ export class SceneRuntime {
         this.paramsDirty = true;
     }
 
+    /** The steps of the spec's warm-up. */
+    get warmupSteps(): number {
+        return Math.round(this.spec.particles.warmupSeconds / this.spec.particles.dt);
+    }
+
     /** Re-seed, place the particles and run the warm-up: the state every export starts from. */
     reset(): void {
         this.place();
-        const warmup = Math.round(this.spec.particles.warmupSeconds / this.spec.particles.dt);
-        for (let i = 0; i < warmup; i++) this.step();
+        for (let i = 0; i < this.warmupSteps; i++) this.step();
         this.restartClock();
     }
 

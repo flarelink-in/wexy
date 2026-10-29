@@ -13,7 +13,8 @@ export function compactLadder(report: LadderReport): Record<string, unknown> {
     const full: Record<string, unknown> = {};
     for (const r of report.rungs) full[r.rung] = r.detail ? { ok: r.ok, ms: round(r.ms), detail: r.detail.slice(0, 120) } : { ok: r.ok, ms: round(r.ms) };
     if (report.probe) {
-        full.probe = { step: round(report.probe.stepMs), frame: round(report.probe.frameMs), predicted: round(report.probe.predictedMs), budget: report.probe.budgetMs };
+        const { stepMs, frameMs, predictedMs, budgetMs } = report.probe;
+        full.probe = { step: round(stepMs), frame: frameMs === null ? null : round(frameMs), predicted: round(predictedMs), budget: budgetMs };
     }
     full.totalMs = round(report.totalMs);
     if (JSON.stringify(full).length <= OUTCOME_CAPS.ladderBytes) return full;
@@ -33,7 +34,7 @@ export function buildOutcome(generations: GenerationInfo[], report: LadderReport
         firstPassOk: stats.firstPassOk,
         repairs: count(stats.repairs),
         autofixes: count(stats.autofixes),
-        probeMs: report.probe ? round(report.probe.measuredStepMs + report.probe.measuredFrameMs) : null,
+        probeMs: report.probe && report.probe.measuredFrameMs !== null ? round(report.probe.measuredStepMs + report.probe.measuredFrameMs) : null,
         predictedMs: report.probe ? round(report.probe.predictedMs) : null,
         fps: null,
         adapter: null,

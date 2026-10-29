@@ -2,14 +2,15 @@
 // (gate.ts), L3 compile (gate.ts), then on a small world of the same spec L5 the probe and L7 the sanity look
 // (probe.ts), and only then L6 the full build and smoke frame (SceneRuntime.build). L7 runs before L6 so a world
 // with a NaN or a black frame never costs a full-size build, and the live canvas never shows a candidate (the
-// FE1 design's refinement of §7). The world it hands back is the built runtime; L8, the swap, is the studio's.
+// FE1 design's refinement of §7). The world it hands back is the built runtime, with the spec as compiled (the
+// auto-fixed text, which the probe, the full build and later the film all use); L8, the swap, is the studio's.
 
 import type { NullGraph } from 'null-graph';
 import { functionsOf, type FunctionName, type SceneSpec } from '../contract/spec';
 import type { FailureReason, LadderReport, Rung, RungResult, VerifyResult, Verifier } from '../loop/machine';
 import { SceneRuntime } from '../runtime/scene-runtime';
 import { compileTarget, lintTarget, type GateDiagnostic } from './gate';
-import { buildProbeWorld, probeWorld, sanityLook } from './probe';
+import { destroyProbeWorld, probeWorld, sanityLook } from './probe';
 
 export interface LadderOptions {
     /** The full world's size: the viewport's canvas. */
@@ -67,31 +68,29 @@ export function createLadder(engine: NullGraph, options: LadderOptions): Verifie
             rungs.push({ rung: 'L3', ok: true, ms: performance.now() - t });
             signal.throwIfAborted();
 
-            // L5 and L7 on the small world.
+            // L5 and L7 on the probe's small worlds; a cancel stops the probe's warm-up (F4).
             t = performance.now();
-            const small = await buildProbeWorld(device, compiled);
-            if ('error' in small) {
-                rungs.push({ rung: 'L5', ok: false, ms: performance.now() - t, detail: small.error });
-                return fail('L5', 'smoke', null, [], `the probe's world did not build: ${small.error}`);
+            const probed = await probeWorld(device, compiled, options.width() * options.height(), signal);
+            if ('error' in probed) {
+                rungs.push({ rung: 'L5', ok: false, ms: performance.now() - t, detail: probed.error });
+                return fail('L5', 'smoke', null, [], `the probe's world did not build: ${probed.error}`);
             }
-            let probe: LadderReport['probe'] = null;
+            const probe: LadderReport['probe'] = probed.numbers;
+            const draw = probe.frameMs === null ? 'draw not timed' : `draw ${probe.frameMs.toFixed(1)}`;
+            rungs.push({ rung: 'L5', ok: !probed.diagnostic, ms: performance.now() - t, detail: `predicted ${Math.round(probe.predictedMs)} ms a frame (step ${probe.stepMs.toFixed(1)}, ${draw}); budget ${probe.budgetMs}` });
+            if (probed.diagnostic) {
+                return fail('L5', 'probe', asFunction(probed.diagnostic.target), [probed.diagnostic], probed.diagnostic.message, probe);
+            }
             try {
-                const outcome = await probeWorld(device, small.engine, small.runtime, compiled);
-                probe = outcome.numbers;
-                rungs.push({ rung: 'L5', ok: !outcome.diagnostic, ms: performance.now() - t, detail: `predicted ${Math.round(outcome.numbers.predictedMs)} ms a frame (step ${outcome.numbers.stepMs.toFixed(1)}, draw ${outcome.numbers.frameMs.toFixed(1)}); budget ${outcome.numbers.budgetMs}` });
-                if (outcome.diagnostic) {
-                    return fail('L5', 'probe', asFunction(outcome.diagnostic.target), [outcome.diagnostic], outcome.diagnostic.message, probe);
-                }
                 signal.throwIfAborted();
                 t = performance.now();
-                const sanity = await sanityLook(device, small.engine, small.runtime, compiled);
+                const sanity = await sanityLook(device, probed.world, compiled);
                 rungs.push({ rung: 'L7', ok: sanity.ok, ms: performance.now() - t, detail: `finite ${sanity.numbers.nonFinite === 0 ? 'yes' : 'no'}, moved ${sanity.numbers.moved}, median distance ${sanity.numbers.medianDistance.toFixed(1)}, frame mean ${sanity.numbers.frameMean.toFixed(3)}` });
                 if (!sanity.ok) {
                     return fail('L7', 'sanity', asFunction(sanity.diagnostic!.target), [sanity.diagnostic!], sanity.diagnostic!.message, probe);
                 }
             } finally {
-                small.runtime.destroy();
-                small.engine.destroy();
+                destroyProbeWorld(probed.world);
             }
             signal.throwIfAborted();
 
@@ -104,7 +103,7 @@ export function createLadder(engine: NullGraph, options: LadderOptions): Verifie
                 runtime.destroy();
                 signal.throwIfAborted();
             }
-            return { ok: true, world: runtime, report: report(probe) };
+            return { ok: true, world: runtime, report: report(probe), spec: compiled };
         },
     };
 }
