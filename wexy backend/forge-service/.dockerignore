@@ -1,0 +1,4 @@
+# Only the packaged jar enters the build context; the Dockerfile copies nothing else. out/ (the probe's reports and
+# the smoke streams) and the sources never reach the daemon.
+*
+!target/forge-service-*.jar

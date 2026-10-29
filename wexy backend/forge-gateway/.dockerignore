@@ -1,0 +1,4 @@
+# Only the packaged jar enters the build context; the Dockerfile copies nothing else, and the sources, the classes
+# and the tests never reach the daemon.
+*
+!target/forge-gateway-*.jar
