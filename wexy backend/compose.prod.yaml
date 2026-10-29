@@ -1,0 +1,117 @@
+# Wexy on the VPS (docs/deploy-design.md, 2026-10-28): Redis for the limits and the spend meter, the gateway and the
+# service, with nothing published to the internet: the gateway's port is bound to the host's loopback for SSH
+# forwarding only, and the service has no port at all. The public way in, a Cloudflare tunnel that dials out, is
+# compose.tunnel.yaml, merged in once the tunnel exists (Q48); MariaDB (B1, the records) is compose.records.yaml,
+# merged in from B1.1 on. Both are separate files because compose interpolates every service's secrets, profile or
+# not, so their names would stop this stack before they are needed.
+# Secrets come from Infisical's prod environment, which hands them to this one process; compose forwards only the
+# names written below. Every compose command needs it in front, `ps` and `logs` included:
+#
+#     infisical run --env=prod -- docker compose -f compose.prod.yaml up -d                          # SSH only
+#     infisical run --env=prod -- docker compose -f compose.prod.yaml -f compose.tunnel.yaml up -d   # public
+#     (and -f compose.records.yaml as well, from B1.1)
+#
+# Images come from deploy.sh: EventVision's Vultr registry and the `latest` tag while the product is developed (the
+# user, 2026-10-29, Q47); WEXY_REGISTRY and WEXY_IMAGE_TAG override them. With `latest`, `up -d` alone keeps the image
+# it has: `pull` first, then `up -d`.
+name: wexy
+
+x-service: &service
+  restart: unless-stopped
+  # Container logs are the logs (actuator and container logs only: core-loop-backend.md §14). Bounded, so one
+  # noisy day cannot fill the disk: 100 MB a container at most.
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
+
+services:
+  redis:
+    <<: *service
+    image: redis:7.2-alpine
+    # Persistent: the spend counters live here, and a restart that emptied them would hand out the day's budget
+    # again, with a real key. Bounded without eviction: a full Redis refuses writes, and SpendGuard then refuses
+    # calls (it fails closed), which is the right failure; an evicted counter would be a free day.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "96mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - wexy-redis:/data
+    mem_limit: 128m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  forge-gateway:
+    <<: *service
+    image: ${WEXY_REGISTRY:-blr.vultrcr.com/eventvision}/forge-gateway:${WEXY_IMAGE_TAG:-latest}
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      # Loopback only: `ssh -L 8400:127.0.0.1:8400 <host>` for a look, or for the laptop's tests before the tunnel
+      # exists; the public path is the tunnel (compose.tunnel.yaml).
+      - "127.0.0.1:8400:8400"
+    mem_limit: 640m
+    cpus: 1.0
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      WEXY_FORGE_SERVICE_URL: http://forge-service:8410
+      # Base64 of Wexy's own Firebase service account JSON (never FlareLink's). Required: the prod profile stops
+      # without it.
+      FIREBASE_SERVICE_ACCOUNT_B64: ${FIREBASE_SERVICE_ACCOUNT_B64:?missing from Infisical}
+      # Base64 PKCS#8 RSA key for the internal token, shared by every gateway instance (.env.example has the recipe).
+      WEXY_INTERNAL_JWT_PRIVATE_KEY: ${WEXY_INTERNAL_JWT_PRIVATE_KEY:?missing from Infisical}
+      # Which Firebase project and web app this deployment attests. Both required: an empty project number would
+      # switch App Check off silently (AppCheckFilter passes everything through and logs an error).
+      WEXY_APPCHECK_PROJECT_NUMBER: ${WEXY_APPCHECK_PROJECT_NUMBER:?missing from Infisical}
+      WEXY_APPCHECK_ALLOWED_APP_IDS: ${WEXY_APPCHECK_ALLOWED_APP_IDS:?missing from Infisical}
+      # Monitor first; enforce once the deployed studio attests near 100% (deploy design §9, Q50).
+      WEXY_APPCHECK_ENFORCE: ${WEXY_APPCHECK_ENFORCE:-false}
+      # The studio's origins, comma-separated: the Firebase Hosting site, then wexy.ai once its DNS is live; and
+      # http://localhost:5173 while the laptop's studio tests against this host (the frontend's Q55).
+      WEXY_CORS_ALLOWED_ORIGINS: ${WEXY_CORS_ALLOWED_ORIGINS:?missing from Infisical}
+      # Firebase uids allowed on /v1/admin/**; empty until the user has signed in once.
+      WEXY_ADMIN_UIDS: ${WEXY_ADMIN_UIDS:-}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8401/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+
+  forge-service:
+    <<: *service
+    image: ${WEXY_REGISTRY:-blr.vultrcr.com/eventvision}/forge-service:${WEXY_IMAGE_TAG:-latest}
+    depends_on:
+      redis:
+        condition: service_healthy
+      forge-gateway:
+        condition: service_started
+    # No ports: the gateway alone reaches it, by name, on the compose network (coding principles: never publish it).
+    mem_limit: 640m
+    cpus: 1.0
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      WEXY_GATEWAY_URL: http://forge-gateway:8400
+      WEXY_META_API_BASE_URL: ${WEXY_META_API_BASE_URL:-https://api.meta.ai/v1}
+      # The Meta key. Empty is allowed on purpose: the service starts paused and the studio shows the archive
+      # (B4's mode); it spends nothing. Set it in Infisical to turn live creation on.
+      WEXY_META_API_KEY: ${WEXY_META_API_KEY:-}
+      # B1.1 adds the datasource names here (compose.records.yaml carries the database side).
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8411/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+
+volumes:
+  wexy-redis:

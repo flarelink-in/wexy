@@ -42,6 +42,24 @@ remain local and are excluded from Git. The build above packages the published
 application without tests; it does not certify runtime behavior. Runtime prompt
 Markdown, host rules and Maven wrapper distribution properties are tracked.
 
+## Deploy
+
+Images are built from the packaged jars by `forge-gateway/Dockerfile` and `forge-service/Dockerfile`
+and pushed by `./deploy.sh forge-gateway` and `./deploy.sh forge-service` (`WEXY_REGISTRY` overrides the
+default registry; `WEXY_DRY_RUN=1` builds without pushing). On the host, `compose.prod.yaml`
+runs Redis, the gateway and the service, and `compose.tunnel.yaml` adds a Cloudflare tunnel, with every
+secret supplied as an environment variable by an operator-run secret manager:
+
+```sh
+infisical run --env=prod -- docker compose -f compose.prod.yaml -f compose.tunnel.yaml up -d
+```
+
+Without the tunnel file the stack has no public way in and is reached over SSH. `compose.records.yaml`
+adds MariaDB once durable records ship. Only the tunnel reaches the internet:
+the gateway is bound to the host's loopback and the service to the compose network. Health and
+metrics answer on separate ports (8401, 8411) that the tunnel does not route. The `prod` profiles in
+`src/main/resources` hold no secrets; the mock profile must never be active on a host.
+
 ## Attribution and licence
 
 Gateway protection, authentication and money-control patterns derive from the

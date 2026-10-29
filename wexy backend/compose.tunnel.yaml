@@ -1,0 +1,29 @@
+# The public way in (docs/deploy-design.md §9): a Cloudflare tunnel that dials out from the host, so no port is ever
+# opened. Merged in once the tunnel exists (Q48); until then the stack runs without a public way in, and the operator
+# and the laptop's tests reach the gateway over SSH (`ssh -L 8400:127.0.0.1:8400 <host>`):
+#
+#     infisical run --env=prod -- docker compose -f compose.prod.yaml -f compose.tunnel.yaml up -d
+#
+# A separate file, not a profile, for compose.records.yaml's reason: compose demands every service's `:?` secrets,
+# profile or not, and the token would stop compose.prod.yaml before the tunnel exists.
+services:
+  cloudflared:
+    # Token mode, as FlareLink's: which hostname maps to which service is set in the Zero Trust dashboard
+    # (api.wexy.ai -> http://forge-gateway:8400), so a change of hostname needs no redeploy. Unpinned, as
+    # FlareLink runs it; pin a tag if an update ever misbehaves.
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    depends_on:
+      forge-gateway:
+        condition: service_started
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?missing from Infisical}
+    # No ports, by design: the tunnel is an outbound connection.
+    mem_limit: 128m
+    cpus: 0.5

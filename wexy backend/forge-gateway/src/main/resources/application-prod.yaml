@@ -1,0 +1,40 @@
+# forge-gateway in production: the VPS behind Cloudflare's tunnel (docs/deploy-design.md, 2026-10-28). What differs
+# from application.yaml's defaults: Redis by its compose name; the actuator on a port of its own, which the tunnel
+# never routes; the client address from Cloudflare's header, safe only because this port is never published and
+# every request arrives through cloudflared (§9); Firebase required; App Check on. Secrets arrive as environment
+# variables from Infisical's prod environment through compose.prod.yaml. This file holds none, and is tracked.
+spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+
+management:
+  server:
+    # Health and the Prometheus scrape answer here, on the compose network and over SSH, never through the tunnel,
+    # which routes 8400 alone. The shield's bypass of /actuator/** then guards nothing public.
+    port: 8401
+
+wexy:
+  forge-service:
+    url: ${WEXY_FORGE_SERVICE_URL:http://forge-service:8410}
+  firebase:
+    # Startup stops without a credential (FirebaseCredentials); only the local profile runs without one.
+    required: true
+  cors:
+    # No default on purpose: compose refuses to start without the value, so a deployment can never answer the
+    # wrong origin by omission (deploy design §7).
+    allowed-origins: ${WEXY_CORS_ALLOWED_ORIGINS}
+  appcheck:
+    enabled: true
+    # Monitor first (application.yaml): WEXY_APPCHECK_ENFORCE=true once the deployed studio attests near 100%.
+    enforce: ${WEXY_APPCHECK_ENFORCE:false}
+  shield:
+    # Topology: the client, Cloudflare's edge, the tunnel, the cloudflared container, this port: one hop, and no
+    # other way in (the port is bound to the host's loopback and the compose network). cloudflared forwards
+    # CF-Connecting-IP, which the edge sets from the true peer on every request, so that header is read first and
+    # X-Forwarded-For with one trusted hop is the fallback (ClientAddressResolver). FlareLink leaves the header
+    # unset because its nginx can be reached directly; here nothing can.
+    trusted-client-ip-header: CF-Connecting-IP
+    trusted-proxy-count: 1
+    redis-outage-policy: LOCAL_FALLBACK

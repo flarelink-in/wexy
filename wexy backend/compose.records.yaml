@@ -1,0 +1,48 @@
+# B1's records: MariaDB for the generation, outcome, debt and capture rows (forge-records-design.md, Q20). Merged
+# into the host's stack from B1.1 on, so that the three names below are needed in Infisical only from then:
+#
+#     infisical run --env=prod -- docker compose -f compose.prod.yaml -f compose.records.yaml up -d
+#
+# A separate file, not a profile: compose interpolates every service's secrets whether or not its profile is on,
+# and these would stop compose.prod.yaml before B1 exists. The account is created when the volume is first
+# initialised; rotating the secret afterwards does not change it (FlareLink's trap: recreate the volume, or alter
+# the user inside MariaDB).
+services:
+  mariadb:
+    image: mariadb:11.4
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?missing from Infisical}
+      MARIADB_DATABASE: wexy
+      MARIADB_USER: ${MARIADB_USER:?missing from Infisical}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:?missing from Infisical}
+    volumes:
+      - wexy-mariadb:/var/lib/mysql
+    # No ports: the service reaches it by name on the compose network; `docker compose exec mariadb mariadb -uroot -p`
+    # for a look.
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "healthcheck.sh --connect --innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  forge-service:
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      # B1.1: the JDBC datasource (forge-records-design.md §5); the same account the database was created with.
+      SPRING_DATASOURCE_URL: jdbc:mariadb://mariadb:3306/wexy
+      SPRING_DATASOURCE_USERNAME: ${MARIADB_USER:?missing from Infisical}
+      SPRING_DATASOURCE_PASSWORD: ${MARIADB_PASSWORD:?missing from Infisical}
+
+volumes:
+  wexy-mariadb:
