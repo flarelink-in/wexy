@@ -46,6 +46,11 @@ export class TraceStep {
         return performance.now() - this.t0;
     }
 
+    /** Still ticking: neither ok, error nor warn has been called. */
+    get running(): boolean {
+        return this.timer !== 0;
+    }
+
     setDetail(text: string): void {
         this.text = text;
         this.tick();

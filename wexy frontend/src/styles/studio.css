@@ -322,6 +322,8 @@
 .dir-section h3 { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-2); }
 .dir-section > header span { font-size: 11px; color: var(--text-3); text-align: right; }
 .field { margin-bottom: 12px; }
+.field.is-preview { opacity: 0.55; }
+.field.is-preview input { cursor: default; }
 .field-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .field-head label { font-size: 12.5px; font-weight: 550; cursor: default; }
 .field-head code { font-size: 10.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

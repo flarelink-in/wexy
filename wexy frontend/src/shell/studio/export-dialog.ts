@@ -96,7 +96,12 @@ export class ExportDialog {
             h('header', { class: 'ex-head' }, h('div', null, this.title, this.sub), close),
             this.body, this.foot);
         this.el.addEventListener('cancel', e => { if (this.abort) e.preventDefault(); });
-        this.el.addEventListener('close', () => void this.letGo());
+        this.el.addEventListener('close', () => {
+            if (this.el.open) return; // A queued close event must not clear a newly reopened dialog.
+            this.ctx = null;
+            this.measureQueued = false;
+            void this.letGo();
+        });
         document.body.append(this.el);
     }
 
@@ -145,13 +150,13 @@ export class ExportDialog {
      * frame, no file (capture/film.ts). The preview waits meanwhile. A size change mid-measurement queues one more.
      */
     private async measure(): Promise<void> {
-        const ctx = this.ctx;
-        if (!ctx) return;
+        if (!this.ctx || !this.el.open) return;
         this.measureQueued = true;
         if (this.calibrating) return;
         this.calibrating = true;
         try {
-            while (this.measureQueued) {
+            while (this.measureQueued && this.ctx && this.el.open) {
+                const ctx: ExportContext = this.ctx;
                 this.measureQueued = false;
                 this.msPerFrame = null;
                 this.refusal = null;
@@ -160,16 +165,18 @@ export class ExportDialog {
                 const resume = ctx.viewport.pause();
                 try {
                     const { msPerFrame } = await measureExport(ctx.viewport.engine.device, ctx.spec, ctx.runtime, { width, height, fps }, ctx.pathFor(this.settings.seconds)(0));
-                    if (!this.measureQueued) this.msPerFrame = msPerFrame;
+                    if (!this.measureQueued && this.ctx === ctx && this.el.open) this.msPerFrame = msPerFrame;
                 } catch (e) {
-                    if (!this.measureQueued) this.refusal = { plain: plainWords(e, this.settings), detail: (e as Error).message };
+                    if (!this.measureQueued && this.ctx === ctx && this.el.open) {
+                        this.refusal = { plain: plainWords(e, this.settings), detail: (e as Error).message };
+                    }
                 } finally {
                     resume();
                 }
             }
         } finally {
             this.calibrating = false;
-            if (!this.abort && !this.result) this.renderSetup();
+            if (this.ctx && this.el.open && !this.abort && !this.result) this.renderSetup();
         }
     }
 
@@ -275,7 +282,7 @@ export class ExportDialog {
     private async render(target: FilmTarget): Promise<void> {
         // One film at a time. The click shows the progress at once (the probe below takes about a second), so a
         // second click, or a double click, finds this.abort set and does nothing.
-        if (this.abort) return;
+        if (this.abort || this.calibrating || !this.ctx || !this.el.open) return;
         const ctx = this.ctx!;
         const s = { ...this.settings };
         const abort = (this.abort = new AbortController());

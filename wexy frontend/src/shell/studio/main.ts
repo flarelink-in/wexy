@@ -19,11 +19,12 @@ import { createApi } from '../../forge-client/http';
 import { createIdentity } from '../../forge-client/identity';
 import { createLiveClient } from '../../forge-client/live-client';
 import { MockClient } from '../../forge-client/mock-client';
+import { COLLISION_PROMPT } from '../../forge-client/examples/colliding-galaxies';
 import { cameraPath, firstView, keyframeToView, viewToKeyframe } from '../../runtime/camera-path';
 import { snapshotLive, sweepFilms } from '../../capture/film';
 import type { GateDiagnostic } from '../../verify/gate';
 import { createLadder } from '../../verify/ladder';
-import { runLoop, type LoopEvent, type LoopOutcome, type VerifyFailure, type Verifier } from '../../loop/machine';
+import { RUNG_NAMES, runLoop, type LoopEvent, type LoopOutcome, type VerifyFailure, type Verifier } from '../../loop/machine';
 import { COPY } from '../../loop/copy';
 import { completeOutcome } from '../../loop/outcome';
 import { SceneRuntime } from '../../runtime/scene-runtime';
@@ -58,6 +59,7 @@ const PROMPT_CHARS = 600;
 const STARTERS: Array<{ id: string; label: string; prompt: string }> = [
     ...ARCHETYPES.map(a => ({ id: a.id, label: ({ 'kerr-black-hole': 'Black hole', 'celestial-torii': 'Sakura shrine', 'magnetic-star': 'Magnetar' })[a.id] ?? a.name, prompt: a.examplePrompt })),
     { id: 'galaxy', label: 'Galaxy', prompt: 'A spiral galaxy, gold at the core and blue along the arms, threaded with dark dust' },
+    { id: 'collision', label: 'Colliding galaxies', prompt: COLLISION_PROMPT },
     { id: 'storm', label: 'Storm', prompt: 'A dark thunderstorm cloud that churns and turns in place while lightning flickers inside it' },
 ];
 type Tab = 'director' | 'spec' | 'wgsl';
@@ -74,7 +76,10 @@ function callMeta(g: GenerationInfo): string {
 class Studio {
     private viewport: Viewport | null = null;
     private ladder: Verifier<SceneRuntime> | null = null;
-    private readonly mock = new MockClient({ fault: new URLSearchParams(location.search).get('fault') === '1' });
+    private readonly mock = new MockClient({
+        fault: new URLSearchParams(location.search).get('fault') === '1',
+        autofix: new URLSearchParams(location.search).get('autofix') === '1',
+    });
     /** The backend, when this build knows a gateway; otherwise every world is a playground example. */
     private live: ForgeClient | null = null;
     /** The running world's spec. Director moves are written back into it. */
@@ -349,6 +354,21 @@ class Studio {
         this.layoutFilmGate();
     }
 
+    /**
+     * During a run, Developer view follows the work onto the Spec and WGSL tabs only when a code tab is already
+     * open: a developer on Controls keeps Controls (the user, 10-28: the code is not what one opens the run to see).
+     */
+    private followTab(tab: Tab): void {
+        if (!this.devView || this.tabs.director.getAttribute('aria-selected') === 'true') return;
+        this.selectTab(tab);
+    }
+
+    /** After a run that brought no world: the running world's controls again, or the empty panel. */
+    private restoreControls(): void {
+        if (this.runtime && this.viewport) this.director.bind(this.runtime, this.viewport);
+        else this.director.clear();
+    }
+
     private selectTab(tab: Tab): void {
         // The spec and WGSL tabs follow the run only where they can be seen.
         if (!this.devView && tab !== 'director') return;
@@ -380,6 +400,8 @@ class Studio {
         this.showSourceBadge(client.source);
 
         const steps = new Map<string, TraceStep>();
+        /** Each function's text before its repair, for the count of changed lines (FE1.5). */
+        const bases = new Map<string, string>();
         let stage: StageId = 'plan';
         let candidate: SceneSpec | null = null;
         const onEvent = (e: LoopEvent) => {
@@ -388,7 +410,7 @@ class Studio {
                     steps.set('plan', this.trace.add('Plan the world', 'spark'));
                     steps.get('plan')!.setDetail(COPY.reading);
                     this.journey.start('plan', COPY.reading);
-                    this.selectTab('spec');
+                    this.followTab('spec');
                     this.specView.setText('', true);
                     break;
                 case 'plan-text':
@@ -397,7 +419,10 @@ class Studio {
                     break;
                 case 'planned': {
                     this.account(e.generation);
-                    const controls = e.draft.uniforms.filter(u => u.name !== QUALITY_UNIFORM).length;
+                    const named = e.draft.uniforms.filter(u => u.name !== QUALITY_UNIFORM);
+                    const controls = named.length;
+                    // The controls take shape as soon as the plan names them: shown now, asleep until the world runs.
+                    if (!e.ready) this.director.preview(named.map(u => ({ label: u.label, min: u.min, max: u.max, step: u.step ?? 0.01, value: u.value })));
                     steps.get('plan')?.ok(`${e.draft.title}: ${e.draft.summary}${e.clamped.length ? ` · clamped: ${e.clamped.join('; ')}` : ''}`, callMeta(e.generation));
                     $('#scene-title').textContent = e.draft.title;
                     this.journey.done('plan', `${e.draft.title.split(':')[0]} · ${controls} things you can change`);
@@ -407,7 +432,7 @@ class Studio {
                     break;
                 }
                 case 'authoring':
-                    this.selectTab('wgsl');
+                    this.followTab('wgsl');
                     this.texts = {};
                     this.marks = {};
                     this.wgslView.setEditable(false);
@@ -450,7 +475,7 @@ class Studio {
                 case 'verified': {
                     this.showMessage(null);
                     const s = steps.get(`verify${e.attempt}`);
-                    const rungs = e.result.report.rungs.map(r => `${r.rung} ${r.ok ? '✓' : '✗'} ${fmtMs(r.ms)}`).join(' · ');
+                    const rungs = e.result.report.rungs.map(r => `${r.rung} ${RUNG_NAMES[r.rung]} ${r.ok ? '✓' : '✗'} ${fmtMs(r.ms)}`).join(' · ');
                     if (e.result.ok) {
                         s?.ok(rungs, fmtMs(e.result.report.totalMs));
                         this.showDiagnostics([]);
@@ -462,11 +487,16 @@ class Studio {
                     }
                     if (e.result.report.probe) {
                         const p = e.result.report.probe;
-                        s?.attach(h('div', { class: 'snippet' }, h('div', { class: 'snippet-msg' }, `Probe: ${Math.round(p.predictedMs)} ms a frame predicted (step ${p.stepMs.toFixed(1)}, draw ${p.frameMs.toFixed(1)}); measured ${p.measuredStepMs.toFixed(2)} and ${p.measuredFrameMs.toFixed(2)} ms at 1/64; budget ${p.budgetMs} ms`)));
+                        const draw = p.frameMs === null ? 'draw not timed' : `draw ${p.frameMs.toFixed(1)}`;
+                        const measured = p.measuredFrameMs === null ? `${p.measuredStepMs.toFixed(2)} ms a step` : `${p.measuredStepMs.toFixed(2)} and ${p.measuredFrameMs.toFixed(2)} ms`;
+                        s?.attach(h('div', { class: 'snippet' }, h('div', { class: 'snippet-msg' }, `Probe: ${Math.round(p.predictedMs)} ms a frame predicted (step ${p.stepMs.toFixed(1)}, ${draw}); measured ${measured} in the small probe; budget ${p.budgetMs} ms`)));
                     }
                     break;
                 }
                 case 'repairing': {
+                    // The text the repair starts from, kept here: the stream's function-text events overwrite
+                    // texts[fn] as the repair arrives, so at 'repaired' the old text would already be gone.
+                    bases.set(e.fn, this.texts[e.fn] ?? '');
                     this.journey.detail('check', COPY.repairing);
                     const s = this.trace.add(`Repair ${e.fn} · attempt ${e.attempt}`, 'code');
                     s.setDetail(`Sending ${e.failure.diagnostics.length} finding${e.failure.diagnostics.length === 1 ? '' : 's'} from ${e.failure.rung}…`);
@@ -476,28 +506,47 @@ class Studio {
                 }
                 case 'repaired': {
                     this.account(e.generation);
-                    const before = this.texts[e.fn] ?? '';
+                    const before = bases.get(e.fn) ?? '';
                     this.texts[e.fn] = e.text;
                     this.marks[e.fn] = changedLines(before, e.text).map(line => ({ line, kind: 'patched' as const, message: 'changed by the repair' }));
                     this.showTarget(e.fn);
                     steps.get(e.fn)?.ok(`${e.fn} rewritten: ${this.marks[e.fn]!.length} line${this.marks[e.fn]!.length === 1 ? '' : 's'} changed`, callMeta(e.generation));
                     break;
                 }
-                case 'retrying':
-                    this.trace.add(`Retry after "${e.error.code}"`, 'spark').warn(`${e.what}: ${e.error.message}`);
+                case 'retrying': {
+                    // The failed try closes with its reason, and the retry gets a row of its own: no clock runs on
+                    // after a failure (the user, 10-28: "planner never get closed once downstream fails").
+                    const key = e.what;
+                    steps.get(key)?.warn(`${e.error.code}: ${e.error.message} Trying once more…`);
+                    const again = key === 'plan' ? this.trace.add('Plan the world · try 2', 'spark') : this.trace.add(`Write ${key} · try 2`, 'code');
+                    again.setDetail(key === 'plan' ? COPY.reading : COPY.writing[key]);
+                    steps.set(key, again);
                     break;
-                case 'slow':
-                    this.journey.detail(stage, e.what === 'plan' ? COPY.slow.plan : e.what === 'repair' ? COPY.slow.repair : COPY.slow[e.what]);
+                }
+                case 'slow': {
+                    const text = e.what === 'plan' ? COPY.slow.plan : e.what === 'repair' ? COPY.slow.repair : COPY.slow[e.what];
+                    this.journey.detail(stage, text);
+                    if (e.what !== 'repair') steps.get(e.what)?.setDetail(text);
                     break;
+                }
             }
         };
 
         try {
             const outcome: LoopOutcome<SceneRuntime> = await runLoop({ client, verifier: this.ladder }, req, onEvent, ac.signal);
             if (!outcome.ok) {
+                // Whatever was still running stops with the run, with the reason on its own row.
+                for (const s of steps.values()) {
+                    if (!s.running) continue;
+                    if (outcome.kind === 'cancelled') s.warn('Cancelled');
+                    else s.error(outcome.detail);
+                }
                 if (outcome.kind === 'cancelled') return;
-                this.trace.add('Stopped', 'gpu').error(outcome.detail);
+                this.trace.add('Stopped', stage === 'plan' ? 'spark' : stage === 'build' ? 'code' : 'gate').error(`${outcome.sentence} (${outcome.detail})`);
                 this.journey.fail(stage, outcome.sentence);
+                this.restoreControls();
+                // A world the ladder refused is evidence too (F6): reported now, with no fps.
+                if (outcome.outcome) this.send(client, completeOutcome(outcome.outcome, { fps: null, ...this.gpuLabels() }));
                 if (candidate) {
                     // The draft stays in the editor for a manual fix (Developer view).
                     this.draftSpec = candidate;
@@ -515,8 +564,10 @@ class Studio {
             this.report(client, world, outcome.outcome);
         } catch (e) {
             if ((e as Error).name === 'AbortError') return;
+            for (const s of steps.values()) if (s.running) s.error((e as Error).message);
             this.trace.add('Pipeline stopped', 'gpu').error((e as Error).message);
             this.journey.fail(stage, COPY.failures.internal);
+            this.restoreControls();
         } finally {
             if (this.abort === ac) this.abort = null;
             this.setBusy(false);
@@ -532,17 +583,26 @@ class Studio {
             if (this.runtime !== world) { live.warn('Replaced before it settled'); return; }
             const s = vp.frameStats;
             live.ok(`${Math.round(s.fps)} fps at ${s.width}×${s.height}${world.qualityFloor !== null ? ` · quality ${s.quality.toFixed(2)}` : ''} · director ready`, 'export always renders at full quality');
-            const brand = (navigator as Navigator & { userAgentData?: { brands?: { brand: string; version: string }[] } }).userAgentData?.brands?.find(b => !/Not.A.Brand/i.test(b.brand));
-            const complete = completeOutcome(outcome, {
-                fps: s.fps,
-                adapter: `${vp.gpu.vendor} ${vp.gpu.architecture}`.trim() || null,
-                browser: brand ? `${brand.brand} ${brand.version}` : navigator.userAgent.slice(0, 64),
-            });
-            if (client.source === 'mock') return;
-            const step = this.trace.add('Report the outcome', 'spark');
-            step.setDetail(`${complete.generationIds.length} generations · first pass ${complete.firstPassOk ? 'ok' : 'failed'} · ${complete.repairs} repairs · ${complete.fps ?? '?'} fps`);
-            client.report(complete).then(() => step.ok('Recorded by the backend (202)'), e => step.warn(`Not recorded: ${(e as Error).message}`));
+            this.send(client, completeOutcome(outcome, { fps: s.fps, ...this.gpuLabels() }));
         }, 4000);
+    }
+
+    /** This graphics card and browser, as an outcome names them. */
+    private gpuLabels(): { adapter: string | null; browser: string | null } {
+        const vp = this.viewport!;
+        const brand = (navigator as Navigator & { userAgentData?: { brands?: { brand: string; version: string }[] } }).userAgentData?.brands?.find(b => !/Not.A.Brand/i.test(b.brand));
+        return {
+            adapter: `${vp.gpu.vendor} ${vp.gpu.architecture}`.trim() || null,
+            browser: brand ? `${brand.brand} ${brand.version}` : navigator.userAgent.slice(0, 64),
+        };
+    }
+
+    /** An outcome to the backend, with its own row in the trace; a playground example is heard by no backend. */
+    private send(client: ForgeClient, complete: OutcomeReport): void {
+        if (client.source === 'mock') return;
+        const step = this.trace.add('Report the outcome', 'spark');
+        step.setDetail(`${complete.generationIds.length} generations · first pass ${complete.firstPassOk ? 'ok' : 'failed'} · ${complete.repairs} repairs · ${complete.fps ?? 'no'} fps`);
+        client.report(complete).then(() => step.ok('Recorded by the backend (202)'), e => step.warn(`Not recorded: ${(e as Error).message}`));
     }
 
     /** The failing rung's diagnostics in the editor, on the lines they name. */
@@ -632,7 +692,7 @@ class Studio {
         try {
             const step = this.trace.add('Hot-swap: the ladder', 'gate');
             const result = await this.ladder.verify(spec, ac.signal);
-            const rungs = result.report.rungs.map(r => `${r.rung} ${r.ok ? '✓' : '✗'} ${fmtMs(r.ms)}`).join(' · ');
+            const rungs = result.report.rungs.map(r => `${r.rung} ${RUNG_NAMES[r.rung]} ${r.ok ? '✓' : '✗'} ${fmtMs(r.ms)}`).join(' · ');
             if (!result.ok) {
                 step.error(`${result.failure.rung}: ${result.failure.message}. The running world is untouched.`, fmtMs(result.report.totalMs));
                 this.showFailure(result.failure);
@@ -640,7 +700,12 @@ class Studio {
             }
             step.ok(rungs, 'edited by hand');
             this.showDiagnostics([]);
-            this.install(result.world, spec, sameScene, this.source);
+            this.install(result.world, result.spec, sameScene, this.source);
+        } catch (error) {
+            if ((error as Error).name !== 'AbortError') {
+                this.trace.add('Hot-swap stopped', 'gate').error(String(error));
+                this.showMessage(COPY.editFailed, 'error');
+            }
         } finally {
             if (this.abort === ac) this.abort = null;
             this.setBusy(false);

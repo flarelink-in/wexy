@@ -59,6 +59,25 @@ export class DirectorPanel {
         ));
     }
 
+    /**
+     * The controls a plan names, before the world exists: shown asleep, so a creator sees what is coming while it
+     * is built (the plan lands seconds in; the world takes the rest). {@link bind} replaces them when it runs.
+     */
+    preview(controls: Array<{ label: string; min: number; max: number; step: number; value: number }>): void {
+        this.readouts = [];
+        const sliders = controls.map(c => slider({ ...c, initial: c.value, set: () => {} }));
+        for (const s of sliders) {
+            s.el.classList.add('is-preview');
+            s.el.querySelector('input')?.setAttribute('disabled', '');
+        }
+        this.body.replaceChildren(section('Scene', `${controls.length} uniforms · from the draft`, [
+            ...sliders.map(s => s.el),
+            h('p', { class: 'dir-note' }, controls.length
+                ? 'These come alive the moment the world is built.'
+                : 'This world has no controls of its own; the look controls arrive with it.'),
+        ]));
+    }
+
     bind(runtime: SceneRuntime, viewport: Viewport): void {
         const { spec, post } = runtime;
         const sceneDefs: SliderDef[] = Object.entries(spec.uniforms)

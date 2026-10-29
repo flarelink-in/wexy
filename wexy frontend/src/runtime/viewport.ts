@@ -82,6 +82,7 @@ export class Viewport {
     private readonly resizeObserver: ResizeObserver;
     private raf = 0;
     private pauses = 0;
+    private wantsFrames = false;
     private lastNow = 0;
     private accumulator = 0;
     private exporting = false;
@@ -155,10 +156,12 @@ export class Viewport {
     }
 
     start(): void {
-        if (!this.raf) this.raf = requestAnimationFrame(this.tick);
+        this.wantsFrames = true;
+        if (!this.pauses && !this.raf) this.raf = requestAnimationFrame(this.tick);
     }
 
     stop(): void {
+        this.wantsFrames = false;
         cancelAnimationFrame(this.raf);
         this.raf = 0;
         this.lastNow = 0;
@@ -170,12 +173,17 @@ export class Viewport {
      * Returns the release; releasing twice does nothing.
      */
     pause(): () => void {
-        if (this.pauses++ === 0) this.stop();
+        if (this.pauses++ === 0) {
+            // Suspend drawing without changing whether the owner wants the viewport running.
+            cancelAnimationFrame(this.raf);
+            this.raf = 0;
+            this.lastNow = 0;
+        }
         let released = false;
         return () => {
             if (released) return;
             released = true;
-            if (--this.pauses === 0) this.start();
+            if (--this.pauses === 0 && this.wantsFrames) this.start();
         };
     }
 
@@ -187,7 +195,7 @@ export class Viewport {
         this.ladder = floor === null
             ? LADDER.filter((r, i) => i === 0 || r.scale !== LADDER[i - 1].scale).map(r => ({ ...r, quality: 1 }))
             : LADDER.map(r => ({ ...r, quality: Math.max(floor, r.quality) }));
-        this.rung = 0;
+        this.rung = this.previewRung(this.pinnedRung);
         this.failedRung = -1;
         // The first frames after a build still wait on pipeline creation; judge the scene after.
         this.applyRung(performance.now(), 2500);
@@ -196,9 +204,17 @@ export class Viewport {
     /** Pin the preview to a rung of the cost ladder now, or hand it back to the guard (null). */
     pin(rung: number | null): void {
         this.pinnedRung = rung;
-        this.rung = rung === null ? 0 : Math.min(Math.max(rung, 0), this.ladder.length - 1);
+        this.rung = this.previewRung(rung);
         this.failedRung = -1;
         this.applyRung(performance.now(), 700);
+    }
+
+    /** Presets use the full ladder; worlds without a quality knob collapse its duplicate scales. */
+    private previewRung(rung: number | null): number {
+        if (rung === null) return 0;
+        const index = Math.min(Math.max(rung, 0), LADDER.length - 1);
+        if (this.ladder.length === LADDER.length) return index;
+        return this.ladder.findIndex(r => r.scale === LADDER[index].scale);
     }
 
     setView(v: CameraView): void {
@@ -283,7 +299,8 @@ export class Viewport {
         const spent = this.window.reduce((a, b) => a + b, 0);
         if (this.window.length < 30 && !(this.window.length >= 6 && spent >= 500)) return;
 
-        const target = this.pinnedRung ?? this.decideRung(median(this.window), now);
+        const target = this.pinnedRung === null ? this.decideRung(median(this.window), now)
+            : this.previewRung(this.pinnedRung);
         this.window.length = 0;
         if (target === this.rung) return;
         if (target > this.rung) {
