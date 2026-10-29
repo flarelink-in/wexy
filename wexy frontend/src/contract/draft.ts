@@ -81,6 +81,21 @@ export interface DraftParse {
 
 type Range = readonly [number, number];
 
+/** One frame of the film at 60 fps; a step must fit it a whole number of times, or null-graph/film refuses the world. */
+const FRAME_SECONDS = 1 / 60;
+
+/**
+ * `dt` as a whole number of steps a frame, 1 to 4. The planner writes 0.0166667, which is not 1/60, and a step the film
+ * cannot fit a whole number of times into a frame is refused at Record, after the world ran fine (found 2026-10-28,
+ * on every live world). A rounding of the same step is snapped silently; a different step is listed as clamped.
+ */
+function snapDt(r: Reader, dt: number, at: string): number {
+    const k = Math.min(4, Math.max(1, Math.round(FRAME_SECONDS / dt)));
+    const snapped = FRAME_SECONDS / k;
+    if (Math.abs(snapped - dt) > dt * 0.02) r.clamped.push(`${at}: ${dt} snapped to ${snapped.toPrecision(6)} (${k} step${k === 1 ? '' : 's'} a frame at 60 fps)`);
+    return snapped;
+}
+
 /** A parse in progress: the problems and clamps it collects, and the readers that add to them. */
 class Reader {
     readonly problems: string[] = [];
@@ -280,7 +295,7 @@ export function parseDraft(input: unknown): DraftParse {
     };
     const particles: ParticlesSpec = {
         count: r.int(p?.count, '$.particles.count', DRAFT_LIMITS.count),
-        dt: r.num(p?.dt, '$.particles.dt', DRAFT_LIMITS.dt),
+        dt: snapDt(r, r.num(p?.dt, '$.particles.dt', DRAFT_LIMITS.dt), '$.particles.dt'),
         warmupSeconds: r.num(p?.warmupSeconds, '$.particles.warmupSeconds', DRAFT_LIMITS.warmupSeconds),
         seed: r.int(p?.seed, '$.particles.seed', DRAFT_LIMITS.seed),
         spawn,

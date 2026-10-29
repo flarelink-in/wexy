@@ -49,6 +49,52 @@ function matching(text: string, open: number): number {
     return -1;
 }
 
+/** A loop's literals stay far from where a 32-bit counter wraps, so counting up by a positive step always ends. */
+const LOOP_LITERAL_MAX = 65536;
+
+/**
+ * A `for` loop's header and body against the one form rung L1 accepts (F1; the outside review of 10-28, finding 1):
+ * `for (var k = <int>; k < or <= <int>; k++, k += <int> or k = k + <int>)`, a step of at least 1, and a body that
+ * never writes `k`, takes its address or declares another `k`. Such a loop ends after ceil((bound − start) / step)
+ * runs whatever its body does, which is the bound the probe relies on (R4). `count` is that number, or null when the
+ * header is not of the form; `bodyAt` and `lineOf` place a match in the body on the function's lines.
+ */
+function loopRuns(header: string, body: string, bodyAt: number, lineOf: (index: number) => number): { count: number | null; problems: string[] } {
+    const example = '`for (var k = 0; k < 8; k++)`';
+    const parts = header.split(';').map(p => p.trim());
+    if (parts.length !== 3) return { count: null, problems: [`a loop must have the form ${example}; "${header}" is not`] };
+    const [init, cond, update] = parts;
+    const start = /^var ([A-Za-z_]\w*) ?(?:: ?[iu]32 ?)?= ?(-?\d+)[iu]?$/.exec(init);
+    if (!start) return { count: null, problems: [`the loop's counter must start from a whole number, as in ${example}; "${init}" is not`] };
+    const k = start[1];
+    const bounded = /^([A-Za-z_]\w*) ?(<=?) ?(\d+)[iu]?$/.exec(cond);
+    if (!bounded) return { count: null, problems: [`the loop's bound must be a literal number at most ${DIAL.maxLoopBound}, such as \`${k} < 8\`; "${cond}" is not`] };
+    if (bounded[1] !== k) return { count: null, problems: [`the loop's condition must test its own counter \`${k}\`, as in \`${k} < 8\`; "${cond}" does not`] };
+    const stepped = new RegExp(`^(?:${k} ?\\+\\+|${k} ?\\+= ?(\\d+)[iu]?|${k} ?= ?${k} ?\\+ ?(\\d+)[iu]?)$`).exec(update);
+    const step = stepped ? Number(stepped[1] ?? stepped[2] ?? 1) : 0;
+    if (step < 1) return { count: null, problems: [`the loop must count up by a whole number: \`${k}++\` or \`${k} += 2\`; "${update || '(nothing)'}" is not`] };
+
+    const problems: string[] = [];
+    const from = Number(start[2]);
+    const bound = Number(bounded[3]);
+    if (Math.abs(from) > LOOP_LITERAL_MAX || bound > LOOP_LITERAL_MAX || step > LOOP_LITERAL_MAX) {
+        problems.push(`the loop's numbers must be at most ${LOOP_LITERAL_MAX}`);
+    }
+    const count = Math.max(0, Math.ceil((bound + (bounded[2] === '<=' ? 1 : 0) - from) / step));
+    if (count > DIAL.maxLoopBound) problems.push(`the loop runs ${count} times; at most ${DIAL.maxLoopBound}`);
+
+    // The body: another `k` declared, `k` written (=, a compound assignment, ++ or --), or `&k` (a pointer can write it).
+    const line = (index: number) => lineOf(bodyAt + index);
+    const declared = [...body.matchAll(new RegExp(`(?<![\\w.])(?:var|let|const)\\s+(${k})\\b`, 'g'))].map(d => d.index + d[0].length - k.length);
+    if (declared.length) problems.push(`a variable inside the loop is named \`${k}\`, like its counter (line ${line(declared[0])}); give it another name`);
+    const written = [...body.matchAll(new RegExp(`(?<![\\w.])${k}\\s*(?:(?:[-+*/%&|^]|<<|>>)?=(?!=)|\\+\\+|--)`, 'g'))].find(w => !declared.includes(w.index));
+    if (written) problems.push(`the loop's counter \`${k}\` is changed inside the loop (line ${line(written.index)}); only its \`for (…)\` line may change it: copy it into another variable to change that`);
+    const pointed = [...body.matchAll(new RegExp(`&\\s*${k}(?!\\w)`, 'g'))].find(a =>
+        body[a.index - 1] !== '&' && !/[\w)\]]/.test(body.slice(0, a.index).trimEnd().slice(-1)));
+    if (pointed) problems.push(`the loop's counter \`${k}\` has its address taken inside the loop (line ${line(pointed.index)}); only its \`for (…)\` line may change it`);
+    return { count, problems };
+}
+
 /** The contract lint of one function. Empty means the compiler is next. */
 export function lintFunction(fn: FunctionName, body: string): LintIssue[] {
     const issues: LintIssue[] = [];
@@ -100,23 +146,19 @@ export function lintFunction(fn: FunctionName, body: string): LintIssue[] {
 
     each(/\b(loop|while)\b/g, m => issues.push({ line: at(m.index), message: `no \`${m[1]}\`: only \`for\` loops with a literal bound, such as \`for (var k = 0; k < 8; k++)\`` }));
 
-    // for loops: a literal bound, at most 32, and nested bounds multiplying to at most 128.
+    // for loops: one form (F1), at most 32 runs, and nested loops multiplying to at most 128 runs.
     const loops: { start: number; end: number; bound: number; line: number }[] = [];
     each(/\bfor\s*\(/g, m => {
         const open = m.index + m[0].length - 1;
         const close = matching(inner, open);
         const line = at(m.index);
         if (close < 0) return;
-        const parts = inner.slice(open + 1, close).split(';');
-        const cond = parts.length === 3 ? parts[1].trim() : '';
-        const bounded = /^(\w+)\s*(<=?)\s*(\d+(?:\.\d+)?)[ui]?$/.exec(cond);
-        let bound = Infinity;
-        if (bounded) bound = Number(bounded[3]) + (bounded[2] === '<=' ? 1 : 0);
-        else issues.push({ line, message: `the loop's bound must be a literal number at most ${DIAL.maxLoopBound}, such as \`k < 8\`; "${cond || parts.join(';')}" is not` });
-        if (bound > DIAL.maxLoopBound && bound !== Infinity) issues.push({ line, message: `the loop runs ${bound} times; at most ${DIAL.maxLoopBound}` });
         const body = inner.indexOf('{', close);
         const bodyEnd = body < 0 ? -1 : matching(inner, body);
-        loops.push({ start: m.index, end: bodyEnd, bound: Number.isFinite(bound) ? bound : DIAL.maxLoopBound, line });
+        const header = inner.slice(open + 1, close).replace(/\s+/g, ' ').trim();
+        const runs = loopRuns(header, bodyEnd < 0 ? '' : inner.slice(body + 1, bodyEnd), body + 1, (index: number) => at(index));
+        for (const message of runs.problems) issues.push({ line, message });
+        loops.push({ start: m.index, end: bodyEnd, bound: runs.count ?? DIAL.maxLoopBound, line });
     });
     for (const loop of loops) {
         const ancestors = loops.filter(l => l !== loop && l.start < loop.start && l.end > loop.start);
