@@ -197,6 +197,15 @@ public class LoopHandler {
                 });
     }
 
+    /**
+     * {@code GET /v1/forge/mode}, a public read (records design §5.3): {@code live} until B4 adds the archive and
+     * its reason. Served ahead of B1.2 because the frontend's drives check readiness with it where the actuator is
+     * private (its pass-graph design, F8).
+     */
+    public Mono<ServerResponse> mode(ServerRequest request) {
+        return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue("{\"mode\":\"live\",\"reason\":null}");
+    }
+
     /** What a browser found when it verified and ran the caller's own generations: stored, 202. */
     public Mono<ServerResponse> outcomes(ServerRequest request) {
         Caller caller = Caller.of(request.exchange());
@@ -374,7 +383,10 @@ public class LoopHandler {
 
     private SseEvent unusable(Call call, String reason, String why, String message) {
         meters.counter("wexy.loop.unusable", "role", call.g.role(), "reason", reason).increment();
-        log.warn("{} {} unusable ({}): {}", call.g.kind(), call.g.id(), reason, why);
+        // The facts that tell a cap from a refusal: Meta was seen (2026-10-28) to close a stream with no
+        // finish_reason and no usage when max_completion_tokens ran out during reasoning.
+        log.warn("{} {} unusable ({}): {}; finish_reason {}, usage {}, {} ms", call.g.kind(), call.g.id(), reason, why,
+                call.finishReason.get(), call.usage.get() == null ? "absent" : "present", call.elapsedMs());
         call.finish(Generation.Status.ERROR);
         return new SseEvent.Error(ErrorCode.UPSTREAM.code(), message);
     }

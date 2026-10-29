@@ -7,6 +7,8 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.netty.channel.ChannelOption;
 import io.netty.handler.timeout.ReadTimeoutException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.core.codec.CodecException;
 import org.springframework.http.HttpHeaders;
@@ -40,6 +42,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 @Component
 public class MetaApiClient {
+
+    private static final Logger log = LoggerFactory.getLogger(MetaApiClient.class);
 
     private static final ParameterizedTypeReference<ServerSentEvent<String>> EVENTS =
             new ParameterizedTypeReference<>() {
@@ -190,18 +194,40 @@ public class MetaApiClient {
                 usage(node.path("usage")));
     }
 
-    private static ChatChunk.Usage usage(JsonNode usage) {
+    /**
+     * The chunk's usage, or null when it has none. A usage counts only when {@code prompt_tokens} and
+     * {@code completion_tokens} are both whole numbers of zero or more: anything else (an empty object, a
+     * missing or negative count) is treated as no usage, so the call keeps its reservation (R18) rather than
+     * settling to zero tokens and refunding it (the outside review of 2026-10-28). {@code total_tokens} is kept
+     * as reported; no cost reads it.
+     */
+    private ChatChunk.Usage usage(JsonNode usage) {
         if (!usage.isObject()) {
+            return null;
+        }
+        Long prompt = tokens(usage.path("prompt_tokens"));
+        Long completion = tokens(usage.path("completion_tokens"));
+        if (prompt == null || completion == null) {
+            log.warn("A usage without whole prompt_tokens and completion_tokens, treated as none: {}", excerpt(usage.toString()));
             return null;
         }
         JsonNode reasoning = usage.path("completion_tokens_details").path("reasoning_tokens");
         JsonNode cached = usage.path("prompt_tokens_details").path("cached_tokens");
         return new ChatChunk.Usage(
-                usage.path("prompt_tokens").asLong(),
-                usage.path("completion_tokens").asLong(),
+                prompt,
+                completion,
                 usage.path("total_tokens").asLong(),
                 reasoning.isNumber() ? reasoning.asLong() : null,
                 cached.isNumber() ? cached.asLong() : null);
+    }
+
+    /** A token count: a whole number of zero or more (21.0 included), else null. */
+    private static Long tokens(JsonNode count) {
+        if (!count.isNumber() || !count.canConvertToExactIntegral() || !count.canConvertToLong()) {
+            return null;
+        }
+        long n = count.asLong();
+        return n >= 0 ? n : null;
     }
 
     private JsonNode readTree(String text) {
