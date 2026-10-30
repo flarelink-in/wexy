@@ -10,9 +10,9 @@ import type { Identity } from './identity';
 /**
  * The routes where the gateway spends the App Check token, so each request needs a limited-use token of its
  * own: a cached one would pass once and be refused as a replay after. The gateway's ForgeRoutesTest pins the
- * same two routes there; test/http.test.mjs pins them here.
+ * same routes there (the agent turn's since EA2.4); test/http.test.mjs pins them here.
  */
-export const SINGLE_USE_ROUTES: readonly string[] = ['POST /v1/forge/plan', 'POST /v1/worlds'];
+export const SINGLE_USE_ROUTES: readonly string[] = ['POST /v1/forge/plan', 'POST /v1/agent/turn', 'POST /v1/worlds'];
 
 export function needsSingleUseAppCheck(method: string, path: string): boolean {
     const pathname = decodeURIComponent(new URL(path, 'https://gateway.invalid').pathname);
@@ -51,10 +51,10 @@ export function createApi(config: PublicConfig, identity: Identity, fetchImpl: t
                 const headers = new Headers({ Accept: req.accept ?? 'application/json' });
                 if (body !== undefined) headers.set('Content-Type', 'application/json');
                 if (req.auth) {
-                    const authorization = await identity.authorization(refreshIdentity);
+                    const authorization = await untilAborted(identity.authorization(refreshIdentity), req.signal);
                     req.signal?.throwIfAborted();
                     if (authorization) headers.set('Authorization', authorization);
-                    const appCheck = await identity.appCheck(needsSingleUseAppCheck(req.method, url));
+                    const appCheck = await untilAborted(identity.appCheck(needsSingleUseAppCheck(req.method, url)), req.signal);
                     req.signal?.throwIfAborted();
                     if (appCheck) headers.set('X-Firebase-AppCheck', appCheck);
                 }
@@ -79,6 +79,23 @@ export function createApi(config: PublicConfig, identity: Identity, fetchImpl: t
             return res;
         },
     };
+}
+
+/**
+ * `promise`, or the signal's reason as soon as it aborts: a stalled sign-in, token refresh or attestation must not
+ * outlive a cancel or a deadline (EA2.5's review). The SDK's promise runs on; its late result or failure is dropped.
+ */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+    if (!signal) return promise;
+    return new Promise<T>((resolve, reject) => {
+        const stop = () => reject(signal.reason);
+        if (signal.aborted) stop();
+        else signal.addEventListener('abort', stop, { once: true });
+        promise.then(
+            value => { signal.removeEventListener('abort', stop); resolve(value); },
+            error => { signal.removeEventListener('abort', stop); reject(error); },
+        );
+    });
 }
 
 /** The gateway URL for `path`; a developer error, said loudly, when there is no gateway or the path leaves it. */
