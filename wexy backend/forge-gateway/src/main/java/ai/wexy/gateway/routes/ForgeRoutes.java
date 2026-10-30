@@ -57,6 +57,13 @@ public class ForgeRoutes {
                 .filter(authorization.anonymousAllowed())
                 .filter(rateLimits.byUserTiered("forge-create-user", "forge-create-anonymous"));
 
+        // The agent turn (the agent-loop design §10): an expensive entry, like a plan, whose buckets count model calls (Q66).
+        Function<GatewayFilterSpec, UriSpec> agentEntry = f -> f
+                .filter(rateLimits.byClient("agent-turn"))
+                .filter(appCheck.singleUse())
+                .filter(authorization.anonymousAllowed())
+                .filter(rateLimits.byUserTiered("agent-turn-user", "agent-turn-anonymous"));
+
         Function<GatewayFilterSpec, UriSpec> forgeCreate = f -> f
                 .filter(rateLimits.byClient("forge-create"))
                 .filter(appCheck)
@@ -97,6 +104,8 @@ public class ForgeRoutes {
                         .filters(forgeEdit).uri(forgeService))
                 .route("forge-outcomes", r -> r.path("/v1/forge/outcomes").and().method(HttpMethod.POST)
                         .filters(forgeEdit).uri(forgeService))
+                .route("agent-turn", r -> r.path("/v1/agent/turn").and().method(HttpMethod.POST)
+                        .filters(agentEntry).uri(forgeService))
 
                 // --- Public reads ---
                 .route("forge-mode", r -> r.path("/v1/forge/mode").and().method(HttpMethod.GET)

@@ -29,3 +29,6 @@ wexy:
       forge-create-anonymous: { refill-per-second: 5, burst-capacity: 100 }
       forge-edit: { refill-per-second: 5, burst-capacity: 100 }
       forge-edit-user: { refill-per-second: 5, burst-capacity: 100 }
+      agent-turn: { refill-per-second: 30, burst-capacity: 600, request-cost: 6 }
+      agent-turn-user: { refill-per-second: 30, burst-capacity: 600, request-cost: 6 }
+      agent-turn-anonymous: { refill-per-second: 30, burst-capacity: 600, request-cost: 6 }

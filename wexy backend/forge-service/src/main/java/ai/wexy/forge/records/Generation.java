@@ -19,7 +19,7 @@ public record Generation(String id, Kind kind, String parentId, String role, Str
                          Long tokensReasoning, long chargedMicroUsd, Long costMicroUsd, Long ttftMs, Long latencyMs,
                          Status status, Source source, String uid, Instant createdAt) {
 
-    public enum Kind { PLAN, AUTHOR, REPAIR, DIRECT }
+    public enum Kind { PLAN, AUTHOR, REPAIR, DIRECT, AGENT }
 
     public enum Status { RUNNING, OK, ERROR, TIMEOUT, CANCELLED, DENIED }
 

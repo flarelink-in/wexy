@@ -41,6 +41,9 @@ wexy:
     repairer:  { model: muse-spark-1.3,  provider: meta-spark,  max-output-tokens: 5000, timeout: 45s, reasoning-effort: low }
     escalator: { model: muse-wonder-1.0, provider: meta-wonder, max-output-tokens: 6000, timeout: 60s, reasoning-effort: high }
     director:  { model: muse-spark-1.3,  provider: meta-spark,  max-output-tokens: 1500, timeout: 20s, reasoning-effort: low,    response: edit-plan.v1 }
+    # The agent loop (agent-loop design §5.5, Q70): one role at medium for every call of a turn. Its cap holds the reasoning
+    # and a design and program (the paper test: about 7,000 tokens, 70% reasoning, 10-29).
+    agent:     { model: muse-spark-1.3,  provider: meta-spark,  max-output-tokens: 16000, timeout: 120s, reasoning-effort: medium }
 
   # USD per million tokens (= micro-USD per token), as Meta's pricing page lists them (forge-loop
   # design §4.1); cached is the price of input served from the prompt cache. Model ids contain
@@ -58,6 +61,11 @@ wexy:
     heartbeat: 15s
     store: { max-entries: 10000, ttl: 2h }
     strict-schemas: false
+
+  # The agent turn's budgets (agent-loop design §5.5, decided as Q67): every one is checked before each call.
+  agent:
+    budget: { calls: 6, context-rounds: 2, per-round: 6, tool-requests: 8, doc-bytes: 65536, revisions: 2, schema-repairs: 1,
+              turn-micro-usd: 1000000, turn-seconds: 300, prompt-bytes: 196608 }
 
   # Ceilings in micro-USD ($1 = 1,000,000). Every one is required; there is no unlimited.
   # Development values, inside the $150 credit (plan §4): raise them for the beta (Day 7) and set

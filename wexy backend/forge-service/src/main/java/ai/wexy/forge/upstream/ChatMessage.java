@@ -17,4 +17,9 @@ public record ChatMessage(String role, String content) {
     public static ChatMessage user(String content) {
         return new ChatMessage("user", content);
     }
+
+    /** A turn the model already took, sent back so a loop's next call sees it (the agent loop). */
+    public static ChatMessage assistant(String content) {
+        return new ChatMessage("assistant", content);
+    }
 }

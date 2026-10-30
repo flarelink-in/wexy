@@ -47,7 +47,12 @@ public final class SseEncoder {
 
     /** The events, encoded, with a heartbeat merged in until they end. */
     public static Flux<ServerSentEvent<String>> withHeartbeat(Flux<SseEvent> events, Duration every) {
-        return events.map(SseEncoder::encode).publish(shared -> Flux.merge(shared,
+        return heartbeats(events.map(SseEncoder::encode), every);
+    }
+
+    /** Events already encoded (the agent turn's own, §5.4 of its design), with the same heartbeat merged in. */
+    public static Flux<ServerSentEvent<String>> heartbeats(Flux<ServerSentEvent<String>> encoded, Duration every) {
+        return encoded.publish(shared -> Flux.merge(shared,
                 Flux.interval(every, every).map(tick -> heartbeat()).takeUntilOther(shared.then(Mono.just(Boolean.TRUE)))));
     }
 }

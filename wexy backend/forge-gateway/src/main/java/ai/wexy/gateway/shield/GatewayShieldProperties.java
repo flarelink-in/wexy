@@ -1,5 +1,6 @@
 package ai.wexy.gateway.shield;
 
+import ai.wexy.common.AgentTurn;
 import ai.wexy.common.InternalToken;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -78,17 +79,24 @@ public class GatewayShieldProperties {
      * One world costs about four forge-create requests at once (a plan, then the functions in
      * parallel), so no create bucket may hold fewer than that. These are starting values, tuned
      * after the Day-2 benchmark; money is capped by SpendGuard, not here.
+     *
+     * An agent turn (the agent-loop design, Q66) makes up to {@link AgentTurn#MAX_CALLS} model calls, so its buckets
+     * count calls: a request costs that many tokens, the constant forge-service caps a turn's calls at, so the two
+     * cannot drift. Signed in, two turns at once, then one a minute; anonymous, one, then one every two minutes.
      */
-    private final Map<String, Bucket> buckets = new LinkedHashMap<>(Map.of(
-            "public-read", new Bucket(15, 45),
-            "forge-create", new Bucket(0.5, 20),
-            "forge-create-user", new Bucket(0.1, 12),
-            "forge-create-anonymous", new Bucket(0.05, 8),
-            "forge-edit", new Bucket(1, 30),
-            "forge-edit-user", new Bucket(0.5, 15),
-            "publish", new Bucket(0.1, 10),
-            "publish-user", new Bucket(0.05, 5),
-            "admin", new Bucket(1, 10)
+    private final Map<String, Bucket> buckets = new LinkedHashMap<>(Map.ofEntries(
+            Map.entry("public-read", new Bucket(15, 45)),
+            Map.entry("forge-create", new Bucket(0.5, 20)),
+            Map.entry("forge-create-user", new Bucket(0.1, 12)),
+            Map.entry("forge-create-anonymous", new Bucket(0.05, 8)),
+            Map.entry("forge-edit", new Bucket(1, 30)),
+            Map.entry("forge-edit-user", new Bucket(0.5, 15)),
+            Map.entry("agent-turn", new Bucket(AgentTurn.MAX_CALLS / 30.0, 4 * AgentTurn.MAX_CALLS, AgentTurn.MAX_CALLS)),
+            Map.entry("agent-turn-user", new Bucket(AgentTurn.MAX_CALLS / 60.0, 2 * AgentTurn.MAX_CALLS, AgentTurn.MAX_CALLS)),
+            Map.entry("agent-turn-anonymous", new Bucket(AgentTurn.MAX_CALLS / 120.0, AgentTurn.MAX_CALLS, AgentTurn.MAX_CALLS)),
+            Map.entry("publish", new Bucket(0.1, 10)),
+            Map.entry("publish-user", new Bucket(0.05, 5)),
+            Map.entry("admin", new Bucket(1, 10))
     ));
 
     public static class Bucket {
@@ -105,6 +113,12 @@ public class GatewayShieldProperties {
         public Bucket(double refillPerSecond, double burstCapacity) {
             this.refillPerSecond = refillPerSecond;
             this.burstCapacity = burstCapacity;
+        }
+
+        /** A bucket whose request costs {@code requestCost} tokens: the agent turn's, which counts model calls. */
+        public Bucket(double refillPerSecond, double burstCapacity, double requestCost) {
+            this(refillPerSecond, burstCapacity);
+            this.requestCost = requestCost;
         }
 
         public double getRefillPerSecond() {
@@ -323,11 +337,18 @@ public class GatewayShieldProperties {
         return buckets;
     }
 
-    /** Looks up a named bucket, failing at startup rather than silently running unlimited. */
+    /**
+     * Looks up a named bucket, failing at startup rather than silently running unlimited, or letting an agent turn's
+     * bucket charge other than the calls a turn may make (a profile that names a bucket replaces it whole).
+     */
     public Bucket bucket(String name) {
         Bucket bucket = buckets.get(name);
         if (bucket == null) {
             throw new IllegalStateException("No rate-limit bucket configured under wexy.shield.buckets." + name);
+        }
+        if (name.startsWith("agent-turn") && bucket.getRequestCost() != AgentTurn.MAX_CALLS) {
+            throw new IllegalStateException("wexy.shield.buckets." + name + ".request-cost must be " + AgentTurn.MAX_CALLS
+                    + ", the model calls forge-service lets a turn make, not " + bucket.getRequestCost());
         }
         return bucket;
     }

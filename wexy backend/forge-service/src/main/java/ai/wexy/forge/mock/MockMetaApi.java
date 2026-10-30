@@ -84,6 +84,9 @@ public class MockMetaApi {
     private static final String PLANS = "classpath:mock/plans/*.json";
     private static final String FAULTS = "classpath:mock/faults/*.wgsl";
     private static final String EDIT = "classpath:mock/edits/director.json";
+    /** The agent turn (agent-loop design §15, EA2.4): a read on its first call, then a program that passes the check. */
+    private static final String AGENT_READ = "classpath:mock/agent/need-context.json";
+    private static final String AGENT_PROGRAM = "classpath:mock/agent/program.json";
     private static final Pattern TITLE_LINE = Pattern.compile("^Title: (.+)$", Pattern.MULTILINE);
     private static final Pattern REPAIR_FN = Pattern.compile("^The function: (evolve|look|sky) ", Pattern.MULTILINE);
 
@@ -96,6 +99,8 @@ public class MockMetaApi {
     private final Map<String, Plan> plans = new LinkedHashMap<>();
     private final Map<String, String> faults = new LinkedHashMap<>();
     private final String edit;
+    private final String agentRead;
+    private final String agentProgram;
     private final Set<String> streamedSystems = ConcurrentHashMap.newKeySet();
     private final ExecutorService threads = Executors.newCachedThreadPool();
     private final HttpServer server;
@@ -143,6 +148,8 @@ public class MockMetaApi {
             faults.put(stem(file), read(file));
         }
         this.edit = read(resources.getResource(EDIT));
+        this.agentRead = read(resources.getResource(AGENT_READ)).strip();
+        this.agentProgram = read(resources.getResource(AGENT_PROGRAM)).strip();
         this.server = start(properties.port());
         log.warn("MOCK META API on 127.0.0.1:{} (scenario {}, {} tokens/s, {} plans): no model is called and nothing is spent, "
                 + "but every call is metered in Redis as a live one would be.", port(), scenario, properties.tokensPerSecond(), plans.size());
@@ -242,7 +249,10 @@ public class MockMetaApi {
                     + "matches none of " + new TreeSet<>(templatesBySystem.values()) + ".");
             return;
         }
-        Recording recording = pick(template, user);
+        // An agent turn sends its first call with two messages and every later one with more (agent-loop design §2).
+        Recording recording = template.equals("agent")
+                ? messages.size() <= 2 ? new Recording("agent/need-context", agentRead) : new Recording("agent/program", agentProgram)
+                : pick(template, user);
         int cap = request.path("max_completion_tokens").asInt(0);
         long cachedTokens = streamedSystems.add(system) ? 0 : tokens(system);
         stream(exchange, model, template, recording, cap > 0 ? cap : Integer.MAX_VALUE, tokens(system) + tokens(user), cachedTokens);
