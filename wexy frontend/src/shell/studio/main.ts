@@ -15,7 +15,7 @@ import '../../styles/studio.css';
 import { ARCHETYPES } from '../../forge-client/archetypes';
 import type { ForgeClient, GenerationInfo, OutcomeReport, Source } from '../../forge-client/client';
 import { readConfig } from '../../forge-client/config';
-import { createApi } from '../../forge-client/http';
+import { createApi, type Api } from '../../forge-client/http';
 import { createIdentity } from '../../forge-client/identity';
 import { createLiveClient } from '../../forge-client/live-client';
 import { MockClient } from '../../forge-client/mock-client';
@@ -157,9 +157,10 @@ class Studio {
         $('#brand-logo').innerHTML = logo(24);
         const params = new URLSearchParams(location.search);
         const config = readConfig();
-        if (config.apiOrigin && params.get('source') !== 'mock') {
-            this.live = createLiveClient(createApi(config, createIdentity(config)));
-        }
+        // One identity for every client: Firebase starts once per page.
+        const api = config.apiOrigin ? createApi(config, createIdentity(config)) : null;
+        if (api && params.get('source') !== 'mock') this.live = createLiveClient(api);
+        const agent = params.get('agent') === '1';
         this.mountLeft();
         this.mountRight();
         $('#timeline-slot').replaceWith(this.timeline.el);
@@ -169,7 +170,9 @@ class Studio {
         this.wireKeys();
         this.exportBtn.addEventListener('click', () => this.openExport());
         this.snapBtn.addEventListener('click', () => void this.takeSnapshot());
-        this.setDevView(params.has('dev') && params.get('dev') !== '0');
+        this.setDevView((params.has('dev') && params.get('dev') !== '0') || agent);
+        // Before the GPU starts: a turn needs none, and runs on a device without WebGPU too.
+        if (agent) void this.mountAgent(api);
         this.exporter.onBusy = busy => {
             this.hud.mode.textContent = busy ? 'RECORDING' : 'LIVE';
             this.hud.root.classList.toggle('rendering', busy);
@@ -210,6 +213,19 @@ class Studio {
             this.setPlaying(false);
         }
         if (params.has('guide') && this.runtime) this.setGuide(params.get('guide') !== '0');
+    }
+
+    /**
+     * ?agent=1: the agent turn in Developer view (EA2.5), beside h1's own Create, which it leaves as it is. Its code
+     * loads only then, so the creator's page carries none of it, and it is handed the idea's fields, never the world.
+     */
+    private async mountAgent(api: Api | null): Promise<void> {
+        const [{ AgentPanel }, { createAgentClient }] = await Promise.all([import('./agent-view'), import('../../forge-client/agent-client')]);
+        const panel = new AgentPanel(api ? createAgentClient(api) : null, () => ({
+            prompt: this.prompt.value, style: this.style.value as Style | 'auto', seconds: this.duration,
+        }));
+        panel.el.classList.add('dev-only');
+        $('#left').insertBefore(panel.el, this.trace.el);
     }
 
     /**
