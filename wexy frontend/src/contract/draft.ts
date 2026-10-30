@@ -346,3 +346,7 @@ export function specFromDraft(draft: Draft, program: Program): SceneSpec {
         program,
     };
 }
+
+/** The readers rung L0 is built from, exported for an agent's world program (the engine-aware design §13.1, parked):
+ * its camera, controls and post would read exactly as a draft's do, with the same limits and messages. */
+export { Reader, snapDt, keyframe as readKeyframe, uniform as readUniform, post as readPost };

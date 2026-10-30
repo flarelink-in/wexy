@@ -1,0 +1,114 @@
+{
+ "version": "ea-h1",
+ "engine": "null-graph@1.2.0",
+ "entries": [
+  {
+   "family": "core",
+   "status": "unverified",
+   "adapter": null,
+   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+  },
+  {
+   "family": "geometry",
+   "status": "unverified",
+   "adapter": null,
+   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+  },
+  {
+   "family": "loaders",
+   "status": "unsupported",
+   "adapter": null,
+   "reason": "Needs GLB asset files; Wexy has no asset allowlist, so a program cannot name one."
+  },
+  {
+   "family": "materials",
+   "status": "unverified",
+   "adapter": null,
+   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+  },
+  {
+   "family": "profiler",
+   "status": "unsupported",
+   "adapter": null,
+   "reason": "Wexy's host measures GPU time itself; a program never asks for it."
+  },
+  {
+   "family": "debug-ui",
+   "status": "unsupported",
+   "adapter": null,
+   "reason": "Developer overlays and debug drawings; never part of a world."
+  },
+  {
+   "family": "cameras",
+   "status": "unsupported",
+   "adapter": null,
+   "reason": "Wexy's host owns the camera: a program gives keyframes and the host moves the camera through them."
+  },
+  {
+   "family": "lights",
+   "status": "unverified",
+   "adapter": null,
+   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+  },
+  {
+   "family": "post",
+   "status": "unverified",
+   "adapter": null,
+   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+  },
+  {
+   "family": "visibility",
+   "status": "unverified",
+   "adapter": null,
+   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+  },
+  {
+   "family": "shadows",
+   "status": "unverified",
+   "adapter": null,
+   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+  },
+  {
+   "family": "environment",
+   "status": "unverified",
+   "adapter": null,
+   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+  },
+  {
+   "family": "picking",
+   "status": "unverified",
+   "adapter": null,
+   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+  },
+  {
+   "family": "text",
+   "status": "unverified",
+   "adapter": null,
+   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+  },
+  {
+   "family": "agents",
+   "status": "unverified",
+   "adapter": null,
+   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+  },
+  {
+   "family": "inference",
+   "status": "unsupported",
+   "adapter": null,
+   "reason": "Needs a trained network file, and for OrtBrain the optional ONNX Runtime, which the studio does not ship."
+  },
+  {
+   "family": "physics",
+   "status": "unverified",
+   "adapter": null,
+   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+  },
+  {
+   "family": "film",
+   "status": "unsupported",
+   "adapter": null,
+   "reason": "Wexy's host films every world through the studio's export; a program never calls it."
+  }
+ ]
+}

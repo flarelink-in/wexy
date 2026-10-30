@@ -15,11 +15,19 @@ export const DIAL = {
     maxArray: 64,
 } as const;
 
+/** A function's contract: its name, its signature as the model is shown it, its parameter types and return type. */
+export interface Signature {
+    name: string;
+    text: string;
+    params: string[];
+    returns: string;
+}
+
 /** The contract's signatures: parameter types and the return type; parameter names are the model's. */
-export const SIGNATURES: Record<FunctionName, { text: string; params: string[]; returns: string }> = {
-    evolve: { text: 'fn evolve(p: Particle, i: u32) -> Particle', params: ['Particle', 'u32'], returns: 'Particle' },
-    look: { text: 'fn look(p: Particle, i: u32) -> Look', params: ['Particle', 'u32'], returns: 'Look' },
-    sky: { text: 'fn sky(dir: vec3f) -> vec3f', params: ['vec3f'], returns: 'vec3f' },
+export const SIGNATURES: Record<FunctionName, Signature> = {
+    evolve: { name: 'evolve', text: 'fn evolve(p: Particle, i: u32) -> Particle', params: ['Particle', 'u32'], returns: 'Particle' },
+    look: { name: 'look', text: 'fn look(p: Particle, i: u32) -> Look', params: ['Particle', 'u32'], returns: 'Look' },
+    sky: { name: 'sky', text: 'fn sky(dir: vec3f) -> vec3f', params: ['vec3f'], returns: 'vec3f' },
 };
 
 export interface LintIssue {
@@ -95,11 +103,16 @@ function loopRuns(header: string, body: string, bodyAt: number, lineOf: (index: 
     return { count, problems };
 }
 
-/** The contract lint of one function. Empty means the compiler is next. */
+/** The contract lint of one h1 function. Empty means the compiler is next. */
 export function lintFunction(fn: FunctionName, body: string): LintIssue[] {
+    return lintSignature(SIGNATURES[fn], body);
+}
+
+/** The contract lint of one function against its signature: h1's functions, and the agent's instance modules. */
+export function lintSignature(signature: Signature, body: string): LintIssue[] {
     const issues: LintIssue[] = [];
     const code = blankComments(body);
-    const signature = SIGNATURES[fn];
+    const fn = signature.name;
 
     const head = /^[ \t]*fn\s+(\w+)\s*\(([^)]*)\)\s*(?:->\s*([\w<>, ]+?))?\s*\{/m.exec(code);
     if (!head) {

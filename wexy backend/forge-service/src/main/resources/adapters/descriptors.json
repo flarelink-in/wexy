@@ -1,0 +1,235 @@
+{
+  "version": "ea-adapters.v1",
+  "engine": "null-graph@1.2.0",
+  "layouts": {
+    "instance14": { "strideFloats": 14, "summary": "The stock instance, 56 bytes: [0] pad, [1..3] position, [4..7] rotation quaternion (identity w = 1), [8..10] scale, [11..13] color. What every stock material reads (materials:CommonChunks, buildStandardVertexShader)." },
+    "instance24": { "strideFloats": 24, "summary": "VisibilitySystem's instance, 96 bytes (Tier 2). No Tier-1 consumer reads it without a bridge." },
+    "f32": { "strideFloats": null, "summary": "Elements of strideFloats plain f32 each, as declared: a custom module's own layout." }
+  },
+  "adapters": [
+    {
+      "id": "ng.buffer.storage",
+      "version": 1,
+      "family": "core",
+      "symbols": [],
+      "summary": "A storage buffer the host allocates on the device (GPUDevice.createBuffer; no engine export makes one), or a ping-pong pair.",
+      "config": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["elements", "layout", "strideFloats", "pingPong", "init"],
+        "properties": {
+          "elements": { "type": "integer", "minimum": 1, "maximum": 16777216 },
+          "layout": { "type": "string", "enum": ["instance14", "instance24", "f32"] },
+          "strideFloats": { "type": "integer", "minimum": 1, "maximum": 256 },
+          "pingPong": { "type": "boolean" },
+          "init": { "type": "string", "enum": ["zero", "upload"] }
+        }
+      },
+      "inputs": [],
+      "outputs": [{ "name": "buffer", "kind": "storage_buffer", "layoutFrom": "layout", "strideFrom": "strideFloats" }]
+    },
+    {
+      "id": "ng.compute.stage",
+      "version": 1,
+      "family": "core",
+      "symbols": ["core:NullGraph", "core:ComputeStageConfig"],
+      "summary": "One compute stage (createComputeStage) running a host-interfaced module over a fixed number of invocations; no callback or indirect count. after names stages of its phase it must follow (Q77).",
+      "config": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["module", "entry", "workgroupSize", "invocations", "phase"],
+        "properties": {
+          "module": { "type": "string", "maxLength": 40 },
+          "entry": { "type": "string", "maxLength": 40 },
+          "workgroupSize": { "type": "integer", "minimum": 1, "maximum": 256 },
+          "invocations": { "type": "integer", "minimum": 1, "maximum": 16777216 },
+          "phase": { "type": "string", "enum": ["init", "fixedStep", "frame"] }
+        }
+      },
+      "inputs": [
+        { "name": "reads", "kind": "storage_buffer", "min": 0, "max": 4 },
+        { "name": "writes", "kind": "storage_buffer", "min": 1, "max": 4 },
+        { "name": "after", "kind": "stage", "min": 0, "max": 4 }
+      ],
+      "outputs": [{ "name": "done", "kind": "stage" }]
+    },
+    {
+      "id": "ng.geometry.primitive",
+      "version": 1,
+      "family": "geometry",
+      "symbols": ["geometry:Primitives", "core:NullGraph"],
+      "summary": "One of Primitives' thirteen shapes, uploaded and set on a batch by setBatchGeometry.",
+      "config": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["shape", "size", "segments"],
+        "properties": {
+          "shape": { "type": "string", "enum": ["cube", "octahedron", "plane", "pyramid", "icosahedron", "sphere", "torus", "cylinder", "capsule", "cone", "ring", "tetrahedron", "dodecahedron"] },
+          "size": { "type": "number", "minimum": 0.001, "maximum": 1000 },
+          "segments": { "type": "integer", "minimum": 3, "maximum": 128 }
+        }
+      },
+      "inputs": [],
+      "outputs": [{ "name": "geometry", "kind": "geometry" }]
+    },
+    {
+      "id": "ng.material.stock",
+      "version": 1,
+      "family": "materials",
+      "symbols": ["materials:BasicMaterial", "materials:LambertMaterial", "materials:EmissiveMaterial", "materials:MatcapMaterial", "materials:ToonMaterial", "materials:StandardPBRMaterial"],
+      "summary": "A stock material, bound at group 1 by applyToBatch; it reads 14-float instances.",
+      "config": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "baseColor"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["basic", "lambert", "emissive", "matcap", "toon", "pbr"] },
+          "baseColor": { "type": "array", "minItems": 4, "maxItems": 4, "items": { "type": "number", "minimum": 0, "maximum": 1 } }
+        }
+      },
+      "inputs": [],
+      "outputs": [{ "name": "material", "kind": "material" }]
+    },
+    {
+      "id": "ng.light.rig",
+      "version": 1,
+      "family": "lights",
+      "symbols": ["lights:LightSystem", "lights:AmbientLightProxy", "lights:DirectionalLightProxy", "lights:PointLightProxy"],
+      "summary": "A LightSystem with an ambient term, at most one directional light and four point lights, bound at group 2.",
+      "config": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ambient", "directional", "points"],
+        "properties": {
+          "ambient": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number", "minimum": 0, "maximum": 1 } },
+          "directional": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["direction", "color", "intensity"],
+                "properties": {
+                  "direction": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number", "minimum": -1, "maximum": 1 } },
+                  "color": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number", "minimum": 0, "maximum": 1 } },
+                  "intensity": { "type": "number", "minimum": 0, "maximum": 100 }
+                }
+              },
+              { "type": "null" }
+            ]
+          },
+          "points": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["position", "color", "intensity", "range"],
+              "properties": {
+                "position": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number", "minimum": -10000, "maximum": 10000 } },
+                "color": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number", "minimum": 0, "maximum": 1 } },
+                "intensity": { "type": "number", "minimum": 0, "maximum": 100 },
+                "range": { "type": "number", "minimum": 0.01, "maximum": 10000 }
+              }
+            }
+          }
+        }
+      },
+      "inputs": [],
+      "outputs": [{ "name": "lights", "kind": "lights" }]
+    },
+    {
+      "id": "ng.render.mesh_batch",
+      "version": 1,
+      "family": "core",
+      "symbols": ["core:NullGraph", "core:PipelineConfig", "core:RenderBatch"],
+      "summary": "A batch (createBatch) of one geometry and one stock material, drawn from 14-float instances in the main pass.",
+      "config": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["maxInstances"],
+        "properties": {
+          "maxInstances": { "type": "integer", "minimum": 1, "maximum": 1048576 }
+        }
+      },
+      "inputs": [
+        { "name": "geometry", "kind": "geometry", "min": 1, "max": 1 },
+        { "name": "material", "kind": "material", "min": 1, "max": 1 },
+        { "name": "instances", "kind": "storage_buffer", "layouts": ["instance14"], "min": 1, "max": 1 },
+        { "name": "lights", "kind": "lights", "min": 0, "max": 1 }
+      ],
+      "outputs": []
+    },
+    {
+      "id": "ng.render.custom_batch",
+      "version": 1,
+      "family": "core",
+      "symbols": ["core:NullGraph", "core:PipelineConfig", "core:RenderBatch"],
+      "summary": "A batch drawn by a host-interfaced module's vertex and fragment entries; EA3 maps its interface only (EA4 writes the body).",
+      "config": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["module", "vertexEntry", "fragmentEntry", "maxInstances"],
+        "properties": {
+          "module": { "type": "string", "maxLength": 40 },
+          "vertexEntry": { "type": "string", "maxLength": 40 },
+          "fragmentEntry": { "type": "string", "maxLength": 40 },
+          "maxInstances": { "type": "integer", "minimum": 1, "maximum": 1048576 }
+        }
+      },
+      "inputs": [
+        { "name": "geometry", "kind": "geometry", "min": 0, "max": 1 },
+        { "name": "instances", "kind": "storage_buffer", "min": 0, "max": 1 },
+        { "name": "lights", "kind": "lights", "min": 0, "max": 1 }
+      ],
+      "outputs": []
+    },
+    {
+      "id": "ng.render.fullscreen",
+      "version": 1,
+      "family": "core",
+      "symbols": ["core:NullGraph", "core:PipelineConfig"],
+      "summary": "A one-instance batch with no geometry (draw(3, 1)), as h1's sky: a backdrop from a module's fragment entry.",
+      "config": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["module", "fragmentEntry"],
+        "properties": {
+          "module": { "type": "string", "maxLength": 40 },
+          "fragmentEntry": { "type": "string", "maxLength": 40 }
+        }
+      },
+      "inputs": [{ "name": "reads", "kind": "storage_buffer", "min": 0, "max": 2 }],
+      "outputs": []
+    },
+    {
+      "id": "ng.post.chain",
+      "version": 1,
+      "family": "post",
+      "symbols": ["post:PostChain", "post:AutoExposure", "post:Bloom", "post:Bokeh", "post:CelShade", "post:ChromaticAberration", "post:ColorGrade", "post:FXAA", "post:FilmGrain", "post:GodRays", "post:Halation", "post:Kuwahara", "post:LensFlare", "post:Outline", "post:SSAO", "post:Tonemap", "post:Vignette"],
+      "summary": "A PostChain of built-in effects over the main pass, its expanded passes spread into the sequence; CustomEffect waits for modules (EA4).",
+      "config": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["effects"],
+        "properties": {
+          "effects": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["effect", "intensity"],
+              "properties": {
+                "effect": { "type": "string", "enum": ["AutoExposure", "Bloom", "Bokeh", "CelShade", "ChromaticAberration", "ColorGrade", "FXAA", "FilmGrain", "GodRays", "Halation", "Kuwahara", "LensFlare", "Outline", "SSAO", "Tonemap", "Vignette"] },
+                "intensity": { "type": "number", "minimum": 0, "maximum": 4 }
+              }
+            }
+          }
+        }
+      },
+      "inputs": [],
+      "outputs": [{ "name": "color", "kind": "color" }]
+    }
+  ]
+}

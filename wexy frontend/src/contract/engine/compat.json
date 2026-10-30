@@ -1,0 +1,14 @@
+{
+ "version": "ea-c1",
+ "records": [
+  {
+   "packageHash": "af2b8d4b4a017cb3d73065457a0abc9c87954ae220907b567ade7103c49bd0b5",
+   "package": "null-graph 1.2.0, as npm ships it",
+   "docs": "null-graph@8c1a2f9",
+   "reviewed": "2026-10-29",
+   "by": "Claude (agent), fixing the EA1 review; not yet confirmed by the maintainer",
+   "evidence": "dev/engine-bundle.mjs's automatic checks pass: 8c1a2f9's package.json is version 1.2.0 with the installed exports map; its sources (src/, 210 files) export the installed declarations' 874 names, subpath by subpath; its dist/index.js, the core bundle and the one built file it tracks, is byte-identical to the installed one. 39bc98e is the release commit of the 1.2.0 already on npm; 8c1a2f9 adds only the agent guide's 'WGSL names' section (11 lines). The scanner finds no name the 36 documents import, use through a namespace or take from lib.<family> that 1.2.0 does not export. Not checked: what the prose says about behavior, and the 17 subpath bundles npm ships and the checkout does not track (their export names are checked through the sources)."
+  }
+ ],
+ "reviewedStale": []
+}
