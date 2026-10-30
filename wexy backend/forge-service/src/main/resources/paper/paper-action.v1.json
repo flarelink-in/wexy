@@ -1,0 +1,284 @@
+{
+  "title": "Wexy agent action, paper test v1",
+  "description": "One action of the engine-aware agent (the frontend's engine-aware design §6), drafted for the paper test before EA2 fixes it. Every key is present; a key the kind does not use is null.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "context", "design", "program", "modules", "revision", "question", "finish"],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["need_context", "propose_design", "propose_program", "propose_design_and_program", "propose_modules", "revise", "ask", "finish"]
+    },
+    "context": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requests"],
+          "properties": {
+            "requests": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 6,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["tool", "target", "why"],
+                "properties": {
+                  "tool": { "type": "string", "enum": ["read_doc", "inspect_api", "search_docs", "read_example"] },
+                  "target": { "type": "string", "maxLength": 200, "description": "A document id, a symbol as family:Name, a search query or an example id." },
+                  "why": { "type": "string", "maxLength": 200 }
+                }
+              }
+            }
+          }
+        },
+        { "type": "null" }
+      ]
+    },
+    "design": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["intent", "interpretation", "assumptions", "visualElements", "motion", "techniques", "resourceFlow", "cameraAndTiming", "controls", "successCriteria", "unresolved"],
+          "properties": {
+            "intent": { "type": "string", "maxLength": 400, "description": "The creator's idea restated: what is there, and how it moves." },
+            "interpretation": { "anyOf": [ { "type": "string", "maxLength": 400 }, { "type": "null" } ], "description": "How an ambiguous request was read; null when it is plain." },
+            "assumptions": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 240 } },
+            "visualElements": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 12,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "description"],
+                "properties": {
+                  "name": { "type": "string", "maxLength": 60 },
+                  "description": { "type": "string", "maxLength": 300 }
+                }
+              }
+            },
+            "motion": { "type": "string", "maxLength": 400 },
+            "techniques": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 12,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["purpose", "symbols", "docIds"],
+                "properties": {
+                  "purpose": { "type": "string", "maxLength": 240 },
+                  "symbols": { "type": "array", "maxItems": 12, "items": { "type": "string", "maxLength": 80 }, "description": "Engine exports as family:Name." },
+                  "docIds": { "type": "array", "maxItems": 6, "items": { "type": "string", "maxLength": 60 } }
+                }
+              }
+            },
+            "resourceFlow": { "type": "array", "maxItems": 12, "items": { "type": "string", "maxLength": 240 } },
+            "cameraAndTiming": { "type": "string", "maxLength": 300 },
+            "controls": {
+              "type": "array",
+              "maxItems": 8,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "effect"],
+                "properties": {
+                  "name": { "type": "string", "maxLength": 40 },
+                  "effect": { "type": "string", "maxLength": 200 }
+                }
+              }
+            },
+            "successCriteria": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string", "maxLength": 240 } },
+            "unresolved": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 300 } }
+          }
+        },
+        { "type": "null" }
+      ]
+    },
+    "program": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["objects", "resources", "modules", "schedule", "lifecycle", "output", "controls"],
+          "properties": {
+            "objects": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 24,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "symbol", "member", "purpose", "config", "inputs"],
+                "properties": {
+                  "id": { "type": "string", "maxLength": 40 },
+                  "symbol": { "type": "string", "maxLength": 80, "description": "The engine export it is made from or called on, as family:Name." },
+                  "member": { "anyOf": [ { "type": "string", "maxLength": 60 }, { "type": "null" } ], "description": "The method or property used on that export; null for a constructor or a plain function." },
+                  "purpose": { "type": "string", "maxLength": 200 },
+                  "config": { "type": "string", "maxLength": 1200, "description": "The arguments, as JSON text." },
+                  "inputs": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 40 } }
+                }
+              }
+            },
+            "resources": {
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "kind", "purpose", "layout", "strideFloats", "count"],
+                "properties": {
+                  "id": { "type": "string", "maxLength": 40 },
+                  "kind": { "type": "string", "enum": ["storage_buffer", "uniform_buffer", "vertex_buffer", "index_buffer", "indirect_buffer", "texture", "render_target"] },
+                  "purpose": { "type": "string", "maxLength": 200 },
+                  "layout": { "type": "string", "maxLength": 300 },
+                  "strideFloats": { "anyOf": [ { "type": "integer", "minimum": 1, "maximum": 256 }, { "type": "null" } ] },
+                  "count": { "anyOf": [ { "type": "integer", "minimum": 1, "maximum": 16777216 }, { "type": "null" } ] }
+                }
+              }
+            },
+            "modules": {
+              "type": "array",
+              "maxItems": 8,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "stage", "usedBy", "entry", "signature", "bindings", "purpose"],
+                "properties": {
+                  "id": { "type": "string", "maxLength": 40 },
+                  "stage": { "type": "string", "enum": ["compute", "vertex", "fragment", "post_effect", "material_fragment"] },
+                  "usedBy": { "type": "string", "maxLength": 40, "description": "The id of the object that runs it." },
+                  "entry": { "type": "string", "maxLength": 40 },
+                  "signature": { "type": "string", "maxLength": 200, "description": "The WGSL function header, as it would be written." },
+                  "bindings": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["group", "binding", "resource"],
+                      "properties": {
+                        "group": { "type": "integer", "minimum": 0, "maximum": 7 },
+                        "binding": { "type": "integer", "minimum": 0, "maximum": 15 },
+                        "resource": { "type": "string", "maxLength": 60 }
+                      }
+                    }
+                  },
+                  "purpose": { "type": "string", "maxLength": 240 }
+                }
+              }
+            },
+            "schedule": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "kind", "objectId", "when", "required", "reads", "writes"],
+                "properties": {
+                  "id": { "type": "string", "maxLength": 40 },
+                  "kind": { "type": "string", "enum": ["compute", "render", "post"] },
+                  "objectId": { "type": "string", "maxLength": 40 },
+                  "when": { "type": "string", "enum": ["init", "fixed_step", "frame", "resize"] },
+                  "required": { "type": "boolean" },
+                  "reads": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 40 } },
+                  "writes": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 40 } }
+                }
+              }
+            },
+            "lifecycle": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["init", "fixedStep", "frame", "resize", "dispose"],
+              "properties": {
+                "init": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 200 } },
+                "fixedStep": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 200 } },
+                "frame": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 200 } },
+                "resize": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 200 } },
+                "dispose": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 200 } }
+              }
+            },
+            "output": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["color", "colorSpace", "depth"],
+              "properties": {
+                "color": { "type": "string", "maxLength": 60, "description": "The object or resource whose color is the world's output." },
+                "colorSpace": { "type": "string", "enum": ["srgb", "linear"] },
+                "depth": { "type": "boolean" }
+              }
+            },
+            "controls": {
+              "type": "array",
+              "maxItems": 8,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "target", "type", "min", "max", "default"],
+                "properties": {
+                  "id": { "type": "string", "maxLength": 40 },
+                  "target": { "type": "string", "maxLength": 80 },
+                  "type": { "type": "string", "enum": ["float", "int", "bool", "color", "vec3"] },
+                  "min": { "anyOf": [ { "type": "number" }, { "type": "null" } ] },
+                  "max": { "anyOf": [ { "type": "number" }, { "type": "null" } ] },
+                  "default": { "type": "string", "maxLength": 60 }
+                }
+              }
+            }
+          }
+        },
+        { "type": "null" }
+      ]
+    },
+    "modules": {
+      "anyOf": [
+        {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "wgsl"],
+            "properties": {
+              "id": { "type": "string", "maxLength": 40 },
+              "wgsl": { "type": "string", "maxLength": 12000 }
+            }
+          }
+        },
+        { "type": "null" }
+      ]
+    },
+    "revision": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "changes"],
+          "properties": {
+            "scope": { "type": "string", "enum": ["controls", "modules", "program", "design"] },
+            "changes": { "type": "array", "minItems": 1, "maxItems": 12, "items": { "type": "string", "maxLength": 300 } }
+          }
+        },
+        { "type": "null" }
+      ]
+    },
+    "question": { "anyOf": [ { "type": "string", "maxLength": 400 }, { "type": "null" } ] },
+    "finish": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["summary"],
+          "properties": {
+            "summary": { "type": "string", "maxLength": 600 }
+          }
+        },
+        { "type": "null" }
+      ]
+    }
+  }
+}

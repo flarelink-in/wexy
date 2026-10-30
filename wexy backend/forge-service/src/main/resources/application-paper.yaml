@@ -1,0 +1,18 @@
+# The paper test (the frontend's engine-aware design §13; PaperProbe): no web server, one run, then exit. On the
+# host, beside the running service, as one container that is removed after (docs/work/README.md):
+#   infisical run --env=prod -- docker compose -f compose.prod.yaml run --rm --no-deps -T \
+#     -e SPRING_PROFILES_ACTIVE=prod,paper forge-service > paper.log 2>&1
+spring:
+  main:
+    web-application-type: none
+
+wexy:
+  paper:
+    enabled: true
+  meta-api:
+    # A plan from a 30,000-token prompt may reason in silence for a while before its first chunk.
+    read-idle-timeout: 150s
+  roles:
+    # Its own role, so its cap and deadline touch none of the loop's: Spark at medium effort, as the design's planning
+    # actions (§6); the cap holds the reasoning and a plan of a few thousand tokens.
+    paper: { model: muse-spark-1.3, provider: meta-spark, max-output-tokens: 16000, timeout: 240s, reasoning-effort: medium }

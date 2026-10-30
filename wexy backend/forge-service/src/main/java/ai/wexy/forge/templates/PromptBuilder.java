@@ -66,6 +66,23 @@ public class PromptBuilder {
         return build("director", Map.of("world", DraftText.spec(spec), "turn", quoted(turn)), JsonSchemas.EDIT_PLAN);
     }
 
+    /**
+     * The paper test's call (PaperProbe): the request's own documents, already quoted from the engine
+     * bundle, then the request. Its schema is the paper test's own ({@code paper/paper-action.v1.json}).
+     */
+    public Prompt paper(String documents, String request) {
+        return build("paper", Map.of("documents", documents, "request", quoted(request)), null);
+    }
+
+    /**
+     * The agent loop's first two messages (the agent-loop design §9): the turn's budgets, the creator's style and
+     * length, and their sentence as a JSON string, last. The loop appends every later message itself.
+     */
+    public Prompt agent(String request, String style, int seconds, String budgets) {
+        return build("agent", Map.of("request", quoted(request), "style", style, "seconds", Integer.toString(seconds),
+                "budgets", budgets), JsonSchemas.AGENT_ACTION);
+    }
+
     private Prompt build(String name, Map<String, String> fields, String responseSchema) {
         PromptTemplates.Template template = templates.get(name);
         String user = PromptTemplates.fillAll(template.user(), fields, template.path() + " (variable part)");

@@ -1,5 +1,7 @@
 package ai.wexy.forge.templates;
 
+import ai.wexy.forge.engine.AdapterManifest;
+import ai.wexy.forge.engine.EngineBundle;
 import ai.wexy.forge.models.ModelCatalog;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -41,7 +43,9 @@ import java.util.regex.Pattern;
  *
  * <p>The exemplars placeholder shows the mock's plans to the planner, the h1 exemplar functions with
  * their worlds' plans to the authors, and the mock's edit to the director: the same files the mock
- * upstream replays (§8), so the examples a model sees and the answers the mock gives agree.
+ * upstream replays (§8), so the examples a model sees and the answers the mock gives agree. The
+ * agent's example is the mock's program in the same way, beside the adapter manifest it is checked
+ * against.
  */
 @Component
 public class PromptTemplates {
@@ -52,14 +56,18 @@ public class PromptTemplates {
             "author", List.of("author.evolve", "author.look", "author.sky"),
             "repairer", List.of("repair"),
             "escalator", List.of("repair"),
-            "director", List.of("director"));
+            "director", List.of("director"),
+            "paper", List.of("paper"),
+            "agent", List.of("agent"));
 
     /** The request fields each template's variable part may use (all authors share theirs). */
     static final Map<String, Set<String>> REQUEST_FIELDS = Map.of(
             "planner", Set.of("style", "seconds", "idea"),
             "author", Set.of("idea", "world", "spawn", "params", "controls"),
             "repair", Set.of("fn", "attempt", "params", "code", "diagnostics"),
-            "director", Set.of("world", "turn"));
+            "director", Set.of("world", "turn"),
+            "paper", Set.of("documents", "request"),
+            "agent", Set.of("budgets", "style", "seconds", "request"));
 
     static final Pattern PLACEHOLDER = Pattern.compile("\\{\\{([A-Za-z]+)}}");
 
@@ -67,6 +75,14 @@ public class PromptTemplates {
     private static final Pattern FILE_NAME = Pattern.compile("([a-z]+(?:\\.[a-z]+)?)\\.v([1-9][0-9]*)\\.md");
     private static final String PLANS = "classpath:mock/plans/";
     private static final String EDITS = "classpath:mock/edits/";
+    private static final String PAPER_REQUESTS = "classpath:paper/requests.v1.json";
+    /** The mock's agent program: the example agent.v2 shows, and the answer the mock gives. */
+    private static final String AGENT_EXAMPLE = "classpath:mock/agent/program.json";
+    /**
+     * The documents every agent call carries (Q65, the agent-loop design). They are part of the agent template: a change
+     * is a new version of it, so records and the prompt cache name what a call was given.
+     */
+    static final List<String> AGENT_SEED_DOCS = List.of("agent/guide", "api/core");
 
     private final Map<String, Template> templates = new LinkedHashMap<>();
 
@@ -175,8 +191,48 @@ public class PromptTemplates {
             fill.put("exemplars", planExamples(resources));
         } else if (name.equals("director")) {
             fill.put("exemplars", fenced("json", HostContract.read(resources.getResource(EDITS + "director.json"))));
+        } else if (name.equals("paper") || name.equals("agent")) {
+            // The engine-aware templates (PaperProbe; the agent loop): the engine bundle, verified, and the documents every
+            // call shares, quoted here once so that every call sends the same system bytes.
+            EngineBundle engine = EngineBundle.load(json);
+            fill.put("engineVersion", engine.engineVersion());
+            fill.put("bundleHash", engine.bundleHash());
+            fill.put("familyIndex", engine.familyIndex().strip());
+            fill.put("sharedDocuments", engine.quote(name.equals("agent") ? AGENT_SEED_DOCS : sharedDocuments(resources, json)));
+            if (name.equals("agent")) {
+                // agent-action.v2 (EA3.6): a program is adapter nodes, so the template lists the adapters it may use.
+                fill.put("adapters", AdapterManifest.load(json).describe());
+                fill.put("example", exampleProgram(resources, json));
+            }
         }
         return fill;
+    }
+
+    /** The mock's program, one node a line, as a fenced block. */
+    private static String exampleProgram(ResourcePatternResolver resources, ObjectMapper json) {
+        JsonNode nodes;
+        try {
+            nodes = json.readTree(HostContract.read(resources.getResource(AGENT_EXAMPLE))).path("program").path("nodes");
+        } catch (IOException e) {
+            throw new IllegalStateException("The agent template needs the mock's program at " + AGENT_EXAMPLE, e);
+        }
+        if (!nodes.isArray() || nodes.isEmpty()) {
+            throw new IllegalStateException(AGENT_EXAMPLE + " has no program.nodes to show as the agent's example.");
+        }
+        List<String> lines = new ArrayList<>();
+        nodes.forEach(n -> lines.add("  " + n));
+        return fenced("json", "{\"nodes\": [\n" + String.join(",\n", lines) + "\n]}");
+    }
+
+    /** The paper test's shared documents: {@code commonDocs} in its requests file. */
+    private static List<String> sharedDocuments(ResourcePatternResolver resources, ObjectMapper json) {
+        try {
+            List<String> ids = new ArrayList<>();
+            json.readTree(HostContract.read(resources.getResource(PAPER_REQUESTS))).path("commonDocs").forEach(id -> ids.add(id.asText()));
+            return ids;
+        } catch (IOException e) {
+            throw new IllegalStateException("The paper template needs its requests at " + PAPER_REQUESTS, e);
+        }
     }
 
     private static String planExamples(ResourcePatternResolver resources) {

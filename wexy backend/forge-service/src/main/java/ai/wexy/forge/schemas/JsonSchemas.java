@@ -23,7 +23,8 @@ import java.util.TreeSet;
 /**
  * The JSON the models answer with, and the schemas both sides validate it against (forge-loop
  * design §5.4, Q27): {@code scene-draft.v1} for the planner, {@code edit-plan.v1} for the director,
- * in {@code resources/schemas/}. The same text goes to Meta as {@code response_format}, so each
+ * {@code agent-action.v2} for the agent loop (its program made of adapter nodes since EA3.6; v1's file stays
+ * for the retired v1 check's test, and is not loaded), in {@code resources/schemas/}. The same text goes to Meta as {@code response_format}, so each
  * schema must stay inside Meta's strict subset (§4.1); startup refuses one that leaves it, because
  * Meta would answer {@code 400} to every call that sent it with {@code strict: true}.
  *
@@ -36,6 +37,8 @@ public class JsonSchemas {
 
     public static final String SCENE_DRAFT = "scene-draft.v1";
     public static final String EDIT_PLAN = "edit-plan.v1";
+    /** The agent loop's action (the agent-loop design §5.2; v2 since EA3.6, the frontend's engine-adapters design §16). */
+    public static final String AGENT_ACTION = "agent-action.v2";
 
     /** Meta's limit on nesting (§4.1). */
     static final int MAX_DEPTH = 10;
@@ -47,7 +50,7 @@ public class JsonSchemas {
     public JsonSchemas() {
         ObjectMapper json = new ObjectMapper();
         JsonSchemaFactory factory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
-        for (String id : List.of(SCENE_DRAFT, EDIT_PLAN)) {
+        for (String id : List.of(SCENE_DRAFT, EDIT_PLAN, AGENT_ACTION)) {
             String path = "schemas/" + id + ".json";
             try {
                 String text = new ClassPathResource(path).getContentAsString(StandardCharsets.UTF_8);

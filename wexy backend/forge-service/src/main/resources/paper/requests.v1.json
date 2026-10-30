@@ -1,0 +1,25 @@
+{
+ "version": "paper-requests.v1",
+ "description": "The paper test's three requests (the frontend's engine-aware design §13): each gets the common documents in the system message, which every call shares so the prompt cache can serve them, and its own in the user message, before the request.",
+ "commonDocs": ["agent/guide", "api/core", "api/geometry", "api/materials"],
+ "requests": [
+  {
+   "id": "block-film",
+   "text": "make minecraft 1870s film style",
+   "docs": ["api/lights", "api/post", "example/instancing"],
+   "why": "The design's §9 example: a block world, not particles, and a period-film look the plan must interpret, not quietly replace."
+  },
+  {
+   "id": "galaxy",
+   "text": "a spiral galaxy, gold at the core and blue along the arms",
+   "docs": ["api/post", "example/instancing"],
+   "why": "h1's ground, what Wexy builds today as particles: motion from a compute stage, glow from post."
+  },
+  {
+   "id": "foggy-dusk",
+   "text": "rolling hills under thick fog at dusk, the last light fading behind them",
+   "docs": ["api/lights", "api/environment", "api/aerial-perspective"],
+   "why": "Terrain and atmosphere: the environment family, unverified in H, with fog and a low sun."
+  }
+ ]
+}
