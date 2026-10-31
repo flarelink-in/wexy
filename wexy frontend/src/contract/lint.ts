@@ -67,7 +67,7 @@ const LOOP_LITERAL_MAX = 65536;
  * runs whatever its body does, which is the bound the probe relies on (R4). `count` is that number, or null when the
  * header is not of the form; `bodyAt` and `lineOf` place a match in the body on the function's lines.
  */
-function loopRuns(header: string, body: string, bodyAt: number, lineOf: (index: number) => number): { count: number | null; problems: string[] } {
+export function loopRuns(header: string, body: string, bodyAt: number, lineOf: (index: number) => number): { count: number | null; problems: string[] } {
     const example = '`for (var k = 0; k < 8; k++)`';
     const parts = header.split(';').map(p => p.trim());
     if (parts.length !== 3) return { count: null, problems: [`a loop must have the form ${example}; "${header}" is not`] };

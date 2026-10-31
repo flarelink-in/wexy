@@ -89,7 +89,7 @@ const ENTRY = /^[a-z][A-Za-z0-9_]{0,39}$/;
 const GENERATED = /^(b_|ea_|cs_main$|vs_main$|fs_main$|camera$|ecs$|main$)/i;
 
 /** WGSL's built-in functions (the WGSL recommendation, 2024): a module-scope function by one of these names shadows it. */
-const WGSL_FUNCTIONS = [
+export const WGSL_FUNCTIONS: readonly string[] = [
     'bitcast', 'all', 'any', 'select', 'arrayLength', 'abs', 'acos', 'acosh', 'asin', 'asinh', 'atan', 'atanh', 'atan2', 'ceil', 'clamp', 'cos', 'cosh',
     'countLeadingZeros', 'countOneBits', 'countTrailingZeros', 'cross', 'degrees', 'determinant', 'distance', 'dot', 'dot4U8Packed', 'dot4I8Packed',
     'exp', 'exp2', 'extractBits', 'faceForward', 'firstLeadingBit', 'firstTrailingBit', 'floor', 'fma', 'fract', 'frexp', 'insertBits', 'inverseSqrt',
@@ -108,7 +108,7 @@ const WGSL_FUNCTIONS = [
 ];
 /** Its predeclared types, type generators and aliases, enumerants (address spaces, access modes, texel formats), built-in
  * values, interpolation words and attribute names: any of them shadowed at module scope breaks a declaration that uses it. */
-const WGSL_NAMES = [
+export const WGSL_NAMES: readonly string[] = [
     'bool', 'f16', 'f32', 'i32', 'u32', 'array', 'atomic', 'ptr', 'sampler', 'sampler_comparison',
     ...['1d', '2d', '2d_array', '3d', 'cube', 'cube_array', 'multisampled_2d', 'depth_2d', 'depth_2d_array', 'depth_cube', 'depth_cube_array',
         'depth_multisampled_2d', 'external', 'storage_1d', 'storage_2d', 'storage_2d_array', 'storage_3d'].map(t => `texture_${t}`),
