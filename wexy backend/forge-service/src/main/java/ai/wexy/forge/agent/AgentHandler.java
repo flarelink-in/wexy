@@ -168,6 +168,7 @@ public class AgentHandler {
         // EA3.6: the action's contract and the adapter manifest its program was checked against, so a client built for
         // another refuses the turn before it reads a design or a program, as it refuses another bundle.
         meta.put("actionSchema", JsonSchemas.AGENT_ACTION);
+        meta.put("manifestHash", AdapterManifest.HASH);
         return meta;
     }
 
