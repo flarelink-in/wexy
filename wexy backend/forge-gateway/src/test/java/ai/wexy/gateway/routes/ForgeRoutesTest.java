@@ -1,0 +1,179 @@
+package ai.wexy.gateway.routes;
+
+import ai.wexy.gateway.appcheck.AppCheckFilter;
+import ai.wexy.gateway.auth.AuthorizationFilter;
+import ai.wexy.gateway.shield.GatewayShieldProperties;
+import ai.wexy.gateway.shield.RateLimitFilter;
+import ai.wexy.gateway.shield.RateLimits;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.cloud.gateway.filter.GatewayFilter;
+import org.springframework.cloud.gateway.route.Route;
+import org.springframework.cloud.gateway.route.RouteLocator;
+import org.springframework.test.context.ActiveProfiles;
+
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * The route table against the API table (backend architecture §11), and the contract with the
+ * frontend: the routes that spend App Check tokens are exactly the ones the page mints a fresh
+ * token for. Adding one without the page breaks it the moment replay protection is enforced;
+ * dropping one gives a lifted token back its hour of replays. Both must be deliberate, so the set
+ * is pinned exactly (FlareLink's SingleUseAppCheckRoutesTest, adapted).
+ */
+@SpringBootTest
+@ActiveProfiles("test")
+class ForgeRoutesTest {
+
+    private static final List<String> PUBLIC_READS = List.of("forge-mode", "archive-match", "worlds-read",
+            "showcase", "stats");
+    private static final List<String> SIGNED_IN = List.of("forge-plan", "forge-author", "forge-repair",
+            "forge-direct", "forge-outcomes", "agent-turn", "worlds-publish", "worlds-complete", "worlds-report");
+
+    @Autowired
+    private RouteLocator routeLocator;
+
+    @Autowired
+    private AppCheckFilter appCheck;
+
+    @Autowired
+    private AuthorizationFilter authorization;
+
+    @Autowired
+    private GatewayShieldProperties shield;
+
+    @Test
+    void theRoutesAreExactlyTheApiTable() {
+        List<String> ids = routeLocator.getRoutes().map(Route::getId).collectList().block();
+
+        assertThat(ids).containsExactlyInAnyOrder("forge-plan", "forge-author", "forge-repair", "forge-direct",
+                "forge-outcomes", "agent-turn", "forge-mode", "archive-match", "worlds-read", "showcase", "stats",
+                "worlds-publish", "worlds-complete", "worlds-report", "admin");
+    }
+
+    @Test
+    void exactlyTheRoutesTheFrontendMintsFreshTokensForSpendThem() {
+        List<String> spending = routeLocator.getRoutes()
+                .filter(route -> route.getFilters().contains(appCheck.singleUse()))
+                .map(Route::getId)
+                .collectList()
+                .block();
+
+        assertThat(spending).containsExactlyInAnyOrder("forge-plan", "agent-turn", "worlds-publish");
+
+        // Spending includes the attestation, so neither runs the plain check as well.
+        assertThat(route("forge-plan").getFilters()).doesNotContain(appCheck);
+        assertThat(route("worlds-publish").getFilters()).doesNotContain(appCheck);
+    }
+
+    @Test
+    void theOtherWritesKeepTheOrdinaryCheck() {
+        for (String id : List.of("forge-author", "forge-repair", "forge-direct", "forge-outcomes",
+                "worlds-complete", "worlds-report")) {
+            assertThat(route(id).getFilters()).as(id)
+                    .contains(appCheck)
+                    .doesNotContain(appCheck.singleUse());
+        }
+    }
+
+    /** Share pages and crawlers carry neither a sign-in nor an App Check token. */
+    @Test
+    void publicReadsRunNeitherSignInNorAppCheck() {
+        for (String id : PUBLIC_READS) {
+            List<GatewayFilter> filters = route(id).getFilters();
+            assertThat(filters).as(id).doesNotContain(appCheck, appCheck.singleUse());
+            assertThat(filters).as(id).noneMatch(f -> f instanceof AuthorizationFilter.PolicyFilter);
+            assertThat(buckets(filters)).as(id).containsExactly("public-read");
+        }
+    }
+
+    /** Anonymous Firebase users create and share (Q8); only the allow-list administers. */
+    @Test
+    void everyWriteSignsTheCallerInUnderItsPolicy() {
+        for (String id : SIGNED_IN) {
+            assertThat(route(id).getFilters()).as(id).contains(authorization.anonymousAllowed());
+        }
+        assertThat(route("admin").getFilters()).contains(authorization.adminOnly())
+                .doesNotContain(authorization.anonymousAllowed());
+    }
+
+    /** Before any signature check, every route is budgeted by address. */
+    @Test
+    void everyRouteHasAnAddressBudgetBeforeSignIn() {
+        for (Route route : routeLocator.getRoutes().collectList().block()) {
+            assertThat(route.getFilters()).as(route.getId())
+                    .anyMatch(f -> f instanceof RateLimitFilter limit && limit.getOrder() == RateLimits.PRE_AUTH_ORDER);
+        }
+    }
+
+    /** An anonymous account costs a script nothing, so creating gets a tighter per-account budget. */
+    @Test
+    void createRoutesAreTieredForAnonymousCallers() {
+        for (String id : List.of("forge-plan", "forge-author")) {
+            RateLimits.Tiered tiered = route(id).getFilters().stream()
+                    .filter(f -> f instanceof RateLimits.Tiered)
+                    .map(f -> (RateLimits.Tiered) f)
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError(id + " has no tiered limiter"));
+            assertThat(tiered.signedIn().bucket()).isEqualTo("forge-create-user");
+            assertThat(tiered.anonymous().bucket()).isEqualTo("forge-create-anonymous");
+            assertThat(tiered.getOrder()).isEqualTo(RateLimits.POST_AUTH_ORDER);
+        }
+    }
+
+    /** An agent turn makes up to six model calls, so it is tiered like a create and its buckets count calls (Q66). */
+    @Test
+    void theAgentTurnIsTieredAndItsBucketsCountModelCalls() {
+        RateLimits.Tiered tiered = route("agent-turn").getFilters().stream()
+                .filter(f -> f instanceof RateLimits.Tiered)
+                .map(f -> (RateLimits.Tiered) f)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("agent-turn has no tiered limiter"));
+        assertThat(tiered.signedIn().bucket()).isEqualTo("agent-turn-user");
+        assertThat(tiered.anonymous().bucket()).isEqualTo("agent-turn-anonymous");
+        for (String bucket : List.of("agent-turn", "agent-turn-user", "agent-turn-anonymous")) {
+            assertThat(shield.getBuckets().get(bucket).getRequestCost()).as(bucket).isEqualTo(ai.wexy.common.AgentTurn.MAX_CALLS);
+        }
+        assertThat(shield.getBuckets().get("forge-create-user").getRequestCost()).isEqualTo(1);
+    }
+
+    /**
+     * A profile that names a bucket replaces it whole, so one that forgets the agent's request cost (it falls to 1)
+     * stops the gateway when the routes are built, rather than letting six times the turns through (gate A).
+     */
+    @Test
+    void anAgentBucketThatChargesOtherThanATurnsCallsStopsTheGateway() {
+        GatewayShieldProperties properties = new GatewayShieldProperties();
+        new org.springframework.boot.context.properties.bind.Binder(
+                new org.springframework.boot.context.properties.source.MapConfigurationPropertySource(java.util.Map.of(
+                        "wexy.shield.buckets.agent-turn-user.refill-per-second", "30",
+                        "wexy.shield.buckets.agent-turn-user.burst-capacity", "600")))
+                .bind("wexy.shield", org.springframework.boot.context.properties.bind.Bindable.ofInstance(properties));
+
+        // The profile's bucket replaced the default whole: its cost fell to 1, six times the turns.
+        assertThat(properties.getBuckets().get("agent-turn-user").getRequestCost()).isEqualTo(1);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> properties.bucket("agent-turn-user"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("request-cost must be " + ai.wexy.common.AgentTurn.MAX_CALLS);
+        assertThat(properties.bucket("agent-turn").getRequestCost()).isEqualTo(ai.wexy.common.AgentTurn.MAX_CALLS);
+        assertThat(properties.bucket("forge-create-user").getRequestCost()).isEqualTo(1);
+    }
+
+    private Route route(String id) {
+        Route route = routeLocator.getRoutes()
+                .filter(candidate -> candidate.getId().equals(id))
+                .blockFirst();
+        assertThat(route).as("route " + id).isNotNull();
+        return route;
+    }
+
+    private static List<String> buckets(List<GatewayFilter> filters) {
+        return filters.stream()
+                .filter(f -> f instanceof RateLimitFilter)
+                .map(f -> ((RateLimitFilter) f).bucket())
+                .toList();
+    }
+}

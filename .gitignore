@@ -19,14 +19,9 @@ Thumbs.db
 .firebaserc
 .clinerules/
 
-# Private documentation and tests stay local; README is the published documentation.
+# Private documentation stays local (in wexy-notes, through junctions); README is the published documentation.
+# Tests are tracked since 2026-10-31.
 docs/
-test/
-tests/
-testing/
-**/src/test/
-*.test.*
-*.spec.*
 *.properties
 !/wexy backend/.mvn/wrapper/maven-wrapper.properties
 

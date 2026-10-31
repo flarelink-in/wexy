@@ -1,0 +1,12 @@
+# Hermetic: no Redis (port 1 refuses at once, so the meter fails closed), no key, no gateway.
+spring:
+  data:
+    redis:
+      port: 1
+
+wexy:
+  internal-jwt:
+    jwks-uri: http://127.0.0.1:1/.well-known/jwks.json
+  meta-api:
+    base-url: http://127.0.0.1:1/v1
+    api-key: ""

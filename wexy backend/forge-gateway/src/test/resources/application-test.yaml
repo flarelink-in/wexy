@@ -1,0 +1,26 @@
+# Hermetic: no Firebase, no App Check, no Redis (port 1 refuses at once, so every limiter falls back
+# to its local bucket), and nothing behind the gateway unless a test starts it.
+spring:
+  data:
+    redis:
+      port: 1
+
+wexy:
+  forge-service:
+    url: http://127.0.0.1:1
+  firebase:
+    required: false
+  cors:
+    allowed-origins: http://localhost:5173
+  appcheck:
+    enabled: false
+  shield:
+    edge:
+      burst-capacity: 500
+    ban:
+      enabled: false
+    buckets:
+      # Raised above the compiled default, so a test can tell configuration from code.
+      forge-edit:
+        refill-per-second: 5
+        burst-capacity: 30

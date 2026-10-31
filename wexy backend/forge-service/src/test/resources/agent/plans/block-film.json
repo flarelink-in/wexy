@@ -1,0 +1,367 @@
+{
+  "kind": "propose_design_and_program",
+  "context": null,
+  "design": {
+    "intent": "A Minecraft-like blocky voxel valley with stepped terrain, block trees, and a log cabin, rendered as an 1870s photograph: sepia palette, faded blacks, soft sun shading, vignette corners, and animated film grain.",
+    "interpretation": "Read minecraft as blocky voxel cubes, not trademark assets, and 1870s film style as sepia photographic grade with vignette and grain, not an accurate historical emulsion simulation.",
+    "assumptions": [
+      "Host owns core:NullGraph, canvas, camera, and frame loop.",
+      "No GLB, texture, network, or font assets are loaded.",
+      "One Lambert batch draws all voxel cubes from 14-float instances.",
+      "Voxel map is precomputed once on CPU and stays static.",
+      "1870s look is sepia grade plus vignette and animated grain.",
+      "Lighting is standard forward with one sun plus ambient fill."
+    ],
+    "visualElements": [
+      {
+        "description": "Stepped hills and flat valley floor from 1m cubes in grass green-brown, dirt, and grey stone bands.",
+        "name": "voxelTerrain"
+      },
+      {
+        "description": "Brown trunk columns with blocky leaf cubes, scattered on hills.",
+        "name": "blockTrees"
+      },
+      {
+        "description": "Small log cabin from dark wood cubes with plank roof and warm window.",
+        "name": "cabin"
+      },
+      {
+        "description": "Pale sepia sky background with soft sun glow, no modern clouds.",
+        "name": "agedSky"
+      },
+      {
+        "description": "Overall sepia cast, faded blacks, darkened corners, fine grain.",
+        "name": "filmLook"
+      }
+    ],
+    "motion": "World is static except for animated film grain from camera time and a very slow host camera drift. No character, water, or physics motion. Flicker-free, still-photo feel.",
+    "animated": false,
+    "techniques": [
+      {
+        "docIds": [
+          "api/geometry",
+          "api/core",
+          "api/materials",
+          "example/instancing"
+        ],
+        "purpose": "One cube mesh drawn thousands of times with per-instance position, scale, and color for grass, dirt, stone, wood, leaves.",
+        "symbols": [
+          "geometry:Primitives",
+          "core:NullGraph",
+          "materials:LambertMaterial"
+        ]
+      },
+      {
+        "docIds": [
+          "api/lights"
+        ],
+        "purpose": "Single warm directional sun plus ambient and hemisphere fill for soft 1870s daylight on Lambert diffuse.",
+        "symbols": [
+          "lights:LightSystem",
+          "lights:DirectionalLightProxy",
+          "lights:AmbientLightProxy"
+        ]
+      },
+      {
+        "docIds": [
+          "api/post"
+        ],
+        "purpose": "Sepia grade before tonemap, then vignette and animated grain after tonemap for aged-photo finish.",
+        "symbols": [
+          "post:PostChain",
+          "post:ColorGrade",
+          "post:Tonemap",
+          "post:Vignette",
+          "post:FilmGrain"
+        ]
+      }
+    ],
+    "resourceFlow": [
+      "CPU voxel map builds 14-float instance array",
+      "Instance array streams to Lambert batch storage via updateBatchData",
+      "Cube geometry uploads once and binds to batch",
+      "LightSystem uploads sun plus ambient to group 2",
+      "Scene pass renders cubes into PostChain color attachments",
+      "PostChain runs ColorGrade then Tonemap then Vignette then FilmGrain to screen"
+    ],
+    "cameraAndTiming": "Host holds a slow low orbital drift across the voxel valley, eye ~28m out, looking at village center. Still-photograph pacing, ~30s loop, no fast action.",
+    "controls": [
+      {
+        "effect": "Adjust sepia warmth and fade without rebuild.",
+        "name": "Sepia grade"
+      },
+      {
+        "effect": "Adjust corner darkening strength.",
+        "name": "Vignette"
+      },
+      {
+        "effect": "Adjust animated grain amount.",
+        "name": "Film grain"
+      }
+    ],
+    "successCriteria": [
+      "Terrain, trees, and cabin read as unit cubes in one frame.",
+      "Palette is brown-sepia with desaturated greens.",
+      "Sun side is lit and shadow side is readable, not black.",
+      "Corners are visibly darker from vignette.",
+      "Fine grain is visible on sky and flat blocks.",
+      "No bright neon color or modern PBR gloss."
+    ],
+    "unresolved": [
+      "True scratches, dust, sprocket holes, and flicker need custom WGSL beyond stock post effects, so only grain and vignette are planned.",
+      "Accurate 1870s lens softness and orthochromatic response have no stock control and are approximated with grade."
+    ]
+  },
+  "program": {
+    "controls": [
+      {
+        "default": "0.35",
+        "id": "sepiaWarm",
+        "max": 1,
+        "min": 0,
+        "target": "grade.temperature",
+        "type": "float"
+      },
+      {
+        "default": "0.65",
+        "id": "vignetteAmt",
+        "max": 1,
+        "min": 0,
+        "target": "vignette.intensity",
+        "type": "float"
+      },
+      {
+        "default": "0.12",
+        "id": "grainAmt",
+        "max": 0.3,
+        "min": 0,
+        "target": "grain.intensity",
+        "type": "float"
+      },
+      {
+        "default": "3.0",
+        "id": "sunLevel",
+        "max": 5,
+        "min": 0,
+        "target": "lightRig.sunIntensity",
+        "type": "float"
+      }
+    ],
+    "lifecycle": {
+      "dispose": [
+        "chain.destroy, lights.destroy, mat.destroy, geom.destroy"
+      ],
+      "fixedStep": [],
+      "frame": [
+        "lights.upload, engine.updateCamera, post.upload, engine.render([scenePass, ...post.getPassSequence()])"
+      ],
+      "init": [
+        "Build voxel map, fill 14-float instances, upload geometry and batch data, set lights, setChain in canonical order"
+      ],
+      "resize": [
+        "post.resize(width,height) keeps scene pass valid"
+      ]
+    },
+    "modules": [],
+    "objects": [
+      {
+        "id": "scenePass",
+        "symbol": "core:NullGraph",
+        "member": "createPass",
+        "purpose": "Offscreen scene pass feeding PostChain attachments.",
+        "args": [
+          {
+            "param": "config",
+            "value": "{\"name\":\"Valley1870\",\"isMainScreenPass\":false}"
+          }
+        ],
+        "inputs": []
+      },
+      {
+        "id": "cubeGeom",
+        "symbol": "geometry:Primitives",
+        "member": "createCube",
+        "purpose": "Unit cube shared by every voxel block.",
+        "args": [
+          {
+            "param": "layout",
+            "value": "\"StandardLayout\""
+          },
+          {
+            "param": "shape",
+            "value": "\"cube\""
+          },
+          {
+            "param": "size",
+            "value": "1"
+          }
+        ],
+        "inputs": []
+      },
+      {
+        "id": "voxelBatch",
+        "symbol": "core:NullGraph",
+        "member": "createBatch",
+        "purpose": "Lambert batch drawing all voxel instances.",
+        "args": [
+          {
+            "param": "config",
+            "value": "{\"strideFloats\":14,\"maxInstances\":6000,\"depthWriteEnabled\":true}"
+          }
+        ],
+        "inputs": [
+          "scenePass",
+          "cubeGeom"
+        ]
+      },
+      {
+        "id": "voxelMat",
+        "symbol": "materials:LambertMaterial",
+        "member": null,
+        "purpose": "Cheap diffuse material with per-instance color.",
+        "args": [
+          {
+            "param": "options",
+            "value": "{\"baseColor\":[1,1,1,1],\"ambient\":0.25}"
+          }
+        ],
+        "inputs": [
+          "voxelBatch"
+        ]
+      },
+      {
+        "id": "lightRig",
+        "symbol": "lights:LightSystem",
+        "member": null,
+        "purpose": "Warm sun plus ambient fill bound at group 2.",
+        "args": [
+          {
+            "param": "config",
+            "value": "{\"technique\":\"standard\",\"capacity\":{\"directional\":1,\"ambient\":1,\"hemisphere\":1}}"
+          }
+        ],
+        "inputs": [
+          "voxelBatch"
+        ]
+      },
+      {
+        "id": "grade",
+        "symbol": "post:ColorGrade",
+        "member": null,
+        "purpose": "Sepia desaturation and warm grade before tonemap.",
+        "args": [
+          {
+            "param": "opts",
+            "value": "{\"exposure\":1,\"contrast\":0.9,\"saturation\":0.35,\"temperature\":0.35}"
+          }
+        ],
+        "inputs": []
+      },
+      {
+        "id": "tone",
+        "symbol": "post:Tonemap",
+        "member": null,
+        "purpose": "HDR to display range boundary.",
+        "args": [
+          {
+            "param": "opts",
+            "value": "{\"curve\":\"aces\",\"exposure\":1}"
+          }
+        ],
+        "inputs": []
+      },
+      {
+        "id": "vignette",
+        "symbol": "post:Vignette",
+        "member": null,
+        "purpose": "Darkened aged-photo corners.",
+        "args": [
+          {
+            "param": "opts",
+            "value": "{\"radius\":0.65,\"softness\":0.5,\"intensity\":0.65}"
+          }
+        ],
+        "inputs": []
+      },
+      {
+        "id": "grain",
+        "symbol": "post:FilmGrain",
+        "member": null,
+        "purpose": "Animated 1870s film grain last.",
+        "args": [
+          {
+            "param": "opts",
+            "value": "{\"intensity\":0.12,\"size\":1.2,\"colorAmount\":0.1}"
+          }
+        ],
+        "inputs": []
+      },
+      {
+        "id": "chain",
+        "symbol": "post:PostChain",
+        "member": null,
+        "purpose": "Chain compiling grade, tonemap, vignette, grain in canonical order.",
+        "args": [
+          {
+            "param": "config",
+            "value": "{\"format\":\"rgba16float\",\"outputToScreen\":true}"
+          }
+        ],
+        "inputs": [
+          "scenePass",
+          "grade",
+          "tone",
+          "vignette",
+          "grain"
+        ]
+      }
+    ],
+    "output": {
+      "color": "chain",
+      "colorSpace": "srgb",
+      "depth": false
+    },
+    "resources": [
+      {
+        "count": 6000,
+        "id": "voxelInstances",
+        "kind": "storage_buffer",
+        "layout": "14 floats: pad, pos xyz, quat xyzw, scale xyz, color rgb",
+        "purpose": "All terrain, tree, and cabin blocks as Lambert instances.",
+        "strideFloats": 14
+      }
+    ],
+    "schedule": [
+      {
+        "id": "drawValley",
+        "kind": "render",
+        "objectId": "scenePass",
+        "reads": [
+          "voxelInstances"
+        ],
+        "required": true,
+        "when": "frame",
+        "writes": [
+          "scenePass"
+        ]
+      },
+      {
+        "id": "filmPost",
+        "kind": "post",
+        "objectId": "chain",
+        "reads": [
+          "scenePass"
+        ],
+        "required": true,
+        "when": "frame",
+        "writes": [
+          "chain"
+        ]
+      }
+    ]
+  },
+  "modules": null,
+  "revision": null,
+  "question": null,
+  "finish": null
+}

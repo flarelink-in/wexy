@@ -1,0 +1,391 @@
+{
+  "kind": "propose_design_and_program",
+  "context": null,
+  "design": {
+    "intent": "A tilted spiral galaxy on black space: dense gold-white glowing core and bulge with thousands of smaller blue-white stars along logarithmic arms, slowly rotating.",
+    "interpretation": null,
+    "assumptions": [
+      "Star positions generated once on CPU with logarithmic spiral plus central bulge.",
+      "All stars drawn as small icosahedra with additive blending, no textures.",
+      "Single rigid-plus-differential rotation updated at fixed step on CPU.",
+      "No external assets, sky model, lights, or shadows needed."
+    ],
+    "visualElements": [
+      {
+        "description": "Dense 2500 gold-white stars in central sphere plus flat bulge, largest scale, HDR bright.",
+        "name": "coreGlow"
+      },
+      {
+        "description": "9500 smaller blue-white stars on 2 logarithmic arms with scatter and falloff.",
+        "name": "spiralArms"
+      },
+      {
+        "description": "Pure black clear color with additive glow only, no ground or sky.",
+        "name": "deepSpace"
+      }
+    ],
+    "motion": "Slow differential rotation: inner stars orbit faster than outer arms. Whole pattern turns rigidly at fixed step. No camera cuts; only slow host drift. Emissive stars steady, no per-star flicker.",
+    "animated": true,
+    "techniques": [
+      {
+        "docIds": [
+          "agent/guide",
+          "api/core",
+          "api/geometry",
+          "example/instancing"
+        ],
+        "purpose": "One 12000-instance plain batch of small icosahedra for core plus arms with per-instance color.",
+        "symbols": [
+          "core:NullGraph",
+          "core:RenderBatch",
+          "geometry:Primitives",
+          "geometry:StandardLayout"
+        ]
+      },
+      {
+        "docIds": [
+          "api/materials"
+        ],
+        "purpose": "HDR self-lit stars with EmissiveMaterial so core can exceed 1.0 for bloom.",
+        "symbols": [
+          "materials:EmissiveMaterial",
+          "materials:buildEmissiveShader"
+        ]
+      },
+      {
+        "docIds": [
+          "api/post"
+        ],
+        "purpose": "Bloom glow plus ACES tonemap to keep gold core soft and blue arms saturated.",
+        "symbols": [
+          "post:PostChain",
+          "post:Bloom",
+          "post:Tonemap"
+        ]
+      }
+    ],
+    "resourceFlow": [
+      "CPU spiral sampler fills starInstances buffer.",
+      "starInstances feeds starBatch instance storage.",
+      "starBatch draws into scenePass color via emissive material.",
+      "scenePass color feeds PostChain Bloom then Tonemap.",
+      "PostChain writes final image to screen."
+    ],
+    "cameraAndTiming": "Perspective 55deg, eye [0, 26, 44] target [0,0,0], galaxy tilted ~20deg. Slow host drift orbit. Core gold glow steady; arms rotate ~0.05 rad/s at fixed step.",
+    "controls": [
+      {
+        "effect": "Arm rotation speed without frame-rate dependence.",
+        "name": "spinSpeed"
+      },
+      {
+        "effect": "HDR star brightness feeding Bloom.",
+        "name": "glowIntensity"
+      },
+      {
+        "effect": "Blend from gold core to blue arms.",
+        "name": "armTint"
+      }
+    ],
+    "successCriteria": [
+      "One frame shows bright warm gold-white center fading outward.",
+      "Blue-white stars form distinct curved spiral arms, not a disc or blob.",
+      "Background is near-black with soft glow only around stars and core.",
+      "No grey screen, missing geometry, or harsh square sprites."
+    ],
+    "unresolved": [
+      "True camera-facing billboards need a custom shader; small meshes used instead.",
+      "Per-star twinkle unavailable: EmissiveMaterial pulse is uniform, so kept steady.",
+      "Dark dust lanes would need textures or custom shading, omitted."
+    ]
+  },
+  "program": {
+    "controls": [
+      {
+        "default": "0.05",
+        "id": "spinSpeed",
+        "max": 0.3,
+        "min": 0,
+        "target": "fixedStep.spinSpeed",
+        "type": "float"
+      },
+      {
+        "default": "2.5",
+        "id": "glowIntensity",
+        "max": 6,
+        "min": 0.5,
+        "target": "starMaterial.emissiveIntensity",
+        "type": "float"
+      },
+      {
+        "default": "0.8",
+        "id": "bloomMix",
+        "max": 1.5,
+        "min": 0,
+        "target": "bloom.intensity",
+        "type": "float"
+      }
+    ],
+    "lifecycle": {
+      "dispose": [
+        "starMaterial.destroy()",
+        "postChain.destroy()",
+        "starMesh.destroy()"
+      ],
+      "fixedStep": [
+        "advance spiral angle by spinSpeed*dt, rewrite starInstances positions, updateBatchData"
+      ],
+      "frame": [
+        "engine.updateCamera(camera)",
+        "postChain.upload()",
+        "engine.render([scenePass, ...postChain.getPassSequence()])"
+      ],
+      "init": [
+        "create pass, mesh, batch, emissive material, Bloom+Tonemap chain, fill spiral instances"
+      ],
+      "resize": [
+        "postChain.resize(width,height)"
+      ]
+    },
+    "modules": [
+      {
+        "bindings": [
+          {
+            "binding": 0,
+            "group": 0,
+            "resource": "cameraUniform"
+          },
+          {
+            "binding": 1,
+            "group": 0,
+            "resource": "starInstances"
+          },
+          {
+            "binding": 3,
+            "group": 1,
+            "resource": "materialUniform"
+          }
+        ],
+        "entry": "star_shade_main",
+        "id": "starShade",
+        "purpose": "Stock emissive shading for instanced star meshes with per-instance color.",
+        "signature": "fn star_shade_main(in_uv: vec2f) -> vec4f",
+        "stage": "material_fragment",
+        "usedBy": "starBatch"
+      }
+    ],
+    "objects": [
+      {
+        "id": "scenePass",
+        "symbol": "core:NullGraph",
+        "member": "createPass",
+        "purpose": "Offscreen HDR scene pass feeding post chain.",
+        "args": [
+          {
+            "param": "config",
+            "value": "{\"name\":\"GalaxyScene\",\"isMainScreenPass\":false}"
+          }
+        ],
+        "inputs": []
+      },
+      {
+        "id": "starMesh",
+        "symbol": "geometry:Primitives",
+        "member": "createIcosahedron",
+        "purpose": "Small star mesh shared by all galaxy instances.",
+        "args": [
+          {
+            "param": "layout",
+            "value": "\"StandardLayout\""
+          },
+          {
+            "param": "radius",
+            "value": "0.12"
+          }
+        ],
+        "inputs": []
+      },
+      {
+        "id": "starShader",
+        "symbol": "materials:buildEmissiveShader",
+        "member": null,
+        "purpose": "Build emissive WGSL for star batch pipeline.",
+        "args": [
+          {
+            "param": "config",
+            "value": "{\"useSkinning\":false}"
+          }
+        ],
+        "inputs": []
+      },
+      {
+        "id": "starBatch",
+        "symbol": "core:NullGraph",
+        "member": "createBatch",
+        "purpose": "Additive batch drawing all core and arm stars.",
+        "args": [
+          {
+            "param": "config",
+            "value": "{\"strideFloats\":14,\"maxInstances\":12000,\"depthWriteEnabled\":false,\"blend\":{\"color\":{\"srcFactor\":\"src-alpha\",\"dstFactor\":\"one\"}}}"
+          }
+        ],
+        "inputs": [
+          "scenePass",
+          "starMesh",
+          "starShader"
+        ]
+      },
+      {
+        "id": "bindStars",
+        "symbol": "core:NullGraph",
+        "member": "setBatchGeometry",
+        "purpose": "Bind star vertex and index buffers to batch.",
+        "args": [
+          {
+            "param": "indexCount",
+            "value": "320"
+          }
+        ],
+        "inputs": [
+          "starBatch",
+          "starMesh"
+        ]
+      },
+      {
+        "id": "starMaterial",
+        "symbol": "materials:EmissiveMaterial",
+        "member": null,
+        "purpose": "HDR white emissive tinted per-instance gold to blue.",
+        "args": [
+          {
+            "param": "options",
+            "value": "{\"baseColor\":[0,0,0,1],\"emissiveColor\":[1,1,1],\"emissiveIntensity\":2.5,\"pulseAmount\":0}"
+          }
+        ],
+        "inputs": []
+      },
+      {
+        "id": "attachStars",
+        "symbol": "materials:EmissiveMaterial",
+        "member": "applyToBatch",
+        "purpose": "Bind emissive uniforms at group 1 to star batch.",
+        "args": [
+          {
+            "param": "batch",
+            "value": "\"starBatch\""
+          }
+        ],
+        "inputs": [
+          "starMaterial",
+          "starBatch"
+        ]
+      },
+      {
+        "id": "bloom",
+        "symbol": "post:Bloom",
+        "member": null,
+        "purpose": "Soft glow around core and bright arm stars.",
+        "args": [
+          {
+            "param": "opts",
+            "value": "{\"threshold\":1,\"knee\":0.5,\"intensity\":0.8,\"mips\":5}"
+          }
+        ],
+        "inputs": []
+      },
+      {
+        "id": "tonemap",
+        "symbol": "post:Tonemap",
+        "member": null,
+        "purpose": "Map HDR galaxy to display range.",
+        "args": [
+          {
+            "param": "opts",
+            "value": "{\"curve\":\"aces\",\"exposure\":1}"
+          }
+        ],
+        "inputs": []
+      },
+      {
+        "id": "chain",
+        "symbol": "post:PostChain",
+        "member": null,
+        "purpose": "Post chain owning targets and param arena.",
+        "args": [
+          {
+            "param": "config",
+            "value": "{\"format\":\"rgba16float\",\"outputToScreen\":true}"
+          }
+        ],
+        "inputs": [
+          "bloom",
+          "tonemap"
+        ]
+      },
+      {
+        "id": "setChain",
+        "symbol": "post:PostChain",
+        "member": "setChain",
+        "purpose": "Compile ordered Bloom then Tonemap chain.",
+        "args": [
+          {
+            "param": "effects",
+            "value": "[\"bloom\",\"tonemap\"]"
+          }
+        ],
+        "inputs": [
+          "chain",
+          "bloom",
+          "tonemap"
+        ]
+      }
+    ],
+    "output": {
+      "color": "chain",
+      "colorSpace": "srgb",
+      "depth": false
+    },
+    "resources": [
+      {
+        "count": 12000,
+        "id": "starInstances",
+        "kind": "storage_buffer",
+        "layout": "14 floats: pad, pos xyz, quat xyzw, scale xyz, color rgb",
+        "purpose": "Per-star transform and gold-to-blue color.",
+        "strideFloats": 14
+      }
+    ],
+    "schedule": [
+      {
+        "id": "drawGalaxy",
+        "kind": "render",
+        "objectId": "scenePass",
+        "reads": [
+          "starInstances",
+          "starBatch"
+        ],
+        "required": true,
+        "when": "frame",
+        "writes": [
+          "sceneColor"
+        ]
+      },
+      {
+        "id": "postGalaxy",
+        "kind": "post",
+        "objectId": "chain",
+        "reads": [
+          "sceneColor"
+        ],
+        "required": true,
+        "when": "frame",
+        "writes": [
+          "screen"
+        ]
+      }
+    ]
+  },
+  "modules": null,
+  "revision": null,
+  "question": null,
+  "finish": null
+}

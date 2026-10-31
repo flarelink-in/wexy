@@ -1,0 +1,440 @@
+{
+  "kind": "propose_design_and_program",
+  "context": null,
+  "design": {
+    "intent": "Rolling grass hills receding to a far ridge at dusk under thick valley fog, with the last warm light fading behind the ridge and a dusky gradient sky above.",
+    "interpretation": "Read as ground-level view across layered hills toward western ridge sunset; sun occluded by ridge leaving rim glow; fog is height fog pooled in valleys obscuring far hills.",
+    "assumptions": [
+      "Terrain is procedural CPU geometry, no assets or downloads.",
+      "Dusk sun is low behind far ridge, mostly occluded.",
+      "Thick fog is HeightFog single-scatter, no samplable depth.",
+      "One global IBL environment is enough for open hills.",
+      "Camera stays low over valley, no interior or water."
+    ],
+    "visualElements": [
+      {
+        "description": "128x128 displaced plane ~200x200 units, layered sine hills 4-10 units high, smooth normals",
+        "name": "rolling terrain"
+      },
+      {
+        "description": "Far ridge silhouette 60 units wide at -Z, occludes sun disc lower half",
+        "name": "sunset ridge"
+      },
+      {
+        "description": "GradientSky zenith dusky blue, horizon warm orange-pink, low sun disc intensity 8",
+        "name": "dusk sky"
+      },
+      {
+        "description": "Height fog referenceHeight 0, scaleHeight 0.25km, bluish-grey scattering, valleys opaque",
+        "name": "thick valley fog"
+      }
+    ],
+    "motion": "Static hills; slow camera drift; fog density constant with slight sun intensity falloff over loop to sell fading light; no characters, water, or clouds.",
+    "animated": false,
+    "techniques": [
+      {
+        "docIds": [
+          "api/geometry",
+          "agent/guide"
+        ],
+        "purpose": "Procedural rolling-hill terrain mesh baked on CPU into StandardLayout buffers",
+        "symbols": [
+          "geometry:GeometryBuilder",
+          "core:NullGraph"
+        ]
+      },
+      {
+        "docIds": [
+          "api/materials",
+          "api/lights"
+        ],
+        "purpose": "Cheap lit diffuse hills with half-lambert plus direct lights",
+        "symbols": [
+          "materials:LambertMaterial",
+          "lights:LightSystem"
+        ]
+      },
+      {
+        "docIds": [
+          "api/environment"
+        ],
+        "purpose": "Dusk gradient sky with sun disc driving IBL diffuse and specular",
+        "symbols": [
+          "environment:EnvironmentSystem"
+        ]
+      },
+      {
+        "docIds": [
+          "api/aerial-perspective"
+        ],
+        "purpose": "Thick valley height fog injected into Lambert without samplable depth",
+        "symbols": [
+          "environment:HeightFog"
+        ]
+      }
+    ],
+    "resourceFlow": [
+      "GeometryBuilder bakes hill vertices -> vertex/index buffers -> terrain batch",
+      "Instance record positions terrain at origin -> Lambert vertex shader",
+      "LightSystem directional+hemisphere -> group 2 direct light",
+      "EnvironmentSystem GradientSky -> prefiltered cube+SH -> group 2 indirect",
+      "HeightFog params -> group 2 bindings 18-19 -> fogged Lambert fragment",
+      "Scene pass draws hills, sky pass fills background behind them"
+    ],
+    "cameraAndTiming": "Low valley camera at ~[0,6,28] looking to -Z at sunset ridge. Slow 0.02 rad/s lateral drift plus subtle bob. 24s loop. Sky and hills stay framed; sun stays behind far ridge.",
+    "controls": [
+      {
+        "effect": "Thickens or thins valley fog without rebaking sky",
+        "name": "fogDensity"
+      },
+      {
+        "effect": "Lowers last-light disc and warms direct light",
+        "name": "sunsetFade"
+      },
+      {
+        "effect": "Raises rolling hill amplitude",
+        "name": "hillHeight"
+      }
+    ],
+    "successCriteria": [
+      "Layered hills fill lower two-thirds with nearer dark, farther paler",
+      "Far ridge is fogged and low sun glow sits directly behind it",
+      "Sky shows dusk gradient from warm horizon to dusky blue zenith",
+      "Valley hollows show thicker fog than hilltops in one frame",
+      "No black unlit regions or missing background pixels"
+    ],
+    "unresolved": [
+      "Exact GradientSky sunCos for partly occluded disc tuned by eye, not in docs",
+      "HeightFog sun irradiance coupling to TimeOfDay not used; fixed dusk value"
+    ]
+  },
+  "program": {
+    "controls": [
+      {
+        "default": "1.0",
+        "id": "fogDensity",
+        "max": 2,
+        "min": 0.2,
+        "target": "fog.setHeightFog scattering scale",
+        "type": "float"
+      },
+      {
+        "default": "0.6",
+        "id": "sunsetFade",
+        "max": 1,
+        "min": 0,
+        "target": "env.setSkyParams exposure + light intensity",
+        "type": "float"
+      },
+      {
+        "default": "1.0",
+        "id": "hillHeight",
+        "max": 1.8,
+        "min": 0.4,
+        "target": "terrain displacement amplitude (rebuild)",
+        "type": "float"
+      }
+    ],
+    "lifecycle": {
+      "dispose": [
+        "destroy lambert, lights, env, fog, geometry buffers"
+      ],
+      "fixedStep": [],
+      "frame": [
+        "update sun fade, lights.upload(), engine.render([scenePass, skyPass])"
+      ],
+      "init": [
+        "init engine by host, build terrain, create passes, set sky, bake env, upload instances"
+      ],
+      "resize": [
+        "resize scene and sky passes to canvas size"
+      ]
+    },
+    "modules": [],
+    "objects": [
+      {
+        "id": "scenePass",
+        "symbol": "core:NullGraph",
+        "member": "createPass",
+        "purpose": "Opaque pass drawing fogged hills",
+        "args": [
+          {
+            "param": "config",
+            "value": "{\"name\":\"HillsPass\",\"isMainScreenPass\":true}"
+          }
+        ],
+        "inputs": []
+      },
+      {
+        "id": "terrainGeom",
+        "symbol": "geometry:GeometryBuilder",
+        "member": null,
+        "purpose": "Bake rolling-hill plane with displaced heights",
+        "args": [
+          {
+            "param": "layout",
+            "value": "\"StandardLayout\""
+          },
+          {
+            "param": "grid",
+            "value": "128"
+          },
+          {
+            "param": "size",
+            "value": "200"
+          }
+        ],
+        "inputs": []
+      },
+      {
+        "id": "hillShader",
+        "symbol": "materials:buildLambertShader",
+        "member": null,
+        "purpose": "Build Lambert WGSL with lights and fog layouts",
+        "args": [
+          {
+            "param": "config",
+            "value": "{\"lighting\":\"from lights\",\"useHalfLambert\":true,\"aerial\":\"from fog\"}"
+          }
+        ],
+        "inputs": [
+          "lightSys",
+          "fog"
+        ]
+      },
+      {
+        "id": "hillBatch",
+        "symbol": "core:NullGraph",
+        "member": "createBatch",
+        "purpose": "Draw terrain with fogged Lambert pipeline",
+        "args": [
+          {
+            "param": "config",
+            "value": "{\"shader\":\"hillShader\",\"strideFloats\":14,\"maxInstances\":1,\"depthWriteEnabled\":true}"
+          }
+        ],
+        "inputs": [
+          "scenePass",
+          "hillShader",
+          "terrainGeom"
+        ]
+      },
+      {
+        "id": "hillMat",
+        "symbol": "materials:LambertMaterial",
+        "member": null,
+        "purpose": "Dusky green diffuse hills material",
+        "args": [
+          {
+            "param": "options",
+            "value": "{\"baseColor\":[0.22,0.28,0.16,1],\"ambient\":0.25}"
+          }
+        ],
+        "inputs": [
+          "hillBatch"
+        ]
+      },
+      {
+        "id": "lightSys",
+        "symbol": "lights:LightSystem",
+        "member": null,
+        "purpose": "Low warm sun plus dusk ambient and hemisphere",
+        "args": [
+          {
+            "param": "config",
+            "value": "{\"capacity\":{\"point\":0,\"directional\":1,\"spot\":0,\"ambient\":1,\"hemisphere\":1},\"technique\":\"standard\"}"
+          }
+        ],
+        "inputs": []
+      },
+      {
+        "id": "envSys",
+        "symbol": "environment:EnvironmentSystem",
+        "member": null,
+        "purpose": "Global dusk IBL and sky background",
+        "args": [
+          {
+            "param": "config",
+            "value": "{\"sourceSize\":256,\"prefilterMips\":5,\"keepSourceCube\":false}"
+          }
+        ],
+        "inputs": []
+      },
+      {
+        "id": "duskSky",
+        "symbol": "environment:EnvironmentSystem",
+        "member": "setProceduralSky",
+        "purpose": "Install dusk gradient with low sun behind ridge",
+        "args": [
+          {
+            "param": "sky",
+            "value": "{\"zenith\":[0.08,0.12,0.28],\"horizon\":[0.85,0.42,0.22],\"ground\":[0.18,0.15,0.14],\"sunDir\":[-0.25,-0.12,-1],\"sunIntensity\":8}"
+          }
+        ],
+        "inputs": [
+          "envSys"
+        ]
+      },
+      {
+        "id": "fog",
+        "symbol": "environment:HeightFog",
+        "member": null,
+        "purpose": "Thick height fog pooled in valleys",
+        "args": [
+          {
+            "param": "options",
+            "value": "{\"fog\":{\"scattering\":[0.000035,0.000032,0.00003]},\"unitsPerKm\":1000}"
+          }
+        ],
+        "inputs": []
+      },
+      {
+        "id": "bindHill",
+        "symbol": "environment:EnvironmentSystem",
+        "member": "applyToBatch",
+        "purpose": "Build combined group 2 lights+IBL+fog for hills",
+        "args": [
+          {
+            "param": "batch",
+            "value": "\"hillBatch\""
+          },
+          {
+            "param": "lights",
+            "value": "\"lightSys\""
+          },
+          {
+            "param": "extra",
+            "value": "\"fog\""
+          }
+        ],
+        "inputs": [
+          "hillBatch",
+          "hillMat",
+          "lightSys",
+          "fog",
+          "envSys"
+        ]
+      },
+      {
+        "id": "setHillGeom",
+        "symbol": "core:NullGraph",
+        "member": "setBatchGeometry",
+        "purpose": "Bind hill vertex buffers to batch",
+        "args": [
+          {
+            "param": "vertexBuffer",
+            "value": "\"terrainGeom\""
+          },
+          {
+            "param": "indexCount",
+            "value": "\"from terrainGeom\""
+          }
+        ],
+        "inputs": [
+          "hillBatch",
+          "terrainGeom"
+        ]
+      },
+      {
+        "id": "placeHill",
+        "symbol": "core:NullGraph",
+        "member": "updateBatchData",
+        "purpose": "Place single terrain instance at origin",
+        "args": [
+          {
+            "param": "batch",
+            "value": "\"hillBatch\""
+          },
+          {
+            "param": "rawData",
+            "value": "{\"pos\":[0,0,0],\"quatW\":1,\"scale\":[1,1,1],\"color\":[1,1,1]}"
+          },
+          {
+            "param": "instanceCount",
+            "value": "1"
+          }
+        ],
+        "inputs": [
+          "hillBatch"
+        ]
+      },
+      {
+        "id": "skyPass",
+        "symbol": "environment:EnvironmentSystem",
+        "member": "getSkyPass",
+        "purpose": "Background skybox filling where hills draw nothing",
+        "args": [
+          {
+            "param": "target",
+            "value": "{\"after\":\"scenePass\",\"format\":\"rgba8unorm\"}"
+          }
+        ],
+        "inputs": [
+          "envSys",
+          "scenePass"
+        ]
+      }
+    ],
+    "output": {
+      "color": "skyPass",
+      "colorSpace": "srgb",
+      "depth": true
+    },
+    "resources": [
+      {
+        "count": 16641,
+        "id": "hillVerts",
+        "kind": "vertex_buffer",
+        "layout": "StandardLayout pos(3)+normal(3)+uv(2)",
+        "purpose": "Rolled hill grid vertices",
+        "strideFloats": 8
+      },
+      {
+        "count": 1,
+        "id": "hillInstances",
+        "kind": "storage_buffer",
+        "layout": "[0]pad [1..3]pos [4..7]quat [8..10]scale [11..13]color",
+        "purpose": "Single terrain placement record",
+        "strideFloats": 14
+      }
+    ],
+    "schedule": [
+      {
+        "id": "bakeEnv",
+        "kind": "compute",
+        "objectId": "envSys",
+        "reads": [
+          "duskSky"
+        ],
+        "required": true,
+        "when": "init",
+        "writes": []
+      },
+      {
+        "id": "drawHills",
+        "kind": "render",
+        "objectId": "scenePass",
+        "reads": [
+          "hillInstances",
+          "hillVerts"
+        ],
+        "required": true,
+        "when": "frame",
+        "writes": []
+      },
+      {
+        "id": "drawSky",
+        "kind": "render",
+        "objectId": "skyPass",
+        "reads": [],
+        "required": true,
+        "when": "frame",
+        "writes": []
+      }
+    ]
+  },
+  "modules": null,
+  "revision": null,
+  "question": null,
+  "finish": null
+}

@@ -42,15 +42,11 @@ Thumbs.db
 !/README.md
 !/forge-service/src/main/resources/prompts/*.md
 !/forge-service/src/main/resources/host/h1/rules.md
+!/forge-service/src/test/resources/prompts-test/**/*.md
 /.clinerules/
 /.infisical.json
 
-# Tests, harnesses and their evidence remain local (runtime mocks are application code).
-**/src/test/
-test/
-tests/
-testing/
-/tools/
+# Tests and tools are tracked since 2026-10-31; their evidence (out/, above) and coverage reports are not.
 coverage/
 
 # Local properties, except the public Maven wrapper distribution configuration.
