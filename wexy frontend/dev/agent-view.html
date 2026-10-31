@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Wexy agent view harness</title>
+    <script>
+        // Before any module runs: every way to the GPU is counted, and markup written while the harness is armed. The
+        // harness expects none of them (dev/agent-view.ts, EA-V5).
+        window.__trap__ = { requestAdapter: 0, getContext: 0, innerHTML: 0, armed: false };
+        if (navigator.gpu) {
+            const requestAdapter = navigator.gpu.requestAdapter.bind(navigator.gpu);
+            navigator.gpu.requestAdapter = (...args) => { window.__trap__.requestAdapter++; return requestAdapter(...args); };
+        }
+        const getContext = HTMLCanvasElement.prototype.getContext;
+        HTMLCanvasElement.prototype.getContext = function (...args) { window.__trap__.getContext++; return getContext.apply(this, args); };
+        const inner = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+        Object.defineProperty(Element.prototype, 'innerHTML', {
+            ...inner,
+            set(value) { if (window.__trap__.armed) window.__trap__.innerHTML++; inner.set.call(this, value); },
+        });
+    </script>
+    <style>
+        body { margin: 0; padding: 16px; }
+        .harness { display: grid; grid-template-columns: repeat(auto-fill, 340px); gap: 12px; align-items: start; }
+        .harness > section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+        #world { margin-bottom: 12px; padding: 10px 12px; border: 1px dashed var(--line-3); border-radius: var(--radius-sm); color: var(--text-2); font-size: 12px; }
+        #log { margin: 12px 0 0; font: 11px/1.5 var(--mono); color: var(--text-2); white-space: pre-wrap; }
+    </style>
+</head>
+<body class="dev">
+    <div id="world" data-world="h1 galaxy, version 3">The world on the stage. An agent turn never touches it.</div>
+    <div class="harness" id="panels"></div>
+    <pre id="log"></pre>
+    <script type="module" src="./agent-view.ts"></script>
+</body>
+</html>

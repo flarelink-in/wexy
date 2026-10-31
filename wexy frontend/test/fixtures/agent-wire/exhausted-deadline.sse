@@ -1,0 +1,9 @@
+event:meta
+data:{"turnId":"turn-1","model":"muse-spark-1.3","source":"live","promptVersion":"agent.v2","bundleHash":"4d372b7a7b6116005602e70b7d26a2f434efd557712947d67ff4043a56bb4725","actionSchema":"agent-action.v2","manifestHash":"1de4e9b80b3d604f712cac856a17e58b66a00cc0d7a981cf88e65fd5fd87ba64"}
+
+event:call
+data:{"n":1,"purpose":"first"}
+
+event:done
+data:{"status":"exhausted","reason":"EA_TURN_BUDGET: the turn's 1 s ran out during call 1"}
+

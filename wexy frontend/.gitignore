@@ -46,11 +46,6 @@ Thumbs.db
 /.infisical.json
 /.firebaserc
 
-# Tests, GPU harnesses and local properties are not published.
-/test/
-/tests/
-/testing/
-/dev/
-*.test.*
-*.spec.*
+# Tests and the dev harnesses are tracked since 2026-10-31; their output (dev/out/, above, now in wexy-notes) is not,
+# and local properties are never published.
 *.properties

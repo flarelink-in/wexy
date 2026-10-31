@@ -1,0 +1,39 @@
+event:meta
+data:{"turnId":"turn-1","model":"muse-spark-1.3","source":"live","promptVersion":"agent.v1","bundleHash":"4d372b7a7b6116005602e70b7d26a2f434efd557712947d67ff4043a56bb4725"}
+
+event:call
+data:{"n":1,"purpose":"first"}
+
+event:usage
+data:{"n":1,"generationId":"gen-1","in":30000,"out":2000,"reasoning":800,"cached":null,"costMicroUsd":46000}
+
+event:tools
+data:{"n":1,"round":1,"results":[{"tool":"read_doc","target":"agent/guide","ok":true,"bytes":483,"error":null},{"tool":"inspect_api","target":"core:NullGraph","ok":true,"bytes":5038,"error":null}]}
+
+event:call
+data:{"n":2,"purpose":"after-tools"}
+
+event:usage
+data:{"n":2,"generationId":"gen-2","in":30000,"out":2000,"reasoning":800,"cached":null,"costMicroUsd":46000}
+
+event:check
+data:{"n":2,"ok":false,"findings":[{"level":"fail","code":"buffer-producer","path":"program.resources.instances","message":"instances is read to draw, but nothing fills it: upload it with updateBatchData naming it, or schedule a compute stage (or an upload) that writes it"}]}
+
+event:call
+data:{"n":3,"purpose":"revise"}
+
+event:usage
+data:{"n":3,"generationId":"gen-3","in":30000,"out":2000,"reasoning":800,"cached":null,"costMicroUsd":46000}
+
+event:check
+data:{"n":3,"ok":true,"findings":[]}
+
+event:design
+data:{"design":{"intent":"Blocks under a sepia film.","interpretation":null,"assumptions":[],"visualElements":[{"name":"terrain","description":"cubes"}],"motion":"still","animated":false,"techniques":[{"purpose":"draw the blocks","symbols":["core:NullGraph","materials:LambertMaterial","materials:buildLambertShader"],"docIds":["api/core","api/materials"]},{"purpose":"age the film","symbols":["post:PostChain","post:FilmGrain"],"docIds":["api/post"]}],"resourceFlow":[],"cameraAndTiming":"a slow orbit","controls":[],"successCriteria":["blocks stay readable"],"unresolved":[]}}
+
+event:program
+data:{"program":{"objects":[{"id":"pass","symbol":"core:NullGraph","member":"createPass","purpose":"the scene","args":[{"param":"config","value":"{\"name\":\"scene\",\"isMainScreenPass\":false}"}],"inputs":[]},{"id":"shader","symbol":"materials:buildLambertShader","member":null,"purpose":"lit blocks","args":[{"param":"config","value":"{\"useSkinning\":false}"}],"inputs":[]},{"id":"batch","symbol":"core:NullGraph","member":"createBatch","purpose":"the blocks","args":[{"param":"pass","value":"\"pass\""},{"param":"config","value":"{\"shaderCode\":\"shader\",\"strideFloats\":14,\"maxInstances\":64}"}],"inputs":["pass","shader","instances"]},{"id":"material","symbol":"materials:LambertMaterial","member":null,"purpose":"diffuse","args":[{"param":"options","value":"{}"}],"inputs":["batch"]},{"id":"upload","symbol":"core:NullGraph","member":"updateBatchData","purpose":"place the blocks","args":[{"param":"batch","value":"\"batch\""},{"param":"rawData","value":"\"instances\""},{"param":"instanceCount","value":"64"}],"inputs":["batch","instances"]},{"id":"grain","symbol":"post:FilmGrain","member":null,"purpose":"grain","args":[{"param":"opts","value":"{\"intensity\":0.1}"}],"inputs":[]},{"id":"chain","symbol":"post:PostChain","member":null,"purpose":"the look","args":[{"param":"config","value":"{\"outputToScreen\":true}"}],"inputs":["pass"]},{"id":"setChain","symbol":"post:PostChain","member":"setChain","purpose":"the order","args":[{"param":"effects","value":"[\"grain\"]"}],"inputs":["chain","grain"]}],"resources":[{"id":"instances","kind":"storage_buffer","purpose":"blocks","layout":"14 floats","strideFloats":14,"count":64}],"modules":[],"schedule":[{"id":"draw","kind":"render","objectId":"pass","when":"frame","required":true,"reads":["instances"],"writes":[]},{"id":"look","kind":"post","objectId":"chain","when":"frame","required":true,"reads":[],"writes":[]}],"lifecycle":{"init":[],"fixedStep":[],"frame":[],"resize":[],"dispose":[]},"output":{"color":"chain","colorSpace":"srgb","depth":true},"controls":[]}}
+
+event:done
+data:{"status":"handed-off","reason":null}
+

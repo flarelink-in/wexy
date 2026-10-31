@@ -1,0 +1,15 @@
+[
+    { "waitFor": "Wexy: build 1.*Colliding Galaxies.*live", "timeout": 120 },
+    { "eval": "(async () => { const a = await navigator.gpu.requestAdapter(); return { browser: navigator.userAgent, adapter: { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description } }; })()" },
+    { "shot": "01-encounter.png" },
+    { "wait": 5000 },
+    { "shot": "02-tidal-tails.png" },
+    { "eval": "(() => { const inputs = [...document.querySelectorAll('input[type=range]')]; for (const name of ['Encounter stage', 'Tidal tails', 'Motion speed']) { const el = inputs.find(e => e.getAttribute('aria-label') === name); if (!el) throw new Error('Missing control: ' + name); el.value = '0'; el.dispatchEvent(new Event('input', { bubbles: true })); } return 'Collision controls set to zero'; })()" },
+    { "wait": 500 },
+    { "shot": "03-controls-zero.png" },
+    { "eval": "(() => { for (const label of ['Smooth', 'Balanced', 'Sharp', 'Auto']) { const b = [...document.querySelectorAll('button[role=radio]')].find(e => e.textContent === label); if (!b) throw new Error('Missing preset ' + label); b.click(); } return 'All preview presets selected'; })()" },
+    { "shot": "04-presets.png" },
+    { "eval": "(() => { for (const [name, value] of [['Encounter stage', '3.14'], ['Tidal tails', '1.5']]) { const el = [...document.querySelectorAll('input[type=range]')].find(e => e.getAttribute('aria-label') === name); if (!el) throw new Error('Missing control ' + name); el.value = value; el.dispatchEvent(new Event('input', { bubbles: true })); } return 'Close encounter at maximum tails'; })()" },
+    { "wait": 300 },
+    { "shot": "05-close-encounter.png" }
+]

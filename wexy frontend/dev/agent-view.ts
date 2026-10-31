@@ -1,0 +1,356 @@
+// The agent turn's Developer view in a real DOM, with no GPU (EA2.5; the backend's agent-loop design §15.1, gate B2).
+// AgentPanel runs over the backend's wire recordings (test/fixtures/agent-wire) through the real client, reader and
+// transport; only fetch is fake. The page starts no renderer and loads no runtime; dev/drive-agent-view.mjs runs it in
+// headless Chrome with the GPU off, and reads window.__AV__: each check, what the page's traps counted, the browser.
+//   EA-V1  each recorded ending shows its phase, its words and its numbers; only a hand-off is a success, and it says
+//          checked, not rendered
+//   EA-V2  text with markup in it, from the model or the backend, shows as text: no element made, no script run
+//   EA-V3  the elapsed time runs while a turn runs, and stops when it ends
+//   EA-V4  a superseding turn and a cancel, after which nothing the old turn says or settles to is shown: through the
+//          real reader, and through a client that ignores its cancel
+//   EA-V5  the world on the stage untouched; no WebGPU adapter, canvas context or markup write; no runtime, verifier,
+//          capture, engine or Firebase module loaded
+
+import '../src/styles/base.css';
+import '../src/styles/studio.css';
+import { createAgentClient, ENGINE_BUNDLE_HASH, type AgentClient, type AgentTurnRequest } from '../src/forge-client/agent-client';
+import { readAgentStream, type AgentEvent, type AgentTurnResult } from '../src/forge-client/agent-stream';
+import { createApi } from '../src/forge-client/http';
+import { AgentPanel } from '../src/shell/studio/agent-view';
+import askedWire from '../test/fixtures/agent-wire/asked.sse?raw';
+import contextLimitWire from '../test/fixtures/agent-wire/context-limit.sse?raw';
+import declinedWire from '../test/fixtures/agent-wire/declined.sse?raw';
+import deniedJson from '../test/fixtures/agent-wire/denied.json?raw';
+import errorBudgetWire from '../test/fixtures/agent-wire/error-budget.sse?raw';
+import errorUpstreamWire from '../test/fixtures/agent-wire/error-upstream.sse?raw';
+import exhaustedDeadlineWire from '../test/fixtures/agent-wire/exhausted-deadline.sse?raw';
+import exhaustedRevisionsWire from '../test/fixtures/agent-wire/exhausted-revisions.sse?raw';
+import handedOffWire from '../test/fixtures/agent-wire/handed-off.sse?raw';
+
+const trap = (window as unknown as { __trap__: { requestAdapter: number; getContext: number; innerHTML: number; armed: boolean } }).__trap__;
+const logEl = document.getElementById('log')!;
+const log = (line: string, level: 'log' | 'error' = 'log') => {
+    console[level](`[av] ${line}`);
+    logEl.textContent += `${line}\n`;
+};
+const checks: { name: string; ok: boolean; detail: unknown }[] = [];
+const check = (name: string, ok: boolean, detail: unknown = null) => {
+    checks.push({ name, ok: !!ok, detail });
+    log(`${ok ? 'ok  ' : 'FAIL'} ${name}${ok ? '' : ` — ${JSON.stringify(detail)}`}`, ok ? 'log' : 'error');
+};
+
+const enc = new TextEncoder();
+const lf = (s: string) => s.replace(/\r\n/g, '\n');
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+async function until(condition: () => boolean, ms = 3_000): Promise<void> {
+    for (const t0 = performance.now(); !condition(); await sleep(10)) {
+        if (performance.now() - t0 > ms) throw new Error(`waited ${ms} ms for ${condition}`);
+    }
+}
+
+/**
+ * A recording with the data of its `nth` event called `name` rewritten. The harness's own fixtures, shaped by hand:
+ * `any` here is the edit's convenience, never a boundary.
+ */
+function edit(text: string, name: string, nth: number, change: (data: any) => unknown): string {
+    let seen = -1;
+    return lf(text).replace(/^event:(.*)\ndata:(.*)$/gm, (whole, event: string, data: string) =>
+        (event !== name || ++seen !== nth ? whole : `event:${event}\ndata:${JSON.stringify(change(JSON.parse(data)))}`));
+}
+
+interface Stream { response: Response; release(): void; cancelled(): boolean }
+
+/** A recording as a server would send it: its events `gapMs` apart, and only the first `hold` until release(). */
+function stream(text: string, gapMs = 0, hold: number | null = null): Stream {
+    const events = lf(text).split(/(?<=\n\n)/).filter(Boolean);
+    let cancelled = false;
+    let released = hold === null;
+    let wake: () => void = () => {};
+    let next = 0;
+    const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+            void (async () => {
+                while (next < events.length && !cancelled) {
+                    if (!released && next >= hold!) {
+                        await new Promise<void>(r => { wake = r; });
+                        continue;
+                    }
+                    if (gapMs) await sleep(gapMs);
+                    if (cancelled) return;
+                    controller.enqueue(enc.encode(events[next++]));
+                }
+                if (!cancelled) controller.close();
+            })();
+        },
+        cancel() {
+            cancelled = true;
+            wake();
+        },
+    });
+    return {
+        response: new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
+        release() { released = true; wake(); },
+        cancelled: () => cancelled,
+    };
+}
+
+const CONFIG = { apiOrigin: 'http://127.0.0.1:9', firebase: null, appCheckSiteKey: null, dev: true };
+const IDENTITY = { authorization: async () => 'Bearer dev.anonymous.harness', appCheck: async () => null };
+
+/** The real transport and client, over a fetch that answers each request with the next of `answers`. */
+function liveClient(...answers: (() => Response)[]): AgentClient {
+    const fetchImpl = (async () => {
+        const next = answers.shift();
+        if (!next) throw new Error('the harness has no answer left');
+        return next();
+    }) as unknown as typeof fetch;
+    return createAgentClient(createApi(CONFIG, IDENTITY, fetchImpl));
+}
+
+/** A client deaf to its cancel: it says every event of `script`, `gapMs` apart, then settles to its result regardless. */
+function deaf(script: { events: AgentEvent[]; result: AgentTurnResult }, gapMs: number): AgentClient {
+    return {
+        async turn(_req, onEvent) {
+            for (const e of script.events) {
+                await sleep(gapMs);
+                onEvent(e);
+            }
+            await sleep(gapMs);
+            return script.result;
+        },
+    };
+}
+
+async function recorded(text: string): Promise<{ events: AgentEvent[]; result: AgentTurnResult }> {
+    const events: AgentEvent[] = [];
+    const result = await readAgentStream(new Response(lf(text)), e => events.push(e), { bundleHash: ENGINE_BUNDLE_HASH });
+    return { events, result };
+}
+
+const REQUEST: AgentTurnRequest = { prompt: 'make minecraft 1870s film style', style: 'cinematic', seconds: 12 };
+const panels = document.getElementById('panels')!;
+
+function panel(client: AgentClient | null, label: string): AgentPanel {
+    const p = new AgentPanel(client, () => REQUEST);
+    p.el.dataset.case = label;
+    panels.append(p.el);
+    return p;
+}
+
+/** What a panel shows, read from its DOM as a person would see it. */
+function look(p: AgentPanel) {
+    const el = (selector: string) => p.el.querySelector<HTMLElement>(selector);
+    const text = (selector: string) => {
+        const e = el(selector);
+        return e && !e.hidden ? e.textContent : null;
+    };
+    const part = (selector: string) => (el(selector)?.hidden === false ? el(`${selector} .agent-tag`)?.textContent ?? '' : null);
+    return {
+        phase: p.el.dataset.phase,
+        success: p.el.dataset.success,
+        status: text('.agent-phase'),
+        note: text('.agent-note'),
+        reason: text('.agent-reason'),
+        question: text('.agent-question'),
+        calls: [...p.el.querySelectorAll('.agent-call')].map(c => c.textContent ?? ''),
+        findings: [...p.el.querySelectorAll('.agent-finding')].map(f => f.textContent ?? ''),
+        design: part('.agent-design'),
+        program: part('.agent-program'),
+        /** The program as shown, folded or not: the nodes, each config parsed from the JSON text it came as (EA3.6). */
+        programText: el('.agent-program pre')?.textContent ?? null,
+        cost: text('.agent-cost'),
+        elapsed: text('.agent-elapsed'),
+        meta: text('.agent-meta'),
+    };
+}
+
+const cancelButton = (p: AgentPanel) => [...p.el.querySelectorAll('button')].find(b => b.textContent === 'Cancel')!;
+const ms = (shown: string | null) => (shown === null ? NaN : shown.endsWith(' ms') ? parseFloat(shown) : parseFloat(shown) * 1000);
+
+async function ending(text: string, label: string): Promise<ReturnType<typeof look>> {
+    const p = panel(liveClient(() => stream(text).response), label);
+    await p.run();
+    return look(p);
+}
+
+async function endings(): Promise<void> {
+    let v = await ending(handedOffWire, 'handed-off');
+    check('EA-V1 handed-off: the one success, said as checked, not rendered, with its design and program', v.phase === 'handed-off' && v.success === 'true'
+        && v.status === 'Turn 1: Handed off: checked, not rendered' && /Nothing was built or rendered/.test(v.note ?? '')
+        && v.design === 'checked, not rendered' && v.program === 'checked, not rendered' && v.calls.length === 3
+        && v.cost === '3 model calls · $0.1380 reported' && /turn-1/.test(v.meta ?? ''), v);
+    const shown = v.programText ?? '';
+    check('EA-V1 handed-off: the program is its adapter nodes, each config shown parsed, under the contract and adapters it was checked by',
+        /"adapterId": "ng\.buffer\.storage"/.test(shown) && /"layout": "instance14"/.test(shown) && /"effect": "Tonemap"/.test(shown)
+        && !shown.includes('\\"layout\\"') && /agent-action\.v2, as this build/.test(v.meta ?? '') && /1de4e9b80b3d…, as this build/.test(v.meta ?? ''),
+        { program: shown.slice(0, 600), meta: v.meta });
+
+    v = await ending(askedWire, 'asked');
+    check('EA-V1 asked: not a success; its question shown as written, with no promise of an answer', v.phase === 'asked' && v.success === 'false'
+        && v.question === 'Blocks of stone, or of wood — and does the river run?' && /: no world$/.test(v.status ?? '')
+        && /no way to answer it yet/.test(v.note ?? '') && v.design === null && v.program === null, v);
+
+    v = await ending(declinedWire, 'declined');
+    check('EA-V1 declined: not a success; the model\'s reason shown', v.phase === 'declined' && v.success === 'false'
+        && v.reason === 'That names no place or thing to show — I can\'t build a world from it.', v);
+
+    v = await ending(exhaustedRevisionsWire, 'exhausted-revisions');
+    check('EA-V1 exhausted by revisions: not a success; the budget\'s reason once, three failing checks and the finding', v.phase === 'exhausted'
+        && v.success === 'false' && v.reason === 'EA_TURN_BUDGET: the check still fails after 2 revisions'
+        && v.calls.length === 3 && v.calls.every(c => c.includes('Check failed: 1 failing'))
+        && v.findings.length === 3 && v.findings.every(f => f.startsWith('fail buffer-producer /program/nodes/0: blocks is read to draw')), v);
+
+    v = await ending(exhaustedDeadlineWire, 'exhausted-deadline');
+    check('EA-V1 exhausted by the deadline: the call\'s cost is unknown, not zero', v.phase === 'exhausted' && v.success === 'false'
+        && v.calls[0].includes('no usage reported: cost unknown') && v.cost === '1 model call · $0.0000 reported · 1 call reported no usage: cost unknown', v);
+
+    v = await ending(handedOffWire, 'handed-off, its revision');
+    check('EA-V1 a hand-off after a revision keeps the failed check\'s finding in its call', v.findings.length === 1
+        && v.calls[1].includes('Check failed: 1 failing') && v.calls[1].includes('fail buffer-producer') && v.calls[2].includes('Check passed'), v);
+
+    v = await ending(contextLimitWire, 'context-limit');
+    check('EA-V1 past the reading rounds: round 3 says it read nothing, and the turn still hands off', v.phase === 'handed-off'
+        && v.calls.length === 4 && v.calls[2].includes('EA_CONTEXT_LIMIT: no reads left in this turn'), v);
+
+    v = await ending(errorBudgetWire, 'error-budget');
+    check('EA-V1 a later charge refused: failed, the code and where, the first call\'s reservation held', v.phase === 'failed' && v.success === 'false'
+        && v.reason === 'budget in the stream: Live creation has reached its spending limit for now.'
+        && v.calls[0].includes('? in / ? out · $0.1526 held, no usage came'), v);
+
+    v = await ending(errorUpstreamWire, 'error-upstream');
+    check('EA-V1 answers off the schema twice: failed, as upstream', v.phase === 'failed'
+        && (v.reason ?? '').startsWith('upstream in the stream: the model\'s answer missed the action schema after a repair'), v);
+
+    const envelope = JSON.parse(deniedJson) as { status: number; body: unknown };
+    const p = panel(liveClient(() => new Response(JSON.stringify(envelope.body), { status: envelope.status, headers: { 'Content-Type': 'application/json' } })), 'denied');
+    await p.run();
+    v = look(p);
+    check('EA-V1 a refused first charge: failed before any stream, with no call and no meta', v.phase === 'failed'
+        && v.reason === 'budget HTTP 503: Live creation has reached its spending limit for now.' && v.calls.length === 0 && v.meta === null, v);
+
+    const offline = panel(null, 'no backend');
+    v = look(offline);
+    check('EA-V1 a build with no gateway says so, and cannot run a turn', v.status === 'No backend' && /VITE_API_ORIGIN/.test(v.note ?? '')
+        && [...offline.el.querySelectorAll('button')].every(b => b.disabled), v);
+}
+
+async function markup(): Promise<void> {
+    const script = '<img src=x onerror="window.__xss=1"><b>bold</b> & <script>window.__xss=2</scr' + 'ipt>';
+    const askedPanel = panel(liveClient(() => stream(edit(askedWire, 'question', 0, () => ({ text: script }))).response), 'markup: question');
+    await askedPanel.run();
+    const declinedPanel = panel(liveClient(() => stream(edit(declinedWire, 'done', 0, d => ({ ...d, reason: '<iframe src="javascript:window.__xss=3"></iframe> no' }))).response), 'markup: reason');
+    await declinedPanel.run();
+    let hand = edit(handedOffWire, 'design', 0, d => ({ design: { ...d.design, intent: '<svg onload="window.__xss=4"></svg> blocks' } }));
+    hand = edit(hand, 'tools', 0, t => ({ ...t, results: [{ ...t.results[0], target: '<img src=y onerror="window.__xss=5">' }, t.results[1]] }));
+    hand = edit(hand, 'check', 0, c => ({ ...c, findings: [{ ...c.findings[0], message: '<a href="javascript:window.__xss=6">fix</a>' }] }));
+    hand = edit(hand, 'meta', 0, m => ({ ...m, model: '<b>muse</b>' }));
+    const handPanel = panel(liveClient(() => stream(hand).response), 'markup: design, read, finding, model');
+    await handPanel.run();
+    await sleep(300); // time for any onerror or onload to have run, had markup been made
+    const made = [askedPanel, declinedPanel, handPanel].flatMap(p => [...p.el.querySelectorAll('img, script, iframe, svg, a')]);
+    const bold = [askedPanel, declinedPanel, handPanel].flatMap(p => [...p.el.querySelectorAll('b')]).filter(b => !/^Call \d+$/.test(b.textContent ?? ''));
+    const xss = (window as unknown as { __xss?: unknown }).__xss;
+    const v = { asked: look(askedPanel), declined: look(declinedPanel), hand: look(handPanel) };
+    check('EA-V2 markup from the model or the backend is text: no element made, no script run', made.length === 0 && bold.length === 0 && xss === undefined
+        && v.asked.question === script && v.declined.reason === '<iframe src="javascript:window.__xss=3"></iframe> no'
+        // The design is shown as JSON, so the string appears JSON-encoded, its quotes escaped.
+        && (handPanel.el.querySelector('.agent-design pre')?.textContent ?? '').includes(JSON.stringify('<svg onload="window.__xss=4"></svg> blocks'))
+        && v.hand.calls[0].includes('<img src=y onerror="window.__xss=5">') && v.hand.findings[0].includes('<a href="javascript:window.__xss=6">fix</a>')
+        && (v.hand.meta ?? '').includes('<b>muse</b>'), { made: made.length, bold: bold.length, xss, v });
+}
+
+async function elapsed(): Promise<void> {
+    const p = panel(liveClient(() => stream(askedWire, 200).response), 'elapsed');
+    const running = p.run();
+    await sleep(150);
+    const a = look(p).elapsed;
+    await sleep(250);
+    const b = look(p).elapsed;
+    await running;
+    const c = look(p).elapsed;
+    await sleep(300);
+    const d = look(p).elapsed;
+    check('EA-V3 the elapsed time runs while the turn does, and stops when it ends', ms(a) > 0 && ms(b) > ms(a) && c === d && ms(c) >= 900 && look(p).phase === 'asked', { a, b, c, d });
+}
+
+async function superseding(): Promise<void> {
+    // Through the real reader: the old turn's server keeps talking after the new turn began.
+    const held = stream(handedOffWire, 0, 2);
+    const p = panel(liveClient(() => held.response, () => stream(askedWire, 20).response), 'superseded (reader)');
+    void p.run();
+    await until(() => look(p).calls.length === 1);
+    const second = p.run();
+    held.release();
+    await second;
+    await sleep(200);
+    let v = look(p);
+    check('EA-V4 a superseding turn, through the reader: only the new turn shows, and the old one\'s body was cancelled', v.phase === 'asked'
+        && (v.status ?? '').startsWith('Turn 2: ') && v.design === null && v.program === null && v.calls.length === 1 && held.cancelled(), v);
+
+    // Through a client deaf to its cancel: the old turn says all it has, then settles as handed off, after the new one ended.
+    const hand = await recorded(handedOffWire);
+    const asked = await recorded(askedWire);
+    const turns = [deaf(hand, 40), deaf(asked, 5)];
+    let i = 0;
+    const deafPanel = panel({ turn: (req, onEvent, signal) => turns[i++].turn(req, onEvent, signal) }, 'superseded (deaf client)');
+    void deafPanel.run();
+    await until(() => look(deafPanel).calls.length >= 1);
+    await deafPanel.run();
+    await sleep(800);
+    v = look(deafPanel);
+    check('EA-V4 a superseding turn, over a client deaf to its cancel: the old turn\'s late events and hand-off never show', v.phase === 'asked'
+        && (v.status ?? '').startsWith('Turn 2: ') && v.design === null && v.calls.length === 1, v);
+}
+
+async function cancelling(): Promise<void> {
+    const held = stream(handedOffWire, 0, 3);
+    const p = panel(liveClient(() => held.response), 'cancelled (reader)');
+    const running = p.run();
+    await until(() => look(p).calls.length === 1 && (look(p).note ?? '').includes('answered'));
+    cancelButton(p).click();
+    const atCancel = look(p);
+    held.release();
+    await running;
+    await sleep(300);
+    let after = look(p);
+    check('EA-V4 a cancel shows at once, its time stops, and nothing the turn sends after it shows', atCancel.phase === 'cancelled' && atCancel.success === 'false'
+        && JSON.stringify(after) === JSON.stringify(atCancel) && held.cancelled() && cancelButton(p).disabled, { atCancel, after });
+
+    const hand = await recorded(handedOffWire);
+    const deafPanel = panel(deaf(hand, 30), 'cancelled (deaf client)');
+    void deafPanel.run();
+    await until(() => look(deafPanel).calls.length >= 1);
+    cancelButton(deafPanel).click();
+    const shown = look(deafPanel);
+    await sleep(700);
+    after = look(deafPanel);
+    check('EA-V4 a cancel over a client deaf to it: the events and the hand-off it sends after are never shown', shown.phase === 'cancelled'
+        && JSON.stringify(after) === JSON.stringify(shown) && after.design === null, { shown, after });
+}
+
+async function run(): Promise<void> {
+    const world = document.getElementById('world')!.outerHTML;
+    trap.armed = true;
+    await endings();
+    await markup();
+    await elapsed();
+    await superseding();
+    await cancelling();
+    trap.armed = false;
+    check('EA-V5 the world on the stage is untouched', document.getElementById('world')!.outerHTML === world);
+    check('EA-V5 no WebGPU adapter, no canvas context, and no markup written while the turns ran', trap.requestAdapter === 0 && trap.getContext === 0 && trap.innerHTML === 0, { ...trap });
+    const loaded = performance.getEntriesByType('resource').map(e => new URL(e.name).pathname);
+    const forbidden = loaded.filter(n => /\/src\/(runtime|verify|capture)\//.test(n) || /null-graph|mediabunny|firebase/.test(n));
+    check('EA-V5 no runtime, verifier, capture, engine or Firebase module was loaded', forbidden.length === 0 && loaded.some(n => n.endsWith('/src/shell/studio/agent-view.ts')),
+        { forbidden, loaded: loaded.length });
+}
+
+const out = window as unknown as { __AV__?: unknown };
+run().then(() => {
+    out.__AV__ = { ok: checks.every(c => c.ok), checks, trap: { ...trap }, browser: navigator.userAgent, webgpuExposed: 'gpu' in navigator };
+    log(`done: ${checks.filter(c => c.ok).length}/${checks.length}`);
+}, (e: unknown) => {
+    trap.armed = false;
+    out.__AV__ = { ok: false, checks, error: String((e as Error)?.stack ?? e), browser: navigator.userAgent };
+    log(`failed: ${String(e)}`, 'error');
+});
