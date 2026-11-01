@@ -40,6 +40,19 @@ export interface Frame {
     post: string | null;
 }
 
+/**
+ * Where an `upload` buffer's first content comes from (Q80, decided). Tier 1 has none, and the manifest gates `upload`
+ * at the node check; Tier 2 lifts the gate and supplies its assets here, with no change to the buffer's adapter code.
+ * X names the content by its source, id and hash, never by its bytes.
+ */
+export interface ContentSource {
+    /** The seed for a buffer node, of `bytes` bytes for each of its allocations; or null when this source has none. */
+    contentFor(node: string, bytes: number): { source: string; id: string; sha256: string } | null;
+}
+
+/** Tier 1's content source: nothing. */
+export const NO_CONTENT: ContentSource = Object.freeze({ contentFor: () => null });
+
 export interface Context {
     node: CheckedNode;
     /** The node's JSON pointer in the program. */
@@ -47,6 +60,7 @@ export interface Context {
     inputs: Wired[];
     frame: Frame;
     policy: StaticPolicy;
+    content: ContentSource;
 }
 
 export interface Contribution {
@@ -126,11 +140,16 @@ const readBuffer = (b: Produced & { kind: 'storage_buffer' }) => read(b.resource
 // ---------------------------------------------------------------------------------------------------------------
 // ng.buffer.storage: GPUDevice.createBuffer (no engine export makes a storage buffer), one or a ping-pong pair.
 
-function storageBuffer(ctx: Context): Contribution {
+function storageBuffer(ctx: Context): Contribution | Refusal {
     const c = ctx.node.config as { elements: number; layout: BufferLayout; strideFloats: number; pingPong: boolean; init: 'zero' | 'upload' };
     const id = ctx.node.id;
     const bytes = product(c.elements, c.strideFloats, 4);
     const allocations = c.pingPong ? 2 : 1;
+    // Q80: `upload` reaches here only once a gate is lifted, and refuses still without content. Tier 1 has neither.
+    const seed = c.init === 'upload' ? ctx.content.contentFor(id, bytes) : null;
+    if (c.init === 'upload' && !seed) {
+        return refuse('EA_CAPABILITY_UNSUPPORTED', `${ctx.path}/config/init`, `${id}: no content source holds a seed for this buffer, so an upload has nothing to write; seed it with an init-phase compute stage`);
+    }
     const buffer = resource(id, 'buffer', {
         kind: 'buffer', owner: 'host', bytes, allocations, pingPong: c.pingPong, usage: ['storage', 'copy_src', 'copy_dst'],
         layout: c.layout, strideFloats: c.strideFloats, elements: c.elements, content: c.init === 'upload' ? 'upload' : 'zero', releasedBy: xid(id, 'destroy'),
@@ -138,10 +157,10 @@ function storageBuffer(ctx: Context): Contribution {
     const out = empty();
     out.resources.push(buffer);
     out.operations.push(operation(id, 'create', 'init', 'create', 'device.createBuffer', { bytes, allocations, usage: buffer.usage }, [write(buffer.id)]));
-    if (c.init === 'upload') {
-        // The seed's content is not EA3's: EA4 says what fills it. Both halves of a pair get it, so a read is safe after
-        // zero, one or two fixed steps (§6).
-        out.operations.push(operation(id, 'upload', 'init', 'upload', 'queue.writeBuffer', { bytes, allocations, data: 'seed' }, [write(buffer.id)],
+    if (seed) {
+        // The seed is the content source's, named, never copied into X. Both halves of a pair get it, so a read is safe
+        // after zero, one or two fixed steps (§6).
+        out.operations.push(operation(id, 'upload', 'init', 'upload', 'queue.writeBuffer', { bytes, allocations, data: seed }, [write(buffer.id)],
             { bytes: product(bytes, allocations) }));
         out.sources[xid(id, 'upload')] = [`${ctx.path}/config/init`];
     }
@@ -183,6 +202,8 @@ function computeStage(ctx: Context): Contribution | Refusal {
         if (b.pingPong) accesses.push(write(b.resource, 'unknown', 'next'));
         else accesses.push({ resource: b.resource, mode: reads.some(r => r.nodeId === w.nodeId) ? 'readwrite' : 'write', version: null, coverage: 'unknown' });
     }
+    // Q81: a fixed-step stage reads the host's clock, written before each step; so the schedule writes it first.
+    if (c.phase === 'fixedStep') accesses.push(read(xid(HOST, 'sim')));
     const out = empty();
     out.operations.push(operation(id, 'create', 'init', 'create', 'engine.createComputeStage',
         { module: c.module, entry: c.entry, engineEntry: 'cs_main', workgroupSize: c.workgroupSize, invocations: c.invocations, dispatch }, []));
@@ -589,13 +610,20 @@ function postChain(ctx: Context): Contribution {
 // The host's part: what every world has and no node asked for. The camera uniform (432 bytes, WebGPUContext.init)
 // and the depth target (depth24plus at the canvas size, setupDepthTexture) are the engine's own, counted but never
 // released by the world; the screen is the canvas's. The main pass is created after the post chain (it takes the
-// chain's scene attachments) and before every batch (createBatch takes the pass).
+// chain's scene attachments) and before every batch (createBatch takes the pass). A world with a fixed-step stage has
+// the host's per-step clock too (Q81): its own buffer, made and released with the world.
 
 export const CAMERA_BYTES = 432;
 /** At most four 1×1 rgba8unorm solid textures (TextureManager.getSolidTexture) the stock materials bind by default. */
 export const FALLBACK_BYTES = 16;
+/**
+ * The per-step clock, ea-abi.v2's `EaSim {dt, time, step, _pad}` (Q81 (b)): h1's `Sim` layout in four 32-bit words
+ * (contract/wgsl.ts, SIM_BYTES; EA-I5 pins the two equal), without its particle count, which a stage here takes from
+ * its buffers' constants.
+ */
+export const SIM_BYTES = 16;
 
-export function hostPart(frame: Frame, policy: StaticPolicy, stockMaterials: boolean): Contribution {
+export function hostPart(frame: Frame, policy: StaticPolicy, stockMaterials: boolean, fixedStep: boolean): Contribution {
     const { width, height } = policy.viewport;
     const out = empty();
     const camera = resource(HOST, 'camera', { kind: 'buffer', owner: 'shared', bytes: CAMERA_BYTES, usage: ['uniform', 'copy_dst'], content: 'upload' });
@@ -611,6 +639,19 @@ export function hostPart(frame: Frame, policy: StaticPolicy, stockMaterials: boo
     out.operations.push(operation(HOST, 'updateCamera', 'frame', 'upload', 'engine.updateCamera', { bytes: CAMERA_BYTES }, [write(camera.id)], { bytes: CAMERA_BYTES }));
     out.operations.push(operation(HOST, 'clear', 'frame', 'clear', 'pass.clear', { color: [0, 0, 0, 1], depth: 1 }, [write(frame.color), write(frame.depth)]));
     out.operations.push(operation(HOST, 'resize', 'resize', 'resize', 'engine.resize', {}, [write(depth.id)]));
+    if (fixedStep) {
+        // h1's pattern (SceneRuntime.step): written whole before every fixed step, each step its own submit, so each step
+        // reads its own time and number. dt is the host's, snapped as h1 snaps it, so a film holds whole steps.
+        const sim = resource(HOST, 'sim', {
+            kind: 'buffer', owner: 'host', bytes: SIM_BYTES, usage: ['uniform', 'copy_dst'], content: 'upload',
+            createdBy: xid(HOST, 'createSim'), releasedBy: xid(HOST, 'destroySim'),
+        });
+        out.resources.push(sim);
+        out.operations.push(operation(HOST, 'createSim', 'init', 'create', 'device.createBuffer', { bytes: SIM_BYTES, allocations: 1, usage: sim.usage }, [write(sim.id)]));
+        out.operations.push(operation(HOST, 'updateSim', 'fixedStep', 'upload', 'queue.writeBuffer', { bytes: SIM_BYTES, fields: ['dt', 'time', 'step'] },
+            [write(sim.id)], { bytes: SIM_BYTES }));
+        out.operations.push(operation(HOST, 'destroySim', 'dispose', 'destroy', 'buffer.destroy', {}, []));
+    }
     // The engine lists every pass it makes (createPass), and clearPasses() is the one call that forgets them, all of them
     // at once. That is safe only while every world renders an explicit sequence, which never reads the list; h1 does the
     // same in SceneRuntime.destroy. A partial init runs it too.

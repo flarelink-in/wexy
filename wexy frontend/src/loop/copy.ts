@@ -64,6 +64,16 @@ export const COPY = {
     } satisfies Record<FailureKind, string>,
     /** A rate limit with a known wait. */
     rateWithMinutes: (minutes: number) => `You've made a lot of worlds; try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+    /** The candidate loop's ends (candidate-loop-design.md §11): what happened, and that the current world is kept. */
+    candidate: {
+        moduleFailed: 'One part of this world could not be written correctly; your current world is unchanged.',
+        setup: 'This version has a setup problem; the current world is unchanged.',
+        stale: 'The world changed while that fix was being prepared.',
+        tooLarge: 'This attempt grew too large; your current world is unchanged.',
+        stream: 'We couldn\'t finish writing this version; your current world is unchanged.',
+        budget: 'We reached this attempt\'s limit; your last checked world is still available.',
+        refused: 'Something went wrong preparing this world.',
+    },
     /** An edit that failed after repairs keeps the world (design guidelines §4). */
     editFailed: 'That change didn\'t work on your device. Your world is as it was.',
     deviceLost: 'Your graphics card reset while running this change. We went back to the last version that worked.',

@@ -8,17 +8,35 @@
 import bundleText from '../engine/bundle.json?raw';
 import { deepFreeze, type DeepReadonly } from '../engine/frozen';
 import { canonicalHash, sha256Hex } from './canonical';
-import { HOST, IMPLEMENTATIONS, SizeOverflow, hostPart, xid, type Contribution, type Frame, type Produced, type Refusal, type Wired } from './contribute';
+import {
+    HOST, IMPLEMENTATIONS, NO_CONTENT, SizeOverflow, hostPart, xid, type ContentSource, type Contribution, type Frame, type Produced, type Refusal, type Wired,
+} from './contribute';
 import {
     PHASES, POLICY_V1, type ExecutionGraph, type OperationKind, type Phase, type StaticPolicy, type XEstimate, type XModuleRequest, type XOperation,
     type XOutput, type XResource, type XSource,
 } from './graph';
-import { ADAPTER_MANIFEST_TEXT, ADAPTERS, SHIPPED_SUPPORT, checkNodes, pointer, type CheckedNode, type ResolveCode, type ResolveDiagnostic } from './index';
+import {
+    ADAPTER_MANIFEST_TEXT, ADAPTERS, SHIPPED_GATES, SHIPPED_SUPPORT, checkNodes, pointer, type CheckedNode, type ResolveCode, type ResolveDiagnostic, type VariantGate,
+} from './index';
 
 /** X's own contract version. */
 export const GRAPH_VERSION = 'ea-x.v1';
-/** Bump whenever this file or contribute.ts changes what X says, even if the descriptors' bytes do not (§6). */
-export const RESOLVER_VERSION = 'ea3.2-resolver.1';
+/**
+ * Bump whenever this file or contribute.ts changes what X says, even if the descriptors' bytes do not (§6). 2: Q80's
+ * gates in X's identity and an upload's seed named by its content source; Q81's per-step clock, its buffer and its
+ * write before each fixed step, counted in the frame's uploads.
+ */
+export const RESOLVER_VERSION = 'ea3.2-resolver.2';
+
+/**
+ * What a world may be seeded from, and which of the manifest's variant gates hold (Q80). Tier 1 is every gate and no
+ * content source; a test that lifts a gate and supplies content stands in for Tier 2, and X's identity says so.
+ */
+export interface Sources {
+    gates: readonly DeepReadonly<VariantGate>[];
+    content: ContentSource;
+}
+export const TIER_1: Sources = Object.freeze({ gates: SHIPPED_GATES, content: NO_CONTENT });
 
 const BUNDLE_HASH = (JSON.parse(bundleText) as { bundleHash: string }).bundleHash;
 
@@ -34,21 +52,35 @@ const STAGE: Readonly<Record<OperationKind, number>> = { create: 0, upload: 1, c
 const programOf = (nodes: CheckedNode[]) => nodes.map(n => ({ id: n.id, adapterId: n.adapter.id, adapterVersion: n.adapter.version, config: n.config, inputs: n.inputs }));
 
 /**
- * The program's nodes resolved to X under P and H, or every refusal with its path. `support` is injected so tests can
- * use a labelled synthetic H; X's identity hashes whichever it was resolved under.
+ * W's programHash, whether or not W resolves (candidate-loop-design.md §5, P10: a subject names its program before any X
+ * exists). When the nodes pass their check, it is the hash X's identity carries, of the nodes with their configs parsed;
+ * when the check refuses them, it is the hash of W as it came, which no X can carry.
  */
-export async function resolveProgram(input: unknown, policy: StaticPolicy = POLICY_V1, support: ReadonlyMap<string, string> = SHIPPED_SUPPORT): Promise<Resolved> {
-    const checked = checkNodes(input, policy, support);
+export async function programHash(input: unknown, policy: StaticPolicy = POLICY_V1, support: ReadonlyMap<string, string> = SHIPPED_SUPPORT,
+    sources: Sources = TIER_1): Promise<string> {
+    const checked = checkNodes(input, policy, support, sources.gates);
+    return canonicalHash(checked.ok ? programOf(checked.nodes) : input);
+}
+
+/**
+ * The program's nodes resolved to X under P and H, or every refusal with its path. `support` is injected so tests can
+ * use a labelled synthetic H, and `sources` so they can stand in for Tier 2 (Q80); X's identity hashes whichever it was
+ * resolved under.
+ */
+export async function resolveProgram(input: unknown, policy: StaticPolicy = POLICY_V1, support: ReadonlyMap<string, string> = SHIPPED_SUPPORT,
+    sources: Sources = TIER_1): Promise<Resolved> {
+    const checked = checkNodes(input, policy, support, sources.gates);
     if (!checked.ok) return checked;
-    const built = build(checked.nodes, policy, support);
+    const built = build(checked.nodes, policy, support, sources.content);
     if (!built.ok) return built;
-    const [manifestHash, programHash, policyHash, supportStatusHash] = await Promise.all([
+    const [manifestHash, programHash, policyHash, supportStatusHash, gatesHash] = await Promise.all([
         sha256Hex(ADAPTER_MANIFEST_TEXT), canonicalHash(programOf(checked.nodes)), canonicalHash(policy), canonicalHash(Object.fromEntries(support)),
+        canonicalHash(sources.gates),
     ]);
     const body: Omit<ExecutionGraph, 'hash'> = {
         identity: {
             graph: GRAPH_VERSION, resolver: RESOLVER_VERSION, engine: ADAPTERS.engine, bundleHash: BUNDLE_HASH, supportStatusHash,
-            manifest: ADAPTERS.version, manifestHash, programHash, policyHash,
+            manifest: ADAPTERS.version, manifestHash, gatesHash, programHash, policyHash,
         },
         executable: false,
         ...built.draft,
@@ -59,7 +91,7 @@ export async function resolveProgram(input: unknown, policy: StaticPolicy = POLI
 type Draft = Omit<ExecutionGraph, 'identity' | 'executable' | 'hash'>;
 type Built = { ok: true; draft: Draft } | { ok: false; diagnostics: ResolveDiagnostic[] };
 
-function build(nodes: CheckedNode[], policy: StaticPolicy, support: ReadonlyMap<string, string>): Built {
+function build(nodes: CheckedNode[], policy: StaticPolicy, support: ReadonlyMap<string, string>, content: ContentSource): Built {
     const diagnostics: ResolveDiagnostic[] = [];
     const fail = (code: ResolveCode, path: string, nodeId: string | null, message: string) => { diagnostics.push({ code, path, nodeId, message }); };
     const index = new Map(nodes.map((n, i) => [n.id, i]));
@@ -104,7 +136,7 @@ function build(nodes: CheckedNode[], policy: StaticPolicy, support: ReadonlyMap<
         let part: Contribution | Refusal;
         try {
             part = impl
-                ? impl({ node, path: pathOf(node.id), inputs, frame, policy })
+                ? impl({ node, path: pathOf(node.id), inputs, frame, policy, content })
                 : { refused: true, code: 'EA_CAPABILITY_UNSUPPORTED', path: `${pathOf(node.id)}/adapterId`, message: `${node.adapter.id} has a descriptor but no implementation` };
         } catch (e) {
             if (!(e instanceof SizeOverflow)) throw e;
@@ -116,7 +148,8 @@ function build(nodes: CheckedNode[], policy: StaticPolicy, support: ReadonlyMap<
     }
     if (diagnostics.length) return { ok: false, diagnostics };
 
-    const all = [hostPart(frame, policy, nodes.some(n => n.adapter.id === 'ng.material.stock')), ...parts];
+    const fixedStep = nodes.some(n => n.adapter.id === 'ng.compute.stage' && n.config.phase === 'fixedStep');
+    const all = [hostPart(frame, policy, nodes.some(n => n.adapter.id === 'ng.material.stock'), fixedStep), ...parts];
     const resources = all.flatMap(p => p.resources);
     const objects = all.flatMap(p => p.objects);
     const operations = all.flatMap(p => p.operations);
@@ -372,7 +405,7 @@ function estimateOf(resources: XResource[], operations: XOperation[], policy: St
         vertexInvocationsPerFrame: total([...each('frame', 'backdrop'), ...each('frame', 'draw')].map(o => o.work.vertices! * o.work.instances!)),
         invocationsInit: total(each('init', 'compute').map(o => o.work.invocations!)),
         copyBytesPerFrame: total(each('frame', 'copy').map(o => o.work.bytes!)),
-        uploadBytesPerFrame: total(each('frame', 'upload').map(o => o.work.bytes!)),
+        uploadBytesPerFrame: total([...each('frame', 'upload').map(o => o.work.bytes!), ...each('fixedStep', 'upload').map(o => o.work.bytes! * steps)]),
         uploadBytesInit: total(operations.filter(o => o.phase === 'init' && o.work.bytes !== null).map(o => o.work.bytes!)),
         operations: operations.length,
     };

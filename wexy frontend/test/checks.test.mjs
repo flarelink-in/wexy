@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import { checkGraph, MAX_FINDINGS } from '../src/contract/adapters/checks.ts';
 import { POLICY_V1 } from '../src/contract/adapters/graph.ts';
 import { ADAPTERS } from '../src/contract/adapters/index.ts';
-import { resolveProgram } from '../src/contract/adapters/resolve.ts';
+import { TIER_1, resolveProgram } from '../src/contract/adapters/resolve.ts';
 
 const node = (id, adapterId, config, inputs = []) => ({ id, adapterId, adapterVersion: 1, config: JSON.stringify(config), inputs });
 const from = (port, nodeId, output) => ({ port, nodeId, output });
@@ -33,8 +33,14 @@ function world() {
     ];
 }
 
-async function resolved(program, policy = POLICY_V1) {
-    const r = await resolveProgram(program, policy);
+/**
+ * A labelled synthetic Tier 2 (Q80): `upload`'s gate lifted and a test content source, so the checks on an uploaded
+ * buffer's content stay pinned for Tier 2. The recorded and paper programs (EA-R) are Tier 1's, and say so.
+ */
+const TIER_2 = Object.freeze({ gates: [], content: { contentFor: node => ({ source: 'test', id: `${node}.seed`, sha256: '0'.repeat(64) }) } });
+
+async function resolved(program, policy = POLICY_V1, sources = TIER_2) {
+    const r = await resolveProgram(program, policy, undefined, sources);
     assert.equal(r.ok, true, JSON.stringify(r.diagnostics));
     return r.graph;
 }
@@ -218,8 +224,10 @@ test('EA-R1 the recorded hand-off (agent-action.v2, EA3.6) resolves and checks; 
     // What the backend's mock hands off, through its own route and check (AgentWireTest), resolves here to static X.
     const program = recordedProgram('handed-off.sse');
     assert.deepEqual(program.nodes.map(n => n.adapterId), ['ng.buffer.storage', 'ng.geometry.primitive', 'ng.material.stock', 'ng.light.rig',
-        'ng.render.mesh_batch', 'ng.post.chain']);
-    const x = await resolved(program.nodes);
+        'ng.render.mesh_batch', 'ng.post.chain', 'ng.compute.stage']);
+    // Tier 1's: the blocks are seeded by an init stage, `place`, whose body is EA-E1's first module (Q80).
+    const x = await resolved(program.nodes, POLICY_V1, TIER_1);
+    assert.deepEqual(x.modules.map(m => [m.module, m.entry]), [['place', 'placeBlocks']]);
     assert.equal(x.executable, false, 'statically resolved, not rendered');
     const c = await checkGraph(x, POLICY_V1);
     assert.deepEqual(errors(c), []);
@@ -233,10 +241,15 @@ test('EA-R1 the recorded hand-off (agent-action.v2, EA3.6) resolves and checks; 
     assert.deepEqual(r.diagnostics.map(d => [d.code, d.path]), v1.objects.map((_, i) => ['EA_CONTRACT_V1', `/nodes/${i}`]));
 });
 
-/** Authored v2 equivalents of the paper test's three worlds (the engine-aware design §13), in Tier-1 adapters. */
+/**
+ * Authored v2 equivalents of the paper test's three worlds (the engine-aware design §13), in Tier-1 adapters. Each buffer
+ * a draw reads is seeded by an init-phase compute stage, as the live block-film and galaxy were: `upload` waits for
+ * Tier 2 (Q80).
+ */
 const EQUIVALENTS = {
     'block-film': [
-        node('voxels', 'ng.buffer.storage', { elements: 6000, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'upload' }),
+        node('voxels', 'ng.buffer.storage', { elements: 6000, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'zero' }),
+        node('place', 'ng.compute.stage', { module: 'voxelgen', entry: 'genBlocks', workgroupSize: 64, invocations: 6000, phase: 'init' }, [from('writes', 'voxels', 'buffer')]),
         node('cube', 'ng.geometry.primitive', { shape: 'cube', size: 1, segments: 3 }),
         node('earth', 'ng.material.stock', { kind: 'lambert', baseColor: [0.55, 0.5, 0.42, 1] }),
         node('sun', 'ng.light.rig', { ambient: [0.18, 0.16, 0.13], directional: { direction: [0.4, -1, 0.3], color: [1, 0.92, 0.8], intensity: 2.5 }, points: [] }),
@@ -245,7 +258,8 @@ const EQUIVALENTS = {
         node('film', 'ng.post.chain', { effects: [{ effect: 'ColorGrade', intensity: 0.8 }, { effect: 'Tonemap', intensity: 1 }, { effect: 'Vignette', intensity: 0.6 }, { effect: 'FilmGrain', intensity: 0.4 }] }),
     ],
     galaxy: [
-        node('stars', 'ng.buffer.storage', { elements: 12000, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'upload' }),
+        node('stars', 'ng.buffer.storage', { elements: 12000, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'zero' }),
+        node('spiral', 'ng.compute.stage', { module: 'spiral', entry: 'initGalaxy', workgroupSize: 64, invocations: 12000, phase: 'init' }, [from('writes', 'stars', 'buffer')]),
         node('orbit', 'ng.compute.stage', { module: 'orbit', entry: 'step', workgroupSize: 64, invocations: 12000, phase: 'fixedStep' }, [from('writes', 'stars', 'buffer')]),
         node('star', 'ng.geometry.primitive', { shape: 'icosahedron', size: 0.05, segments: 3 }),
         node('glow', 'ng.material.stock', { kind: 'emissive', baseColor: [1, 0.9, 0.75, 1] }),
@@ -256,7 +270,8 @@ const EQUIVALENTS = {
         node('ground', 'ng.geometry.primitive', { shape: 'plane', size: 400, segments: 3 }),
         node('grass', 'ng.material.stock', { kind: 'lambert', baseColor: [0.32, 0.36, 0.3, 1] }),
         node('dusk', 'ng.light.rig', { ambient: [0.2, 0.17, 0.22], directional: { direction: [-0.6, -0.25, 0.2], color: [1, 0.6, 0.4], intensity: 1.2 }, points: [] }),
-        node('hills', 'ng.buffer.storage', { elements: 1, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'upload' }),
+        node('hills', 'ng.buffer.storage', { elements: 1, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'zero' }),
+        node('raise', 'ng.compute.stage', { module: 'hillgen', entry: 'raiseHills', workgroupSize: 1, invocations: 1, phase: 'init' }, [from('writes', 'hills', 'buffer')]),
         node('terrain', 'ng.render.mesh_batch', { maxInstances: 1 },
             [from('geometry', 'ground', 'geometry'), from('material', 'grass', 'material'), from('instances', 'hills', 'buffer'), from('lights', 'dusk', 'lights')]),
         node('sky', 'ng.render.fullscreen', { module: 'duskSky', fragmentEntry: 'fs_main' }),
@@ -279,7 +294,7 @@ test('EA-R2 the paper test\'s three plans are refused as v1; their v2 equivalent
                 families: [...new Set(named.map(s => s.split(':')[0]))].filter(f => !families.has(f)),
                 classes: named.filter(s => /^[a-z]+:[A-Z]/.test(s) && families.has(s.split(':')[0]) && !wrapped.has(s)),
             };
-            const x = await resolved(program);
+            const x = await resolved(program, POLICY_V1, TIER_1);
             const c = await checkGraph(x, POLICY_V1);
             assert.deepEqual(errors(c), [], `${name}: no error`);
             assert.ok(c.findings.every(f => f.check === 'lifecycle'), `${name}: only the disclosed retentions: ${JSON.stringify(summary(c))}`);

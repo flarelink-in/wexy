@@ -10,13 +10,24 @@
 //          real reader, and through a client that ignores its cancel
 //   EA-V5  the world on the stage untouched; no WebGPU adapter, canvas context or markup write; no runtime, verifier,
 //          capture, engine or Firebase module loaded
+//   EA-V7  a hand-off's candidate (EA4.5) over the backend's module recordings (test/fixtures/module-wire): each module
+//          with its body as checked and its verdicts, Q_C, the calls, the evidence, the sealed id(C), and the bundle
+//          the developer downloads
+//   EA-V8  an unusable answer called again within Q_C; a refusal before the stream ends the candidate in both voices
+//   EA-V9  markup in a module's body shows as text
+//   EA-V10 a new turn retires a running candidate, and a cancel stops one: nothing their calls say after shows
 
 import '../src/styles/base.css';
 import '../src/styles/studio.css';
 import { createAgentClient, ENGINE_BUNDLE_HASH, type AgentClient, type AgentTurnRequest } from '../src/forge-client/agent-client';
 import { readAgentStream, type AgentEvent, type AgentTurnResult } from '../src/forge-client/agent-stream';
 import { createApi } from '../src/forge-client/http';
+import { createModuleClient, type ModuleClient } from '../src/forge-client/module-client';
+import { COPY } from '../src/loop/copy';
 import { AgentPanel } from '../src/shell/studio/agent-view';
+import moduleAuthorWire from '../test/fixtures/module-wire/author.sse?raw';
+import moduleDeniedJson from '../test/fixtures/module-wire/denied.json?raw';
+import moduleEmptyWire from '../test/fixtures/module-wire/error-empty.sse?raw';
 import askedWire from '../test/fixtures/agent-wire/asked.sse?raw';
 import contextLimitWire from '../test/fixtures/agent-wire/context-limit.sse?raw';
 import declinedWire from '../test/fixtures/agent-wire/declined.sse?raw';
@@ -182,7 +193,7 @@ async function endings(): Promise<void> {
     const shown = v.programText ?? '';
     check('EA-V1 handed-off: the program is its adapter nodes, each config shown parsed, under the contract and adapters it was checked by',
         /"adapterId": "ng\.buffer\.storage"/.test(shown) && /"layout": "instance14"/.test(shown) && /"effect": "Tonemap"/.test(shown)
-        && !shown.includes('\\"layout\\"') && /agent-action\.v2, as this build/.test(v.meta ?? '') && /1de4e9b80b3d…, as this build/.test(v.meta ?? ''),
+        && !shown.includes('\\"layout\\"') && /agent-action\.v2, as this build/.test(v.meta ?? '') && /aacc5959c0f6…, as this build/.test(v.meta ?? ''),
         { program: shown.slice(0, 600), meta: v.meta });
 
     v = await ending(askedWire, 'asked');
@@ -215,7 +226,7 @@ async function endings(): Promise<void> {
     v = await ending(errorBudgetWire, 'error-budget');
     check('EA-V1 a later charge refused: failed, the code and where, the first call\'s reservation held', v.phase === 'failed' && v.success === 'false'
         && v.reason === 'budget in the stream: Live creation has reached its spending limit for now.'
-        && v.calls[0].includes('? in / ? out · $0.1526 held, no usage came'), v);
+        && v.calls[0].includes('? in / ? out · $0.1547 held, no usage came'), v);
 
     v = await ending(errorUpstreamWire, 'error-upstream');
     check('EA-V1 answers off the schema twice: failed, as upstream', v.phase === 'failed'
@@ -328,6 +339,162 @@ async function cancelling(): Promise<void> {
         && JSON.stringify(after) === JSON.stringify(shown) && after.design === null, { shown, after });
 }
 
+// ---- EA4.5: a hand-off's candidate, over the backend's module recordings -------------------------------------------
+
+/** A recorded module answer for `request`: its job identity the request's, as the backend echoes every call's. */
+function echoed(text: string, request: any): string {
+    return lf(text).replace(/^event:meta\ndata:(.*)$/m, (_, data: string) =>
+        `event:meta\ndata:${JSON.stringify({ ...JSON.parse(data), turnId: request.turnId, jobId: request.jobId, purpose: request.purpose, subject: request.subject })}`);
+}
+
+const hex = (bytes: ArrayBuffer) => [...new Uint8Array(bytes)].map(b => b.toString(16).padStart(2, '0')).join('');
+/** The recorded answer's text: its deltas, joined. */
+const RECORDED_BODY = [...lf(moduleAuthorWire).matchAll(/^event:delta\ndata:(.*)$/gm)].map(m => (JSON.parse(m[1]) as { text: string }).text).join('');
+
+/** A module stream of the harness's own for `request`: the recording's meta (echoed) and usage, `answer`, its own done. */
+async function answered(answer: string, request: any): Promise<string> {
+    const recorded = lf(moduleAuthorWire);
+    const meta = JSON.parse(echoed(recorded, request).match(/^event:meta\ndata:(.*)$/m)![1]);
+    const usage = JSON.parse(recorded.match(/^event:usage\ndata:(.*)$/m)![1]);
+    const sha = hex(await crypto.subtle.digest('SHA-256', enc.encode(answer)));
+    const half = Math.floor(answer.length / 2);
+    return [['meta', meta], ['delta', { text: answer.slice(0, half) }], ['delta', { text: answer.slice(half) }], ['usage', usage],
+        ['done', { status: 'ok', answerSha256: sha, answerChars: answer.length }]].map(([e, d]) => `event:${e}\ndata:${JSON.stringify(d)}\n\n`).join('');
+}
+
+/** The real module client and transport, over a fetch that answers each request (its body parsed) by `answer`. */
+function moduleClient(answer: (request: any) => Response | Promise<Response>): ModuleClient {
+    const fetchImpl = (async (_url: string, init: RequestInit) => answer(JSON.parse(String(init.body)))) as unknown as typeof fetch;
+    return createModuleClient(createApi(CONFIG, IDENTITY, fetchImpl));
+}
+
+function candidatePanel(client: AgentClient, modules: ModuleClient, label: string, saved: { name: string; text: string }[] = []): AgentPanel {
+    const p = new AgentPanel(client, () => REQUEST, { candidate: { modules, attemptId: () => 'attempt-1', save: (name, text) => saved.push({ name, text }) } });
+    p.el.dataset.case = label;
+    panels.append(p.el);
+    return p;
+}
+
+/** What a panel's candidate shows, read from its DOM as a person would see it. */
+function lookCandidate(p: AgentPanel) {
+    const c = p.el.querySelector<HTMLElement>('.cand')!;
+    const text = (selector: string) => {
+        const e = c.querySelector<HTMLElement>(selector);
+        return e && !e.hidden ? e.textContent : null;
+    };
+    return {
+        phase: c.dataset.phase,
+        status: text('.cand-phase'),
+        id: text('.cand-id') || null,
+        note: text('.cand-note'),
+        reason: text('.cand-reason'),
+        budget: text('.cand-budget'),
+        modules: [...c.querySelectorAll<HTMLElement>('.cand-module')].map(m => ({
+            module: m.dataset.module, phase: m.dataset.phase, head: m.querySelector('.cand-module-head')?.textContent ?? '',
+            verdicts: [...m.querySelectorAll('.cand-verdict')].map(v => v.textContent ?? ''), body: m.querySelector('.cand-body pre')?.textContent ?? null,
+        })),
+        jobs: [...c.querySelectorAll('.cand-job')].map(j => j.textContent ?? ''),
+        evidence: text('.cand-evidence summary'),
+        enabled: Object.fromEntries([...c.querySelectorAll('button')].map(b => [b.textContent ?? '', !b.disabled])),
+    };
+}
+
+const candidateButton = (p: AgentPanel, label: string) => [...p.el.querySelectorAll<HTMLButtonElement>('.cand button')].find(b => (b.textContent ?? '').startsWith(label))!;
+const settled = (p: AgentPanel) => !['resolving', 'authoring', 'checking', 'correcting'].includes(lookCandidate(p).phase ?? '');
+
+async function candidates(): Promise<void> {
+    // EA-V7: the recorded hand-off, its module written by the recorded answer, checked, sealed; then the bundle.
+    const saved: { name: string; text: string }[] = [];
+    const requests: any[] = [];
+    const p = candidatePanel(liveClient(() => stream(handedOffWire).response),
+        moduleClient(r => { requests.push(r); return stream(echoed(moduleAuthorWire, r), 10).response; }), 'candidate', saved);
+    const before = lookCandidate(p);
+    await p.run();
+    const ready = lookCandidate(p);
+    candidateButton(p, 'Write the modules').click();
+    await until(() => settled(p), 5_000);
+    let v = lookCandidate(p);
+    check('EA-V7 a hand-off\'s candidate: none before the hand-off, Write the modules after it', before.phase === 'idle' && before.enabled['Write the modules'] === false
+        && before.note === 'A turn that hands off comes first.' && ready.enabled['Write the modules'] === true && ready.status === 'No candidate yet', { before, ready });
+    const [place] = v.modules;
+    check('EA-V7 static-verified over the recorded module answer: its body as checked, its verdict, Q_C, the call and its charge, id(C)',
+        v.phase === 'static-verified' && v.status === 'Static-verified: checked, not compiled' && /^id\(C\) [0-9a-f]{12}…$/.test(v.id ?? '')
+        && v.modules.length === 1 && place.module === 'place' && place.phase === 'passed' && /^place · compute · passed · 1 call · body [0-9a-f]{12}…$/.test(place.head)
+        && place.body === RECORDED_BODY && place.verdicts.length === 1 && place.verdicts[0].startsWith('lint pass (host, current)')
+        && v.budget === 'Q_C: 4 of 19 calls · authors 1/4 · repairs 0/3 · revisions 0/1' && v.jobs.length === 1
+        && /^job-1 place author: ok · \$0\.01\d\d · [^·]+ · module\.author\.v1$/.test(v.jobs[0])
+        && v.evidence === 'Evidence 5 records' && requests.length === 1 && requests[0].purpose === 'author', v);
+    candidateButton(p, 'Download bundle').click();
+    const bundle = saved.length === 1 ? JSON.parse(saved[0].text) : null;
+    check('EA-V7 Download bundle saves the candidate: its id, its body, its evidence, each call\'s charge, and no credential', saved.length === 1
+        && saved[0].name === 'wexy-candidate-attempt-1.json' && bundle?.format === 'wexy-candidate-bundle.v1' && (v.id ?? '').includes(bundle.candidate.slice(0, 12))
+        && bundle.modules[0].body === RECORDED_BODY && bundle.evidence.length === 5 && bundle.calls.jobs[0].charge === 'known'
+        && !/Bearer|dev\.anonymous/.test(saved[0]?.text ?? ''), { name: saved[0]?.name, candidate: bundle?.candidate, evidence: bundle?.evidence?.length });
+
+    // EA-V8: an answer the server judged unusable is called again within Q_C; a refusal before the stream ends it.
+    let calls = 0;
+    const retry = candidatePanel(liveClient(() => stream(handedOffWire).response),
+        moduleClient(r => stream(echoed(calls++ === 0 ? moduleEmptyWire : moduleAuthorWire, r)).response), 'candidate: unusable then written');
+    await retry.run();
+    candidateButton(retry, 'Write the modules').click();
+    await until(() => settled(retry), 5_000);
+    v = lookCandidate(retry);
+    check('EA-V8 an unusable answer is called again within Q_C, and the second is checked and sealed', v.phase === 'static-verified'
+        && v.jobs.length === 2 && v.jobs[0].includes('author: unusable') && v.jobs[0].includes('upstream: The model wrote nothing for this part.')
+        && v.jobs[1].includes('author: ok') && v.budget === 'Q_C: 5 of 19 calls · authors 2/4 · repairs 0/3 · revisions 0/1', v);
+    const refused = candidatePanel(liveClient(() => stream(handedOffWire).response),
+        moduleClient(() => new Response(moduleDeniedJson, { status: 503, headers: { 'Content-Type': 'application/json' } })), 'candidate: refused');
+    await refused.run();
+    candidateButton(refused, 'Write the modules').click();
+    await until(() => settled(refused), 5_000);
+    v = lookCandidate(refused);
+    check('EA-V8 a refusal before the stream: failed, the creator\'s sentence and the developer\'s words, the call counted unknown', v.phase === 'failed'
+        && v.status === 'Failed: no candidate' && v.note === COPY.failures.budget && v.reason === 'host budget: Live creation has reached its spending limit for now.'
+        && v.jobs.length === 1 && v.jobs[0].includes('author: refused · charge unknown') && v.budget === 'Q_C: 4 of 19 calls, 1 unknown · authors 1/4 · repairs 0/3 · revisions 0/1'
+        && v.enabled['Write the modules again'] === true && v.id === null, v);
+
+    // EA-V9: markup in a body (a comment, which the lint passes) is text.
+    const marked = `// <img src=x onerror="window.__xss=7"> <script>window.__xss=8</scr${'ipt'}>\n${RECORDED_BODY}`;
+    const markupPanel = candidatePanel(liveClient(() => stream(handedOffWire).response),
+        moduleClient(async r => stream(await answered(marked, r)).response), 'candidate: markup in a body');
+    await markupPanel.run();
+    candidateButton(markupPanel, 'Write the modules').click();
+    await until(() => settled(markupPanel), 5_000);
+    await sleep(300);
+    v = lookCandidate(markupPanel);
+    const made = [...markupPanel.el.querySelectorAll('.cand img, .cand script')];
+    check('EA-V9 markup in a module\'s body is text: no element made, no script run', v.phase === 'static-verified' && v.modules[0].body === marked
+        && made.length === 0 && (window as unknown as { __xss?: unknown }).__xss === undefined, { phase: v.phase, made: made.length });
+
+    // EA-V10: a new turn retires a running candidate; a cancel stops one. Their held calls are cancelled, and nothing they
+    // say after shows.
+    const held: Stream[] = [];
+    const hold = moduleClient(r => { const s = stream(echoed(moduleAuthorWire, r), 0, 1); held.push(s); return s.response; });
+    const retired = candidatePanel(liveClient(() => stream(handedOffWire).response, () => stream(askedWire).response), hold, 'candidate: retired by a new turn');
+    await retired.run();
+    candidateButton(retired, 'Write the modules').click();
+    await until(() => held.length === 1 && lookCandidate(retired).phase === 'authoring');
+    await retired.run();
+    const atNewTurn = lookCandidate(retired);
+    held[0].release();
+    await sleep(300);
+    const afterNewTurn = lookCandidate(retired);
+    check('EA-V10 a new turn retires the running candidate: shown as none, its call cancelled, nothing after shows', atNewTurn.phase === 'idle'
+        && atNewTurn.modules.length === 0 && atNewTurn.enabled['Write the modules'] === false && held[0].cancelled()
+        && JSON.stringify(afterNewTurn) === JSON.stringify(atNewTurn), { atNewTurn, afterNewTurn });
+    const stopped = candidatePanel(liveClient(() => stream(handedOffWire).response), hold, 'candidate: cancelled');
+    await stopped.run();
+    candidateButton(stopped, 'Write the modules').click();
+    await until(() => held.length === 2 && lookCandidate(stopped).phase === 'authoring');
+    candidateButton(stopped, 'Cancel').click();
+    const atCancel = lookCandidate(stopped);
+    held[1].release();
+    await sleep(300);
+    const afterCancel = lookCandidate(stopped);
+    check('EA-V10 a cancel shows at once; its call is cancelled and nothing after shows', atCancel.phase === 'cancelled' && atCancel.status === 'Cancelled'
+        && held[1].cancelled() && JSON.stringify(afterCancel) === JSON.stringify(atCancel) && atCancel.enabled.Cancel === false, { atCancel, afterCancel });
+}
+
 async function run(): Promise<void> {
     const world = document.getElementById('world')!.outerHTML;
     trap.armed = true;
@@ -336,13 +503,14 @@ async function run(): Promise<void> {
     await elapsed();
     await superseding();
     await cancelling();
+    await candidates();
     trap.armed = false;
     check('EA-V5 the world on the stage is untouched', document.getElementById('world')!.outerHTML === world);
     check('EA-V5 no WebGPU adapter, no canvas context, and no markup written while the turns ran', trap.requestAdapter === 0 && trap.getContext === 0 && trap.innerHTML === 0, { ...trap });
     const loaded = performance.getEntriesByType('resource').map(e => new URL(e.name).pathname);
     const forbidden = loaded.filter(n => /\/src\/(runtime|verify|capture)\//.test(n) || /null-graph|mediabunny|firebase/.test(n));
-    check('EA-V5 no runtime, verifier, capture, engine or Firebase module was loaded', forbidden.length === 0 && loaded.some(n => n.endsWith('/src/shell/studio/agent-view.ts')),
-        { forbidden, loaded: loaded.length });
+    check('EA-V5 no runtime, verifier, capture, engine or Firebase module was loaded', forbidden.length === 0 && loaded.some(n => n.endsWith('/src/shell/studio/agent-view.ts'))
+        && loaded.some(n => n.endsWith('/src/shell/studio/candidate-view.ts')), { forbidden, loaded: loaded.length });
 }
 
 const out = window as unknown as { __AV__?: unknown };

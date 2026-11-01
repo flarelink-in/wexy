@@ -13,8 +13,9 @@ import { ENGINE } from '../src/contract/engine/index.ts';
  * sha256 of descriptors.json, LF line ends. A change is a new manifest: the backend's embedded copy follows (EA3.6).
  * 10-29 night: the pinned layouts table and the buffer's strideFrom (the EA3.1 review); before, 16a7b3e0….
  * 10-30: the compute stage's after input and done output (Q77); before, 7af95545….
+ * 10-31: the variant gates' table, `upload` gated (Q80); before, 1de4e9b8….
  */
-const MANIFEST_HASH = '1de4e9b80b3d604f712cac856a17e58b66a00cc0d7a981cf88e65fd5fd87ba64';
+const MANIFEST_HASH = 'aacc5959c0f66277befb062ee140fa2b0dbae14d7a9fe0796ca032403b7293a3';
 
 const node = (id, adapterId, config, inputs = [], adapterVersion = 1) => ({ id, adapterId, adapterVersion, config: JSON.stringify(config), inputs });
 const from = (port, nodeId, output) => ({ port, nodeId, output });
@@ -22,7 +23,7 @@ const from = (port, nodeId, output) => ({ port, nodeId, output });
 /** A program that uses all nine adapters, each in a minimal valid variant. */
 function world() {
     return [
-        node('instances', 'ng.buffer.storage', { elements: 64, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'upload' }),
+        node('instances', 'ng.buffer.storage', { elements: 64, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'zero' }),
         node('field', 'ng.buffer.storage', { elements: 4096, layout: 'f32', strideFloats: 4, pingPong: true, init: 'zero' }),
         node('move', 'ng.compute.stage', { module: 'motion', entry: 'step', workgroupSize: 64, invocations: 64, phase: 'fixedStep' },
             [from('reads', 'field', 'buffer'), from('writes', 'instances', 'buffer')]),
@@ -80,14 +81,14 @@ test('EA-A3 each way a node can be wrong is refused, at its exact path, with its
         ['config that is an object, not text', w => { w[3].config = { shape: 'cube' }; }, 'EA_RESOLVE', '/nodes/3/config'],
         ['config past its characters', w => { w[3].config = JSON.stringify({ shape: 'cube', size: 1, segments: 3, pad: 'x'.repeat(4_100) }); }, 'EA_RESOLVE', '/nodes/3/config'],
         ['an extra config key', w => { w[3].config = JSON.stringify({ shape: 'cube', size: 1, segments: 3, method: 'createCube' }); }, 'EA_RESOLVE', '/nodes/3/config/method'],
-        ['a config value out of range', w => { w[0].config = JSON.stringify({ elements: 0, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'upload' }); }, 'EA_RESOLVE', '/nodes/0/config/elements'],
+        ['a config value out of range', w => { w[0].config = JSON.stringify({ elements: 0, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'zero' }); }, 'EA_RESOLVE', '/nodes/0/config/elements'],
         ['a shape that is not one', w => { w[3].config = JSON.stringify({ shape: 'teapot', size: 1, segments: 3 }); }, 'EA_RESOLVE', '/nodes/3/config/shape'],
         ['a duplicate id', w => { w[4].id = 'cube'; }, 'EA_RESOLVE', '/nodes/4/id'],
         ['an input port the adapter lacks', w => { w[6].inputs.push(from('shadow', 'sun', 'lights')); }, 'EA_RESOLVE', '/nodes/6/inputs/4/port'],
         ['a dangling node', w => { w[6].inputs[0].nodeId = 'sphere'; }, 'EA_RESOLVE', '/nodes/6/inputs/0/nodeId'],
         ['an output the node lacks', w => { w[6].inputs[0].output = 'mesh'; }, 'EA_RESOLVE', '/nodes/6/inputs/0/output'],
         ['a port of another kind', w => { w[6].inputs[1] = from('material', 'cube', 'geometry'); }, 'EA_RESOLVE', '/nodes/6/inputs/1'],
-        ['24-float instances into a stock material\'s batch', w => { w[0].config = JSON.stringify({ elements: 64, layout: 'instance24', strideFloats: 24, pingPong: false, init: 'upload' }); }, 'EA_RESOLVE', '/nodes/6/inputs/2'],
+        ['24-float instances into a stock material\'s batch', w => { w[0].config = JSON.stringify({ elements: 64, layout: 'instance24', strideFloats: 24, pingPong: false, init: 'zero' }); }, 'EA_RESOLVE', '/nodes/6/inputs/2'],
         ['a required port left empty', w => { w[6].inputs.splice(1, 1); }, 'EA_RESOLVE', '/nodes/6/inputs'],
         ['a port given twice', w => { w[6].inputs.push(from('geometry', 'cube', 'geometry')); }, 'EA_RESOLVE', '/nodes/6/inputs'],
         ['a node fed by itself', w => { w[2].inputs[0] = from('reads', 'move', 'buffer'); }, 'EA_RESOLVE', '/nodes/2/inputs/0/nodeId'],
@@ -143,7 +144,7 @@ test('EA-A5 the EA3.1 review: a canonical layout pins its stride, and config pat
         ['', '/nodes/0/config/'],
     ];
     for (const [key, path] of cases) {
-        const checked = keyed(key, (w, k) => { w[0].config = JSON.stringify({ elements: 64, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'upload', [k]: 1 }); });
+        const checked = keyed(key, (w, k) => { w[0].config = JSON.stringify({ elements: 64, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'zero', [k]: 1 }); });
         assert.equal(checked.ok, false, `${JSON.stringify(key)}: accepted`);
         assert.deepEqual(checked.diagnostics.map(d => [d.code, d.path]), [['EA_RESOLVE', path]], JSON.stringify(key));
     }
@@ -187,3 +188,40 @@ test('EA-A7 the backend embeds this manifest byte for byte and pins its hash, wh
         const java = readFileSync(`${BACKEND_MAIN}/java/ai/wexy/forge/engine/AdapterManifest.java`, 'utf8');
         assert.equal(/String HASH = "([0-9a-f]{64})";/.exec(java)?.[1], ADAPTER_MANIFEST_HASH);
     });
+
+test('EA-A8 Q80: a value the manifest gates is refused from that data, with its reason; lifting the gate is a data change', () => {
+    // The shipped gate: `upload` stays declared on the buffer's init, and is unavailable until Tier 2 brings content.
+    assert.deepEqual(ADAPTERS.unavailable.map(g => [g.adapter, g.path, g.value]), [['ng.buffer.storage', '/init', 'upload']]);
+    assert.deepEqual(ADAPTERS.adapters[0].config.properties.init.enum, ['zero', 'upload'], 'Tier 2 lifts the gate, not the schema');
+    const seeded = world();
+    const buffer = (change = {}) => JSON.stringify({ elements: 64, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'upload', ...change });
+    seeded[0].config = buffer();
+    const checked = checkNodes(seeded);
+    assert.equal(checked.ok, false);
+    assert.deepEqual(checked.diagnostics.map(d => [d.code, d.path, d.nodeId]), [['EA_CAPABILITY_UNSUPPORTED', '/nodes/0/config/init', 'instances']]);
+    assert.match(checked.diagnostics[0].message,
+        /^ng\.buffer\.storage config \/init: "upload" is not available yet: no host data source until Tier 2 \(assets\); seed the buffer with an init-phase compute stage$/);
+    // After the schema: a config the schema refuses says that, not the gate.
+    seeded[0].config = buffer({ elements: 0 });
+    assert.deepEqual(checkNodes(seeded).diagnostics.map(d => d.path), ['/nodes/0/config/elements']);
+    // A labelled lifted gate, as Tier 2 will lift it: the same node checks, and nothing else in the check moved.
+    seeded[0].config = buffer();
+    assert.equal(checkNodes(seeded, undefined, undefined, []).ok, true);
+
+    // The manifest refuses a gate it could not enforce whole, before any node is checked against it.
+    const broken = change => { const m = JSON.parse(ADAPTER_MANIFEST_TEXT); change(m); return () => checkManifest(m); };
+    const gate = { adapter: 'ng.buffer.storage', path: '/init', value: 'upload', reason: 'r' };
+    assert.doesNotThrow(broken(m => { m.unavailable = [gate]; }));
+    assert.throws(broken(m => { m.unavailable = [{ ...gate, adapter: 'ng.buffer.store' }]; }), /there is no such adapter/);
+    assert.throws(broken(m => { m.unavailable = [{ ...gate, path: '/layout' }]; }), /not an enum of its config that holds "upload"/);
+    assert.throws(broken(m => { m.unavailable = [{ ...gate, path: '/elements' }]; }), /not an enum/);
+    assert.throws(broken(m => { m.unavailable = [{ ...gate, path: 'init' }]; }), /not an enum/);
+    assert.throws(broken(m => { m.unavailable = [{ adapter: 'ng.post.chain', path: '/effects/effect', value: 'Bloom', reason: 'r' }]; }), /not an enum/,
+        'a path runs through properties, never into an array\'s items');
+    assert.throws(broken(m => { m.unavailable = [{ ...gate, value: 'stream' }]; }), /holds "stream"/);
+    assert.throws(broken(m => { m.unavailable = [gate, gate]; }), /"upload" is gated twice/);
+    assert.throws(broken(m => { m.unavailable = [gate, { ...gate, value: 'zero' }]; }), /every value of the enum is gated/);
+    assert.throws(broken(m => { m.unavailable = [{ ...gate, reason: ' ' }]; }), /its reason is 1 to 200 characters/);
+    assert.throws(broken(m => { m.unavailable = [{ ...gate, why: 'x' }]; }), /a gate is exactly \{adapter, path, value, reason\}/);
+    assert.throws(broken(m => { delete m.unavailable; }), /unavailable is not a list/);
+});

@@ -9,10 +9,11 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { canonicalHash, canonicalJson, sha256Hex } from '../src/contract/adapters/canonical.ts';
-import { SizeOverflow, product } from '../src/contract/adapters/contribute.ts';
+import { NO_CONTENT, SizeOverflow, product } from '../src/contract/adapters/contribute.ts';
 import { POLICY_V1 } from '../src/contract/adapters/graph.ts';
+import { SHIPPED_GATES, SHIPPED_SUPPORT } from '../src/contract/adapters/index.ts';
 import { ENGINE } from '../src/contract/engine/index.ts';
-import { cleanupFor, resolveProgram } from '../src/contract/adapters/resolve.ts';
+import { TIER_1, cleanupFor, resolveProgram } from '../src/contract/adapters/resolve.ts';
 
 const node = (id, adapterId, config, inputs = []) => ({ id, adapterId, adapterVersion: 1, config: JSON.stringify(config), inputs });
 const from = (port, nodeId, output) => ({ port, nodeId, output });
@@ -35,14 +36,25 @@ function world() {
     ];
 }
 
+/**
+ * A labelled synthetic Tier 2 (Q80): `upload`'s gate lifted, and a test content source that names a seed for every
+ * buffer. These tests pin the resolver's upload path, which stays for Tier 2; EA-X16 shows Tier 1 refusing it.
+ */
+const TIER_2 = Object.freeze({
+    gates: [],
+    content: { contentFor: (node, bytes) => ({ source: 'test', id: `${node}.seed`, sha256: createHash('sha256').update(`${node}:${bytes}`).digest('hex') }) },
+});
+/** `resolveProgram`'s policy, H and sources: P v0, the shipped H and the Tier-2 stand-in unless a test names its own. */
+const under = ([policy, support, sources]) => [policy ?? POLICY_V1, support ?? SHIPPED_SUPPORT, sources ?? TIER_2];
+
 async function resolved(program, ...rest) {
-    const r = await resolveProgram(program, ...rest);
+    const r = await resolveProgram(program, ...under(rest));
     assert.equal(r.ok, true, JSON.stringify(r.diagnostics));
     return r.graph;
 }
 
 async function refused(program, code, path, ...rest) {
-    const r = await resolveProgram(program, ...rest);
+    const r = await resolveProgram(program, ...under(rest));
     assert.equal(r.ok, false, `wanted ${code} at ${path}; it resolved`);
     assert.ok(r.diagnostics.some(d => d.code === code && d.path === path), `wanted ${code} at ${path}, got ${JSON.stringify(r.diagnostics.map(d => [d.code, d.path, d.message]))}`);
     return r.diagnostics;
@@ -75,9 +87,9 @@ test('EA-X1 X is canonical and deterministic: the same program gives the same by
     assert.equal(a.executable, false);
     assert.ok(Object.isFrozen(a) && Object.isFrozen(a.resources[0]) && Object.isFrozen(a.schedule.frame) && Object.isFrozen(a.operations[0].args));
     assert.deepEqual(a.identity, {
-        graph: 'ea-x.v1', resolver: 'ea3.2-resolver.1', engine: 'null-graph@1.2.0', bundleHash: ENGINE.bundle.bundleHash, supportStatusHash: a.identity.supportStatusHash,
-        manifest: 'ea-adapters.v1', manifestHash: '1de4e9b80b3d604f712cac856a17e58b66a00cc0d7a981cf88e65fd5fd87ba64',
-        programHash: a.identity.programHash, policyHash: await canonicalHash(POLICY_V1),
+        graph: 'ea-x.v1', resolver: 'ea3.2-resolver.2', engine: 'null-graph@1.2.0', bundleHash: ENGINE.bundle.bundleHash, supportStatusHash: a.identity.supportStatusHash,
+        manifest: 'ea-adapters.v1', manifestHash: 'aacc5959c0f66277befb062ee140fa2b0dbae14d7a9fe0796ca032403b7293a3',
+        gatesHash: await canonicalHash([]), programHash: a.identity.programHash, policyHash: await canonicalHash(POLICY_V1),
     });
 
     // A config's key order and spacing are text, not meaning.
@@ -108,24 +120,35 @@ test('EA-X1 X is canonical and deterministic: the same program gives the same by
     assert.notEqual(blocked.identity.supportStatusHash, a.identity.supportStatusHash);
     assert.equal(blocked.nodes.find(n => n.id === 'look').status, 'device-blocked');
     assert.equal(blocked.executable, false);
+    // The gates it was resolved under are X's too: a world with no upload, under Tier 1 and under the stand-in (Q80).
+    const still = world();
+    still[0].config = JSON.stringify({ elements: 64, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'zero' });
+    const tier1 = await resolved(still, undefined, undefined, TIER_1);
+    const tier2 = await resolved(still);
+    assert.notEqual(tier1.hash, tier2.hash, 'another set of gates');
+    assert.deepEqual([tier1.identity.gatesHash, tier2.identity.gatesHash], [await canonicalHash(SHIPPED_GATES), await canonicalHash([])]);
+    const apart = x => ({ ...x, hash: null, identity: { ...x.identity, gatesHash: null } });
+    assert.deepEqual(apart(tier1), apart(tier2), 'and nothing else in X differs');
 });
 
 test('EA-X2 the nine adapters resolve to one X: its schedules, bytes, estimate, output and source map, pinned', async () => {
     const program = world();
     const x = await resolved(program);
     assert.deepEqual(x.schedule, {
-        init: ['instances#create', 'field#create', 'move#create', 'cube#create', 'stone#create', 'sun#create', 'look#create', '@host#pass',
-            'sky#create', 'blocks#create', 'water#create', 'instances#upload', 'sun#upload'],
-        fixedStep: ['move#dispatch'],
+        init: ['@host#createSim', 'instances#create', 'field#create', 'move#create', 'cube#create', 'stone#create', 'sun#create', 'look#create',
+            '@host#pass', 'sky#create', 'blocks#create', 'water#create', 'instances#upload', 'sun#upload'],
+        // Q81: the host's clock is written whole before every fixed step, so each step reads its own.
+        fixedStep: ['@host#updateSim', 'move#dispatch'],
         frame: ['@host#updateCamera', 'look#upload', 'blocks#copy', '@host#clear', 'sky#draw', 'blocks#draw', 'water#draw', 'look#passes'],
         resize: ['@host#resize', 'look#resize'],
         dispose: ['water#clear', 'blocks#clear', 'sky#clear', 'look#clearBatches', 'look#destroy', 'sun#destroy', 'stone#destroy', 'cube#destroy', 'move#drop',
-            'field#destroy', 'instances#destroy', '@host#forgetPasses'],
+            'field#destroy', 'instances#destroy', '@host#destroySim', '@host#forgetPasses'],
     });
     assert.deepEqual(x.fixedSteps, { min: 0, max: 4 });
     // Every allocation, with its owner: the engine's batch storage beside the buffer copied into it, the pool's targets.
     assert.deepEqual(x.resources.map(r => [r.id, r.owner, r.bytes, r.allocations]), [
         ['@host#camera', 'shared', 432, 1], ['@host#depth', 'shared', 1920 * 1080 * 4, 1], ['@host#fallbacks', 'shared', 16, 1], ['@host#screen', 'canvas', 0, 1],
+        ['@host#sim', 'host', 16, 1],
         ['blocks#storage', 'engine', 64 * 56, 1], ['cube#indices', 'host', 72, 1], ['cube#vertices', 'host', 24 * 32, 1], ['field#buffer', 'host', 4096 * 16, 2],
         ['instances#buffer', 'host', 64 * 56, 1], ['look#batchStorage', 'engine', 32, 2], ['look#chain1', 'extra', 1920 * 1080 * 8, 1],
         ['look#debugStorage', 'engine', 32, 1], ['look#params', 'extra', 512, 1],
@@ -145,9 +168,9 @@ test('EA-X2 the nine adapters resolve to one X: its schedules, bytes, estimate, 
     ]);
     assert.deepEqual(res(x, 'look#debugStorage').retained, held);
     assert.deepEqual(x.estimate, {
-        bytes: 49_906_728, maxAllocationBytes: 16_588_800, viewportBytes: 49_766_400, resizePeakBytes: 49_906_728,
+        bytes: 49_906_744, maxAllocationBytes: 16_588_800, viewportBytes: 49_766_400, resizePeakBytes: 49_906_744,
         invocationsPerFrame: 64 * 4, workgroupsPerFrame: 4, vertexInvocationsPerFrame: 36 * 64 + 36 + 3, invocationsInit: 0,
-        copyBytesPerFrame: 3584, uploadBytesPerFrame: 432 + 512, uploadBytesInit: 3584 + 840 + 32 + 128, operations: 36,
+        copyBytesPerFrame: 3584, uploadBytesPerFrame: 432 + 512 + 16 * 4, uploadBytesInit: 3584 + 840 + 32 + 128, operations: 39,
     });
     assert.deepEqual(x.output, { color: '@host#screen', producer: 'look#passes', format: 'canvas', colorSpace: 'srgb', conversion: 'none', depth: 'look#sceneDepth' });
     assert.deepEqual(x.modules.map(m => [m.module, m.stage, m.entry, m.node, m.operation, m.path]), [
@@ -206,9 +229,10 @@ test('EA-X6 a ping-pong pair: two initialized halves, one writer, its swap, and 
     assert.deepEqual([res(x, 'field#buffer').bytes, res(x, 'field#buffer').allocations], [16_384, 2]);
     // Both halves get the seed, so a read is initialized after zero, one or two fixed steps, whichever half is current.
     assert.deepEqual([op(x, 'field#upload').work.bytes, op(x, 'field#upload').accesses], [32_768, [{ resource: 'field#buffer', mode: 'write', version: null, coverage: 'whole' }]]);
-    assert.deepEqual(x.schedule.fixedStep, ['step#dispatch', 'step#swap0']);
+    assert.deepEqual(x.schedule.fixedStep, ['@host#updateSim', 'step#dispatch', 'step#swap0']);
     assert.deepEqual(op(x, 'step#dispatch').accesses, [
-        { resource: 'field#buffer', mode: 'read', version: 'current', coverage: null }, { resource: 'field#buffer', mode: 'write', version: 'next', coverage: 'unknown' }]);
+        { resource: 'field#buffer', mode: 'read', version: 'current', coverage: null }, { resource: 'field#buffer', mode: 'write', version: 'next', coverage: 'unknown' },
+        { resource: '@host#sim', mode: 'read', version: null, coverage: null }], 'and, at a fixed step, the clock of the host (Q81)');
     assert.deepEqual(op(x, 'step#swap0').after, ['step#dispatch']);
     assert.deepEqual(op(x, 'step#dispatch').work, { workgroups: [16, 1, 1], invocations: 1024, vertices: null, instances: null, bytes: null });
     // The backdrop reads the current half in frame: after the frame's fixed steps (0 to 4 of them), never between.
@@ -224,8 +248,9 @@ test('EA-X6 a ping-pong pair: two initialized halves, one writer, its swap, and 
     const inPlace = pair(true);
     inPlace[0].config = JSON.stringify({ elements: 1024, layout: 'f32', strideFloats: 4, pingPong: false, init: 'zero' });
     const p = await resolved(inPlace);
-    assert.deepEqual(op(p, 'step#dispatch').accesses, [{ resource: 'field#buffer', mode: 'readwrite', version: null, coverage: 'unknown' }]);
-    assert.deepEqual(p.schedule.fixedStep, ['step#dispatch']);
+    assert.deepEqual(op(p, 'step#dispatch').accesses, [{ resource: 'field#buffer', mode: 'readwrite', version: null, coverage: 'unknown' },
+        { resource: '@host#sim', mode: 'read', version: null, coverage: null }]);
+    assert.deepEqual(p.schedule.fixedStep, ['@host#updateSim', 'step#dispatch']);
 
     // A second writer would leave the parity ambiguous.
     const two = pair(true);
@@ -276,7 +301,7 @@ test('EA-X7 dependencies order a phase before program order does: writers before
     // The same two in different phases are a one-frame feedback, not a cycle.
     const feedback = structuredClone(loop);
     feedback[3].config = JSON.stringify({ module: 'm', entry: 'ba', workgroupSize: 64, invocations: 64, phase: 'fixedStep' });
-    assert.deepEqual((await resolved(feedback)).schedule.fixedStep, ['ba#dispatch']);
+    assert.deepEqual((await resolved(feedback)).schedule.fixedStep, ['@host#updateSim', 'ba#dispatch']);
 });
 
 test('EA-X8 each refusal of the resolver, at its exact path; a refused producer is not refused again downstream', async () => {
@@ -292,9 +317,9 @@ test('EA-X8 each refusal of the resolver, at its exact path; a refused producer 
     const twice = world();
     twice[2].inputs.push(from('writes', 'instances', 'buffer'));
     await refused(twice, 'EA_RESOLVE', '/nodes/2/inputs/2');
-    const [ops] = await refused(world(), 'EA_RESOLVE', '/nodes', { ...POLICY_V1, maxOperations: 35 });
-    assert.match(ops.message, /36 operations, over P's 35/);
-    assert.equal((await resolveProgram(world(), { ...POLICY_V1, maxOperations: 36 })).ok, true, 'B passes where B+1 refuses');
+    const [ops] = await refused(world(), 'EA_RESOLVE', '/nodes', { ...POLICY_V1, maxOperations: 38 });
+    assert.match(ops.message, /39 operations, over P's 38/);
+    assert.equal((await resolveProgram(world(), { ...POLICY_V1, maxOperations: 39 }, undefined, TIER_2)).ok, true, 'B passes where B+1 refuses');
     const v1 = world();
     v1[3] = { id: 'cube', symbol: 'geometry:Primitives', member: 'createCube', purpose: 'x', args: [], inputs: [] };
     await refused(v1, 'EA_CONTRACT_V1', '/nodes/3');
@@ -414,4 +439,19 @@ test('EA-X10 canonical JSON: sorted keys, finite numbers, -0 as 0, and nothing t
     for (const s of ['é', '🧱 world', '\u0000￿']) assert.equal(await sha256Hex(s), createHash('sha256').update(s, 'utf8').digest('hex'));
     // The same object built in another key order hashes the same.
     assert.equal(await canonicalHash({ x: 1, y: [2, { p: 3, q: 4 }] }), await canonicalHash({ y: [2, { q: 4, p: 3 }], x: 1 }));
+});
+
+test('EA-X16 Q80: Tier 1 refuses an upload at the node check; a lifted gate with no content refuses at the buffer; with content, X names it', async () => {
+    // Tier 1: the manifest's gate, before any adapter's code runs.
+    const tier1 = await resolveProgram(world(), POLICY_V1, SHIPPED_SUPPORT, TIER_1);
+    assert.equal(tier1.ok, false);
+    assert.deepEqual(tier1.diagnostics.map(d => [d.code, d.path, d.nodeId]), [['EA_CAPABILITY_UNSUPPORTED', '/nodes/0/config/init', 'instances']]);
+    assert.match(tier1.diagnostics[0].message, /"upload" is not available yet/);
+    // The gate lifted, but no content: the buffer refuses, so a missing seed never reads as zeros (Q80 (c)).
+    const [empty] = await refused(world(), 'EA_CAPABILITY_UNSUPPORTED', '/nodes/0/config/init', undefined, undefined, { gates: [], content: NO_CONTENT });
+    assert.match(empty.message, /no content source holds a seed for this buffer/);
+    // With content, as Tier 2 will supply it: the upload names its source, id and hash, never its bytes.
+    const x = await resolved(world());
+    assert.deepEqual(op(x, 'instances#upload').args.data, { source: 'test', id: 'instances.seed', sha256: createHash('sha256').update('instances:3584').digest('hex') });
+    assert.deepEqual(op(x, 'instances#upload').work.bytes, 3584);
 });

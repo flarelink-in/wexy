@@ -5,8 +5,10 @@
 // is. Then the refusals. No body is written or compiled: an interface is what EA4 writes against.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ENGINE_CHUNKS, MAX_STORAGE_BUFFERS_PER_STAGE, deriveInterfaces, invalidated } from '../src/contract/adapters/interfaces.ts';
+import { SIM_BYTES } from '../src/contract/adapters/contribute.ts';
+import { ABI_VERSION, EA_SIM_STRUCT, ENGINE_CHUNKS, LIGHTS_CHUNK, MAX_STORAGE_BUFFERS_PER_STAGE, deriveInterfaces, invalidated, notAuthorable } from '../src/contract/adapters/interfaces.ts';
 import { resolveProgram } from '../src/contract/adapters/resolve.ts';
+import { SIM_BYTES as H1_SIM_BYTES } from '../src/contract/wgsl.ts';
 
 const node = (id, adapterId, config, inputs = []) => ({ id, adapterId, adapterVersion: 1, config: JSON.stringify(config), inputs });
 const from = (port, nodeId, output) => ({ port, nodeId, output });
@@ -14,7 +16,7 @@ const from = (port, nodeId, output) => ({ port, nodeId, output });
 /** EA-A2's nine adapters, with entries a body can define (a built-in or generated name refuses, EA-I3). */
 function world() {
     return [
-        node('instances', 'ng.buffer.storage', { elements: 64, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'upload' }),
+        node('instances', 'ng.buffer.storage', { elements: 64, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'zero' }),
         node('field', 'ng.buffer.storage', { elements: 4096, layout: 'f32', strideFloats: 4, pingPong: true, init: 'zero' }),
         node('move', 'ng.compute.stage', { module: 'motion', entry: 'advance', workgroupSize: 64, invocations: 64, phase: 'fixedStep' },
             [from('reads', 'field', 'buffer'), from('writes', 'instances', 'buffer')]),
@@ -64,10 +66,10 @@ test('EA-I1 the world\'s three interfaces: entries, bindings and who binds them,
     assert.deepEqual(motion.entries.map(e => [e.stage, e.signature, e.engineEntry]), [['compute', 'fn advance(index: u32)', 'cs_main']]);
     assert.deepEqual(motion.bindings.map(b => [b.group, b.binding, b.name, b.access, b.resource, b.version, b.boundBy]), [
         [0, 0, 'b_field_current', 'read', 'field#buffer', 'current', 'host'], [0, 1, 'b_instances', 'read_write', 'instances#buffer', null, 'host'],
-        [1, 0, 'camera', 'uniform', '@host#camera', null, 'host']]);
+        [1, 0, 'camera', 'uniform', '@host#camera', null, 'host'], [1, 1, 'sim', 'uniform', '@host#sim', null, 'host']]);
     assert.deepEqual(motion.constants, [{ name: 'B_field_STRIDE', value: 4 }, { name: 'B_instances_STRIDE', value: 14 }, { name: 'EA_INVOCATIONS', value: 64 }]);
     assert.equal(motion.workgroupSize, 64);
-    assert.match(motion.epilogue, /@compute @workgroup_size\(64\)\nfn cs_main\(@builtin\(global_invocation_id\) id: vec3<u32>\) \{\n(    _ = .*;\n){3}    if \(id\.x >= EA_INVOCATIONS\) \{ return; \}\n    advance\(id\.x\);\n\}/);
+    assert.match(motion.epilogue, /@compute @workgroup_size\(64\)\nfn cs_main\(@builtin\(global_invocation_id\) id: vec3<u32>\) \{\n(    _ = .*;\n){4}    if \(id\.x >= EA_INVOCATIONS\) \{ return; \}\n    advance\(id\.x\);\n\}/);
     assert.deepEqual(sky.entries.map(e => [e.stage, e.signature]), [['fragment', 'fn dusk(uv: vec2<f32>) -> vec4<f32>']]);
     assert.deepEqual(sky.bindings.map(b => [b.group, b.binding, b.name, b.boundBy]), [[0, 0, 'camera', 'engine'], [0, 1, 'ecs', 'engine'], [1, 0, 'b_field_current', 'host']]);
     assert.deepEqual(water.entries.map(e => [e.stage, e.signature]), [
@@ -79,7 +81,8 @@ test('EA-I1 the world\'s three interfaces: entries, bindings and who binds them,
         for (const c of i.chunks) assert.ok(i.preamble.includes(ENGINE_CHUNKS[c.id.split('.').pop()]), `${i.module}: ${c.id}`);
         for (const b of i.bindings) {
             if (b.boundBy === 'host') assert.equal(i.preamble.split(b.declaration).length, 2, `${i.module}: ${b.name} declared once`);
-            assert.ok(i.epilogue.includes(b.access === 'uniform' ? `_ = ${b.name}.simTime;` : `_ = arrayLength(&${b.name});`), `${i.module}: ${b.name} used`);
+            const use = b.access === 'uniform' ? `_ = ${b.name}.${b.name === 'sim' ? 'dt' : 'simTime'};` : `_ = arrayLength(&${b.name});`;
+            assert.ok(i.epilogue.includes(use), `${i.module}: ${b.name} used`);
         }
         assert.ok(!/`/.test(i.preamble + i.epilogue), 'no backtick in generated WGSL');
         for (const p of [...i.paths, ...i.entries.map(e => e.path)]) walk(program, p);
@@ -95,7 +98,8 @@ test('EA-I2 EA-U6: one interface changed invalidates exactly its module; a share
     const set = (w, id, config) => { w.find(n => n.id === id).config = JSON.stringify(config); };
     assert.deepEqual(await after(w => set(w, 'move', { module: 'motion', entry: 'advance', workgroupSize: 128, invocations: 64, phase: 'fixedStep' })), ['motion'], 'workgroup size');
     assert.deepEqual(await after(w => set(w, 'move', { module: 'motion', entry: 'advance', workgroupSize: 64, invocations: 100, phase: 'fixedStep' })), ['motion'], 'the generated bound');
-    assert.deepEqual(await after(w => set(w, 'move', { module: 'motion', entry: 'advance', workgroupSize: 64, invocations: 64, phase: 'frame' })), [], 'the phase is the host\'s');
+    assert.deepEqual(await after(w => set(w, 'move', { module: 'motion', entry: 'advance', workgroupSize: 64, invocations: 64, phase: 'frame' })), ['motion'],
+        'a fixed step reads its own clock, a frame the camera\'s: the phase is the interface\'s since ea-abi.v2 (Q81)');
     assert.deepEqual(await after(w => set(w, 'field', { elements: 8192, layout: 'f32', strideFloats: 4, pingPong: true, init: 'zero' })), [], 'a host-side count');
     assert.deepEqual(await after(w => set(w, 'field', { elements: 4096, layout: 'f32', strideFloats: 8, pingPong: true, init: 'zero' })), ['motion', 'sky'], 'a stride both read');
     assert.deepEqual(await after(w => set(w, 'stone', { kind: 'toon', baseColor: [1, 1, 1, 1] })), [], 'a stock material is no module');
@@ -125,14 +129,19 @@ test('EA-I2 EA-U6: one interface changed invalidates exactly its module; a share
     const morePoints = lit(world());
     set(morePoints, 'sun', { ambient: [0.1, 0.1, 0.12], directional: null, points: [{ position: [0, 1, 0], color: [1, 1, 1], intensity: 1, range: 4 }] });
     assert.deepEqual(invalidated(litBase, await interfaces(morePoints)), ['water']);
-    assert.ok(litBase.find(i => i.module === 'water').chunks.some(c => c.id === 'lights:LightSystem.getShaderLayout'));
+    assert.ok(litBase.find(i => i.module === 'water').chunks.some(c => c.id === LIGHTS_CHUNK));
+    // Custom lighting is derived, but not authored until the host's lighting contract exists (the EA4.2 review's
+    // finding 2; the candidate-loop design §6): the lit batch is refused before any call, the rest of the world is not.
+    assert.match(notAuthorable(litBase.find(i => i.module === 'water')), /water is a custom batch wired to lights, and custom lighting is not available yet/);
+    for (const i of litBase.filter(i => i.module !== 'water')) assert.equal(notAuthorable(i), null, i.module);
+    for (const i of await interfaces(world())) assert.equal(notAuthorable(i), null, `${i.module}, unlit`);
 });
 
 test('EA-I3 the refusals: a module two nodes share, an entry no body may define, two bindings of one name, too many storage buffers', async () => {
     const shared = world();
     shared.push(node('drift', 'ng.compute.stage', { module: 'motion', entry: 'drift', workgroupSize: 64, invocations: 64, phase: 'frame' }, [from('writes', 'instances', 'buffer')]));
     await refused(shared, '/nodes/10/config/module', /module motion serves move and drift; a module serves one node in Tier 1/);
-    for (const [entry, why] of [['filter', 'reserved'], ['step', 'built-in'], ['fs_main', 'generated'], ['camera', 'generated'], ['b_extra', 'generated'], ['Advance', 'not lower-case first']]) {
+    for (const [entry, why] of [['filter', 'reserved'], ['step', 'built-in'], ['fs_main', 'generated'], ['camera', 'generated'], ['sim', 'generated'], ['b_extra', 'generated'], ['Advance', 'not lower-case first']]) {
         const w = world();
         w[2].config = JSON.stringify({ module: 'motion', entry, workgroupSize: 64, invocations: 64, phase: 'fixedStep' });
         await refused(w, '/nodes/2/config/module', new RegExp(`^${entry} cannot be an entry`), undefined, why);
@@ -205,4 +214,30 @@ test('EA-I4 every identifier the generated code uses is one no entry can take, f
         const loose = [...used].filter(t => t !== '_' && !ENTRY_EXCLUDED.has(t) && !/^(b_|B_|EA_)/.test(t) && !entries.has(t));
         assert.deepEqual(loose, [], `${i.module} (${i.kind}): generated code uses names an entry could take`);
     }
+});
+
+test('EA-I5 Q81 (ea-abi.v2): a fixed-step stage reads the host clock of its step; a frame stage and the draws keep the camera time', async () => {
+    const [motion, sky, water] = await interfaces(world());
+    assert.equal(ABI_VERSION, 'ea-abi.v2');
+    assert.ok([motion, sky, water].every(i => i.abi === 'ea-abi.v2'), 'the ABI is in every interface, so every hash moved with it');
+    // The clock: bound beside the camera at group 1, declared once in the preamble, used in cs_main so layout 'auto' keeps it.
+    assert.deepEqual(motion.bindings.filter(b => b.access === 'uniform').map(b => [b.group, b.binding, b.name, b.resource]),
+        [[1, 0, 'camera', '@host#camera'], [1, 1, 'sim', '@host#sim']]);
+    assert.equal(motion.preamble.split(EA_SIM_STRUCT).length, 2);
+    assert.ok(motion.preamble.includes('@group(1) @binding(1) var<uniform> sim: EaSim;'));
+    assert.ok(motion.epilogue.includes('    _ = sim.dt;\n'));
+    // h1's Sim layout without its particle count: four 32-bit words, the 16 bytes X allocates (EA-X2) and h1 writes.
+    assert.deepEqual([...EA_SIM_STRUCT.matchAll(/(\w+): (f32|u32)/g)].map(m => [m[1], m[2]]), [['dt', 'f32'], ['time', 'f32'], ['step', 'u32'], ['_pad', 'u32']]);
+    assert.deepEqual([SIM_BYTES, H1_SIM_BYTES], [16, 16]);
+    // A frame stage has no clock of its own: it reads the camera time once a frame, as the draws do; an init stage too.
+    for (const phase of ['frame', 'init']) {
+        const other = world();
+        other[2].config = JSON.stringify({ module: 'motion', entry: 'advance', workgroupSize: 64, invocations: 64, phase });
+        const [stage] = await interfaces(other);
+        assert.deepEqual(stage.bindings.filter(b => b.access === 'uniform').map(b => b.name), ['camera'], phase);
+        assert.ok(!stage.preamble.includes('EaSim') && !stage.epilogue.includes('sim.'), phase);
+    }
+    assert.ok(![sky, water].some(i => i.bindings.some(b => b.name === 'sim') || i.preamble.includes('EaSim')), 'draws keep the camera time');
+    // The storage bindings are the stage's buffers only: the clock X lists among the dispatch's reads is no storage buffer.
+    assert.deepEqual(motion.bindings.filter(b => b.access !== 'uniform').map(b => b.name), ['b_field_current', 'b_instances']);
 });

@@ -4,13 +4,15 @@
 // The bindings come from the operations that use the module, never from the program's word. No body is written,
 // compiled or trusted here: EA4 writes bodies against these interfaces and EA5 compiles them.
 //
-// ABI ea-abi.v1. Every generated name is prefixed (`b_`, `B_`, `EA_`) or the engine's own, so no program name can
-// collide with one, and every binding is used statically in the generated entry: with layout 'auto' an unused binding
-// is dropped and the bind group then fails (the gotcha "null-graph owns bind group 0").
+// ABI ea-abi.v2 (Q81: v1 plus a fixed step's clock). Every generated name is prefixed (`b_`, `B_`, `EA_`) or the
+// engine's own or the host's (`camera`, `ecs`, `sim`), so no program name can collide with one, and every binding is
+// used statically in the generated entry: with layout 'auto' an unused binding is dropped and the bind group then fails
+// (the gotcha "null-graph owns bind group 0").
 //   compute: group 0 the stage's buffers in X's access order, each `array<f32>`, read-only when only read, read_write
 //            when written; a ping-pong pair as two, `_current` and `_next`. Group 1 binding 0 the engine's camera, whose
-//            simTime is the time (a fixed step's dt is not in v1). `cs_main` guards EA_INVOCATIONS and calls
-//            `fn <entry>(index: u32)`.
+//            simTime is the frame's time. A fixed-step stage also has group 1 binding 1, the host's per-step clock
+//            `sim: EaSim {dt, time, step}`, written before each step (h1's Sim, Q81 (b)); a frame or init stage keeps
+//            the camera's time only. `cs_main` guards EA_INVOCATIONS and calls `fn <entry>(index: u32)`.
 //   custom batch: the engine's group 0 (camera, ecs); StandardLayout's three inputs when geometry is wired; `vs_main`
 //            and `fs_main` call the program's two entries. Lights, when wired, are LightSystem's layout at group 2,
 //            which the host injects (its id and configuration are hashed).
@@ -23,7 +25,14 @@ import { canonicalHash, sha256Hex } from './canonical';
 import type { ExecutionGraph, XAccess, XOperation } from './graph';
 import type { ResolveDiagnostic } from './index';
 
-export const ABI_VERSION = 'ea-abi.v1';
+export const ABI_VERSION = 'ea-abi.v2';
+
+/**
+ * The per-step clock of a fixed-step stage (Q81 (b)): h1's `Sim` without its particle count, padded to the host's 16-byte
+ * buffer (contribute.ts, SIM_BYTES). `time` is the step's own time and `step` its number; `dt` is the host's, so a dt
+ * change touches no interface.
+ */
+export const EA_SIM_STRUCT = 'struct EaSim {\n    dt: f32,\n    time: f32,\n    step: u32,\n    _pad: u32,\n}';
 
 /** null-graph 1.2.0's `CommonChunks`, byte for byte (EA-X15 pins them against the engine). */
 export const ENGINE_CHUNKS: Readonly<Record<'CameraStruct' | 'EngineBindings' | 'VertexOut', string>> = {
@@ -86,7 +95,7 @@ export interface ModuleInterface {
 export type Derived = { ok: true; graph: string; interfaces: ModuleInterface[] } | { ok: false; graph: string; diagnostics: ResolveDiagnostic[] };
 
 const ENTRY = /^[a-z][A-Za-z0-9_]{0,39}$/;
-const GENERATED = /^(b_|ea_|cs_main$|vs_main$|fs_main$|camera$|ecs$|main$)/i;
+const GENERATED = /^(b_|ea_|cs_main$|vs_main$|fs_main$|camera$|ecs$|main$|sim$)/i;
 
 /** WGSL's built-in functions (the WGSL recommendation, 2024): a module-scope function by one of these names shadows it. */
 export const WGSL_FUNCTIONS: readonly string[] = [
@@ -133,7 +142,7 @@ export const WGSL_NAMES: readonly string[] = [
  */
 export const ENTRY_EXCLUDED: ReadonlySet<string> = new Set([
     ...RESERVED_WORDS, ...BUILTIN_FUNCTIONS, ...WGSL_FUNCTIONS, ...WGSL_NAMES,
-    'camera', 'ecs', 'main', 'cs_main', 'vs_main', 'fs_main', 'Camera', 'VertexOut', 'EaFullscreen',
+    'camera', 'ecs', 'sim', 'main', 'cs_main', 'vs_main', 'fs_main', 'Camera', 'VertexOut', 'EaFullscreen', 'EaSim',
     'index', 'p', 'out', 'input', 'instance', 'normal', 'uv',
 ]);
 /** A node id as a WGSL identifier: a node id may hold '-', which WGSL does not take. */
@@ -165,7 +174,7 @@ export async function deriveInterfaces(x: Graph, chunks: Readonly<Record<keyof t
     }
     for (const m of x.modules) {
         if (!ENTRY.test(m.entry) || ENTRY_EXCLUDED.has(m.entry) || GENERATED.test(m.entry)) {
-            fail(m.path, m.node, `${m.entry.slice(0, 40)} cannot be an entry: it must be a WGSL name, not a reserved word, a WGSL built-in or type, or a name the host generates (cs_main, vs_main, fs_main, camera, ecs, b_…, ea_…, the wrappers' parameters)`);
+            fail(m.path, m.node, `${m.entry.slice(0, 40)} cannot be an entry: it must be a WGSL name, not a reserved word, a WGSL built-in or type, or a name the host generates (cs_main, vs_main, fs_main, camera, ecs, sim, b_…, ea_…, the wrappers' parameters)`);
         }
     }
     if (diagnostics.length) return { ok: false, graph: x.hash, diagnostics };
@@ -181,7 +190,9 @@ export async function deriveInterfaces(x: Graph, chunks: Readonly<Record<keyof t
     const strides = (bindings: InterfaceBinding[]) => [...new Map(bindings.filter(b => b.boundBy === 'host' && b.access !== 'uniform')
         .map(b => [resources.get(b.resource)!.node, { name: `B_${wgslName(resources.get(b.resource)!.node)}_STRIDE`, value: resources.get(b.resource)!.strideFloats! }])).values()];
     const constants = (list: { name: string; value: number }[]) => list.map(c => `const ${c.name}: u32 = ${c.value}u;`).join('\n');
-    const used = (bindings: InterfaceBinding[]) => bindings.map(b => (b.access === 'uniform' ? `    _ = ${b.name}.simTime;` : `    _ = arrayLength(&${b.name});`)).join('\n');
+    /** How the generated entry uses each binding, so layout 'auto' keeps it: a uniform by one field, a buffer by its length. */
+    const used = (bindings: InterfaceBinding[]) => bindings.map(b => (b.access === 'uniform' ? `    _ = ${b.name}.${b.name === 'sim' ? 'dt' : 'simTime'};`
+        : `    _ = arrayLength(&${b.name});`)).join('\n');
 
     const interfaces: ModuleInterface[] = [];
     for (const [module, nodes] of byModule) {
@@ -201,13 +212,16 @@ export async function deriveInterfaces(x: Graph, chunks: Readonly<Record<keyof t
         if (kind === 'ng.compute.stage') {
             const dispatch = ops.get(requests[0].operation)!;
             const [request] = requests;
-            bindings = dispatch.accesses.map((a, i) => storage(a, 0, i));
+            // Group 0 is the stage's storage buffers; the host's clock a fixed step reads is a uniform, bound beside the camera.
+            const fixed = dispatch.phase === 'fixedStep';
+            bindings = dispatch.accesses.filter(a => resources.get(a.resource)!.usage.includes('storage')).map((a, i) => storage(a, 0, i));
             bindings.push({ group: 1, binding: 0, name: 'camera', declaration: '@group(1) @binding(0) var<uniform> camera: Camera;', resource: '@host#camera', access: 'uniform', version: null, boundBy: 'host' });
+            if (fixed) bindings.push({ group: 1, binding: 1, name: 'sim', declaration: '@group(1) @binding(1) var<uniform> sim: EaSim;', resource: '@host#sim', access: 'uniform', version: null, boundBy: 'host' });
             workgroupSize = args.workgroupSize as number;
             consts = [...strides(bindings), { name: 'EA_INVOCATIONS', value: args.invocations as number }];
             entries = [{ stage: 'compute', entry: request.entry, signature: `fn ${request.entry}(index: u32)`, engineEntry: 'cs_main', path: request.path }];
             usedChunks = ['CameraStruct'];
-            preamble = [chunks.CameraStruct, ...bindings.map(b => b.declaration), constants(consts)].join('\n');
+            preamble = [chunks.CameraStruct, ...(fixed ? [EA_SIM_STRUCT] : []), ...bindings.map(b => b.declaration), constants(consts)].join('\n');
             epilogue = `@compute @workgroup_size(${workgroupSize})\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n${used(bindings)}\n    if (id.x >= EA_INVOCATIONS) { return; }\n    ${request.entry}(id.x);\n}`;
         } else if (kind === 'ng.render.custom_batch') {
             const vertex = requests.find(r => r.stage === 'vertex')!;
@@ -233,7 +247,7 @@ export async function deriveInterfaces(x: Graph, chunks: Readonly<Record<keyof t
             // LightSystem's layout depends on its technique and capacity, which X holds; the host injects its text.
             if (lit) {
                 const capacity = ops.get(`${args.lights as string}#create`)!.args.capacity;
-                injected = { id: 'lights:LightSystem.getShaderLayout', hash: await canonicalHash({ technique: 'standard', capacity }) };
+                injected = { id: LIGHTS_CHUNK, hash: await canonicalHash({ technique: 'standard', capacity }) };
             }
         } else {
             const [fragment] = requests;
@@ -279,6 +293,21 @@ function engineGroup(create: Op): InterfaceBinding[] {
 
 const kindName = (adapterId: string): ModuleInterface['kind'] =>
     (adapterId === 'ng.compute.stage' ? 'compute' : adapterId === 'ng.render.custom_batch' ? 'custom_batch' : 'fullscreen');
+
+/** The chunk a custom batch wired to lights includes: LightSystem's layout, which the host injects (EA5). */
+export const LIGHTS_CHUNK = 'lights:LightSystem.getShaderLayout';
+
+/**
+ * Whether EA4 may author a body against this interface: null when it may, or why not, in the creator's words. Custom
+ * lighting stays gated until the host's lighting chunk and callable contract exist (the candidate-loop design §6): the
+ * interface holds a placeholder there, so a body could not call LightSystem's functions, and every call spent on it
+ * would be lost. Stock materials are lit by the engine and need no authored body. The server refuses the same module.
+ */
+export function notAuthorable(i: Pick<ModuleInterface, 'module' | 'chunks'>): string | null {
+    return i.chunks.some(c => c.id === LIGHTS_CHUNK)
+        ? `${i.module} is a custom batch wired to lights, and custom lighting is not available yet (EA5): light it with a stock material, or leave its lights unwired`
+        : null;
+}
 
 /** The modules whose interface changed between two derivations, or which are new: what EA4 must write again. */
 export function invalidated(before: readonly ModuleInterface[], after: readonly ModuleInterface[]): string[] {

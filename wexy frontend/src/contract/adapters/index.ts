@@ -3,7 +3,8 @@
 // against them (EA3.1). A node names an exact adapter and version, carries its config as bounded JSON text checked
 // against that adapter's closed schema, and wires typed ports to other nodes' outputs. Nothing here resolves, allocates
 // or touches a device: support is static only (Q75 as decided), so a family H marks `unsupported` refuses and every
-// other resolves to data, never to something that runs.
+// other resolves to data, never to something that runs. A config value the manifest gates as unavailable refuses too,
+// from the same data (Q80: `upload`, until Tier 2 brings a content source).
 
 import { checkStrictSubset, pointerToken, schemaIssues } from '../agent';
 import { deepFreeze, type DeepReadonly } from '../engine/frozen';
@@ -56,11 +57,47 @@ export interface LayoutDescriptor {
 /** A descriptor as the registry holds it: frozen, read-only all the way down. */
 export type Adapter = DeepReadonly<AdapterDescriptor>;
 
+/**
+ * A config value the manifest declares but marks unavailable for now (Q80, decided): the node check refuses it from
+ * this data, with its reason. Tier 2 lifts a gate by removing its entry and supplying what the value needs (assets for
+ * `upload`): a data change, with no change to the checks, the resolver's shape or the templates.
+ */
+export interface VariantGate {
+    adapter: string;
+    /** A JSON pointer into the adapter's config (RFC 6901), naming an enum of its schema. */
+    path: string;
+    value: string | number | boolean;
+    reason: string;
+}
+
 export interface AdapterManifest {
     version: string;
     engine: string;
     layouts: Record<BufferLayout, LayoutDescriptor>;
     adapters: AdapterDescriptor[];
+    unavailable: VariantGate[];
+}
+
+const unescapeToken = (t: string) => t.replace(/~1/g, '/').replace(/~0/g, '~');
+
+/** The enum a config schema holds at a pointer through its properties, or null. */
+function enumAt(schema: { readonly [keyword: string]: unknown }, path: string): readonly unknown[] | null {
+    if (!path.startsWith('/')) return null;
+    let at: { readonly [keyword: string]: unknown } | undefined = schema;
+    for (const token of path.slice(1).split('/').map(unescapeToken)) {
+        const props = at?.properties as Readonly<Record<string, { readonly [keyword: string]: unknown }>> | undefined;
+        at = props && Object.hasOwn(props, token) ? props[token] : undefined;
+    }
+    return Array.isArray(at?.enum) ? at.enum as readonly unknown[] : null;
+}
+
+/** The value a parsed config holds at a pointer, or undefined. */
+function valueAt(config: unknown, path: string): unknown {
+    let at = config;
+    for (const token of path.slice(1).split('/').map(unescapeToken)) {
+        at = at !== null && typeof at === 'object' && !Array.isArray(at) && Object.hasOwn(at, token) ? (at as Record<string, unknown>)[token] : undefined;
+    }
+    return at;
 }
 
 const PORT_KINDS: readonly string[] = ['storage_buffer', 'geometry', 'material', 'lights', 'color', 'stage'];
@@ -98,6 +135,25 @@ export function checkManifest(m: DeepReadonly<AdapterManifest>): void {
             if (o.strideFrom && (!required.includes(o.strideFrom) || props[o.strideFrom]?.type !== 'integer')) bad(`${a.id}'s ${o.strideFrom} is not a required integer`);
         }
     }
+    // The variant gates (Q80): each names an adapter, an enum of its config by pointer, a value that enum holds, and its
+    // way out; and leaves that enum a value a node can still take.
+    if (!Array.isArray(m.unavailable)) bad('unavailable is not a list');
+    const gated = new Map<string, Set<unknown>>();
+    for (const g of m.unavailable) {
+        const where = `unavailable ${JSON.stringify(g?.adapter)} ${JSON.stringify(g?.path)}`;
+        if (!g || typeof g !== 'object' || Object.keys(g).sort().join() !== 'adapter,path,reason,value') bad(`${where}: a gate is exactly {adapter, path, value, reason}`);
+        const a = m.adapters.find(x => x.id === g.adapter);
+        const values = a && typeof g.path === 'string' ? enumAt(a.config, g.path) : null;
+        if (!a) bad(`${where}: there is no such adapter`);
+        if (!values || !values.includes(g.value)) bad(`${where}: not an enum of its config that holds ${JSON.stringify(g.value)}`);
+        if (typeof g.reason !== 'string' || !g.reason.trim() || g.reason.length > 200) bad(`${where}: its reason is 1 to 200 characters`);
+        const key = `${g.adapter} ${g.path}`;
+        const set = gated.get(key) ?? new Set<unknown>();
+        if (set.has(g.value)) bad(`${where}: ${JSON.stringify(g.value)} is gated twice`);
+        set.add(g.value);
+        gated.set(key, set);
+        if (values!.every(v => set.has(v))) bad(`${where}: every value of the enum is gated, so no node could take one`);
+    }
 }
 
 /** The manifest's text as embedded, LF line ends, for the hash the tests pin. */
@@ -106,9 +162,11 @@ export const ADAPTER_MANIFEST_TEXT = manifestText.replace(/\r\n/g, '\n');
  * sha256 of ADAPTER_MANIFEST_TEXT, pinned as the backend's AdapterManifest.HASH pins it, so a turn's meta is held to it
  * with no hashing at run time (EA3.6). EA-A1 recomputes it: a manifest changed without its pin fails there.
  */
-export const ADAPTER_MANIFEST_HASH = '1de4e9b80b3d604f712cac856a17e58b66a00cc0d7a981cf88e65fd5fd87ba64';
+export const ADAPTER_MANIFEST_HASH = 'aacc5959c0f66277befb062ee140fa2b0dbae14d7a9fe0796ca032403b7293a3';
 export const ADAPTERS = deepFreeze(JSON.parse(ADAPTER_MANIFEST_TEXT) as AdapterManifest);
 checkManifest(ADAPTERS);
+/** The manifest's own gates: what the node check holds a program to unless a test lifts one, as Tier 2 will (Q80). */
+export const SHIPPED_GATES: readonly DeepReadonly<VariantGate>[] = ADAPTERS.unavailable;
 
 const BY_ID = new Map(ADAPTERS.adapters.map(a => [a.id, a]));
 /** H's family statuses as shipped (src/contract/engine/support.json). */
@@ -167,10 +225,11 @@ const shown = (v: unknown): string => (typeof v === 'string' ? JSON.stringify(v.
 
 /**
  * The program's nodes checked against the registry and H: each, or every diagnostic with its path. `support` is H's
- * family statuses, injected so tests can use a labelled synthetic manifest; the shipped H by default.
+ * family statuses, injected so tests can use a labelled synthetic manifest; the shipped H by default. `gates` are the
+ * manifest's variant gates (Q80), injected so a test can lift one as Tier 2 will; the shipped ones by default.
  */
-export function checkNodes(input: unknown, policy: NodePolicy = NODE_POLICY, support: ReadonlyMap<string, string> = SHIPPED_SUPPORT):
-    { ok: true; nodes: CheckedNode[] } | { ok: false; diagnostics: ResolveDiagnostic[] } {
+export function checkNodes(input: unknown, policy: NodePolicy = NODE_POLICY, support: ReadonlyMap<string, string> = SHIPPED_SUPPORT,
+    gates: readonly DeepReadonly<VariantGate>[] = SHIPPED_GATES): { ok: true; nodes: CheckedNode[] } | { ok: false; diagnostics: ResolveDiagnostic[] } {
     const out: ResolveDiagnostic[] = [];
     const fail = (code: ResolveCode, path: string, nodeId: string | null, message: string) => out.push({ code, path, nodeId, message });
     if (!Array.isArray(input)) {
@@ -228,6 +287,12 @@ export function checkNodes(input: unknown, policy: NodePolicy = NODE_POLICY, sup
         });
         if (strides.length) {
             for (const s of strides) fail('EA_RESOLVE', `${at}/config/${pointerToken(s.key)}`, id, `layout ${s.layout} is ${s.want} floats an element, not ${shown(parsed[s.key])}; only f32 takes the stride it declares`);
+            continue;
+        }
+        // A value the manifest declares and gates (Q80): refused from the same data, with its way out.
+        const gated = gates.filter(g => g.adapter === adapter.id && valueAt(parsed, g.path) === g.value);
+        if (gated.length) {
+            for (const g of gated) fail('EA_CAPABILITY_UNSUPPORTED', `${at}/config${g.path}`, id, `${adapter.id} config ${g.path}: ${shown(g.value)} is not available yet: ${g.reason}`);
             continue;
         }
         if (!Array.isArray(n.inputs) || n.inputs.length > 16) { fail('EA_RESOLVE', `${at}/inputs`, id, 'inputs is a list of at most 16'); continue; }

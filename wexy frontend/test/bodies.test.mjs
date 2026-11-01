@@ -21,7 +21,7 @@ const sha = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
 /** The EA-I world: one interface of each kind (motion, water, sky). */
 function world() {
     return [
-        node('instances', 'ng.buffer.storage', { elements: 64, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'upload' }),
+        node('instances', 'ng.buffer.storage', { elements: 64, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'zero' }),
         node('field', 'ng.buffer.storage', { elements: 4096, layout: 'f32', strideFloats: 4, pingPong: true, init: 'zero' }),
         node('move', 'ng.compute.stage', { module: 'motion', entry: 'advance', workgroupSize: 64, invocations: 64, phase: 'fixedStep' },
             [from('reads', 'field', 'buffer'), from('writes', 'instances', 'buffer')]),
@@ -41,6 +41,14 @@ assert.equal(resolved.ok, true, JSON.stringify(resolved.diagnostics));
 const derived = await deriveInterfaces(resolved.graph);
 assert.equal(derived.ok, true, JSON.stringify(derived.diagnostics));
 const I = Object.fromEntries(derived.interfaces.map(i => [i.module, i]));
+/** The motion stage at frame, not at a fixed step: no clock of its own in ea-abi.v2 (Q81), the camera's time only. */
+const FRAME_MOTION = await (async () => {
+    const w = world();
+    w[2].config = JSON.stringify({ module: 'motion', entry: 'advance', workgroupSize: 64, invocations: 64, phase: 'frame' });
+    const r = await resolveProgram(w);
+    assert.equal(r.ok, true, JSON.stringify(r.diagnostics));
+    return (await deriveInterfaces(r.graph)).interfaces.find(i => i.module === 'motion');
+})();
 
 const MOTION = [
     'fn advance(index: u32) {',
@@ -107,6 +115,8 @@ test('EA-M1 a minimal body of each kind passes its interface: the compute stage,
         assert.equal(checked.interfaceHash, I[module].interfaceHash);
         assert.equal(checked.checker, BODY_CHECKER);
     }
+    // A fixed step reads its own clock (Q81): its dt, its time and its number are the host's names.
+    assert.deepEqual(lintBody(I.motion, inMotion('    let t = sim.time + sim.dt * f32(sim.step);', '    b_instances[index] = t;')), []);
     // vec3f and vec3<f32> are one type: an entry may spell its signature either way.
     assert.deepEqual(errors(lintBody(I.sky, SKY.replace('fn dusk(uv: vec2<f32>) -> vec4<f32>', 'fn dusk(uv: vec2f) -> vec4f'))), []);
 });
@@ -134,16 +144,31 @@ test('EA-M2 each way a body breaks its form is refused at its line, in words a r
     refuses(I.sky, SKY.replace('let f = b_field_current[0] * 0.0;', 'let f = textureSample(t, s, uv).r;'), 'capability', 13);
     refuses(I.motion, inMotion('    var<workgroup> shared_sum: f32;'), 'address-space', 2);
     refuses(I.motion, inMotion('    let a: array<f32, 100> = array<f32, 100>();'), 'array', 2, /at most 64/);
+    // An array's size is read from tokens (the review of 10-31): one the dial cannot read refuses, a hexadecimal size
+    // counts as its value, every dimension is judged, and nested arrays multiply, as nested loops do.
+    refuses(I.motion, inMotion('    var data: array<f32, 0x100000>;'), 'array', 2, /an array of 1048576; at most 64/);
+    refuses(I.motion, inMotion('    var data: array<f32, 64 + 1>;'), 'array', 2, /literal whole number.*`64 \+ 1` is not/);
+    refuses(I.motion, inMotion('    var data: array<array<f32, 64>, 1000000>;'), 'array', 2, /an array of 1000000/);
+    refuses(I.motion, inMotion('    var data: array<array<f32, 16>, 8>;'), 'array', 2, /8 arrays of 16 values: 128 in all; at most 64/);
+    refuses(I.motion, `const N = 100000u;\n${inMotion('    var data: array<f32, N>;')}`, 'array', 3, /`N` is not/);
+    refuses(I.motion, inMotion('    var data: array<f32>;'), 'array', 2, /literal size of at most 64/);
+    refuses(I.motion, inMotion(`    let table = array(${Array(65).fill('0.0').join(', ')});`), 'array', 2, /holds 65 values; at most 64/);
+    refuses(I.motion, `const TABLE = array<u32, 256>();\n${MOTION}`, 'array', 1, /an array of 256/);
+    assert.deepEqual(errors(lintBody(I.motion, inMotion('    var a: array<f32, 0x40u>;', '    var b = array<array<f32, 8>, 8>();',
+        '    let c = array(1.0, 2.0, 3.0,);', '    let d = array<vec4<f32>, 4>();', '    b_instances[index] = a[0] + b[0][0] + c[0] + d[0].x;'))), [],
+        'sizes within the dial pass, a hexadecimal one and a trailing comma included');
     refuses(I.motion, inMotion('    let move = 1.0;'), 'name', 2, /reserved word/);
     refuses(I.motion, inMotion('    let camera = 1.0;'), 'name', 2, /the host's/);
     // A local named after a built-in the same function calls hides it (h1's rule, kept).
     refuses(I.motion, inMotion('    let step = 0.5;', '    let s = step(0.1, f32(index));'), 'name', 2, /can no longer be called/);
-    // The host's names come from the interface itself, prefix or none: Q81's clock adds an unprefixed `sim` (ABI v2).
-    const clocked = { ...I.motion, bindings: [...I.motion.bindings, { ...I.motion.bindings[2], binding: 1, name: 'sim' }],
-        preamble: `${I.motion.preamble}\n@group(1) @binding(1) var<uniform> sim: vec4<f32>;` };
-    refuses(clocked, `const sim: f32 = 1.0;\n${MOTION}`, 'name', 1, /the names its preamble declares/);
-    refuses(clocked, inMotion('    let sim = 1.0;'), 'name', 2, /the host's/);
-    assert.deepEqual(errors(lintBody(I.motion, `const sim: f32 = 1.0;\n${MOTION}`)), [], 'and only where the interface declares it');
+    // The host's names come from the interface itself, prefix or none: Q81's clock is an unprefixed `sim` (ea-abi.v2),
+    // which only a fixed-step stage's interface declares. At module scope it is the host's everywhere, as `ecs` is
+    // (ENTRY_EXCLUDED: a name generated code uses); a local hides it only where the interface declares it.
+    refuses(I.motion, `const sim: f32 = 1.0;\n${MOTION}`, 'name', 1, /the names its preamble declares/);
+    refuses(I.motion, `const EaSim: f32 = 1.0;\n${MOTION}`, 'name', 1, /the names its preamble declares/);
+    refuses(FRAME_MOTION, `const sim: f32 = 1.0;\n${MOTION}`, 'name', 1, /a name the host's code uses/);
+    refuses(I.motion, inMotion('    let sim = 1.0;'), 'name', 2, /the host's/);
+    assert.deepEqual(errors(lintBody(FRAME_MOTION, inMotion('    let sim = 1.0;', '    b_instances[index] = sim;'))), [], 'a local, only where the interface declares it');
 });
 
 test('EA-M3 a value nothing declares is a warning, not a refusal: the compiler decides it, and no repair is spent', async () => {
@@ -152,6 +177,13 @@ test('EA-M3 a value nothing declares is a warning, not a refusal: the compiler d
     assert.deepEqual(found.map(f => [f.code, f.line, f.severity]), [['unresolved', 2, 'warning']]);
     assert.match(found[0].message, /`speed`/);
     assert.equal((await checkBody(I.motion, body)).ok, true);
+    // At a frame stage there is no clock: `sim` is a name nothing declares there, so it warns (Q81).
+    assert.deepEqual(lintBody(FRAME_MOTION, inMotion('    b_instances[index] = sim.dt;')).map(f => [f.code, f.line, f.severity]), [['unresolved', 2, 'warning']]);
+    // A module-scope constant's type and value are read as a function's are (the review of 10-31).
+    assert.deepEqual(lintBody(I.motion, `const C = missingValue;\n${MOTION}`).map(f => [f.code, f.line, f.severity]), [['unresolved', 1, 'warning']]);
+    assert.deepEqual(lintBody(I.motion, `const C: Mystery = 1.0;\n${MOTION}`).map(f => [f.code, f.line, f.severity]), [['unresolved', 1, 'warning']]);
+    // Said once, where it is first used, whether that is a constant or a function.
+    assert.deepEqual(lintBody(I.motion, `const C = speed * 2.0;\n${inMotion('    b_instances[index] = speed;')}`).map(f => [f.code, f.line]), [['unresolved', 1]]);
 });
 
 test('EA-M4 the auto-fix runs once; the checked text is the one hashed, LF only; the model\'s answer is kept beside it', async () => {
@@ -180,6 +212,10 @@ test('EA-M5 structure is read from tokens: locals and F1 loops pass; recursion, 
     assert.equal(mutual.filter(f => f.code === 'recursion').length, 1, 'one cycle, said once');
     assert.match(mutual.find(f => f.code === 'recursion').message, /`ping` calls `pong` calls `ping`/);
     refuses(I.motion, inMotion('    b_instances[index] = noise3(vec3f(0.0));'), 'call', 2, /`noise3`/);
+    // A module-scope constant's calls must resolve too (the review of 10-31); whether its value is a constant
+    // expression is the compiler's (EA5), so a constant calling WGSL's built-ins, its types or a helper is not refused.
+    refuses(I.motion, `const C = mystery(1);\n${MOTION}`, 'call', 1, /`mystery`/);
+    assert.deepEqual(errors(lintBody(I.motion, `const C = vec3<f32>(sin(1.0), 0.0, 0.0);\nconst D = f32(EA_INVOCATIONS) * C.x;\n${MOTION}`)), []);
     // A structure that cannot be read refuses, and nothing past it is judged: not even the stray brace's place.
     assert.deepEqual(lintBody(I.motion, MOTION.slice(0, -1)).map(f => f.code), ['balance']);
     assert.deepEqual(lintBody(I.motion, `${MOTION}\n}`).map(f => [f.code, f.line]), [['balance', 7]]);
@@ -214,6 +250,37 @@ test('EA-M6 the final lint decides; comments are never rewritten; a body\'s own 
     assert.equal((await checkBody(I.motion, own)).ok, true);
     // Every rule of h1's auto-fix has its name here, or it would not be applied to a module body at all.
     assert.deepEqual(Object.keys(AUTOFIX_SOURCE_NAMES).sort(), AUTOFIX_RULES.map(r => r.name).sort());
+    // A comment inside a call no longer hides it from its fix (the review of 10-31). A rename touches only the name,
+    // so the comment stays where it was; a mod rewrite keeps each comment it held, after the rewritten expression.
+    const inside = inMotion('    let x = float /* keep */ (index);', '    let y = mod(f32(index) /* keep */, 2.0);',
+        '    let z = atan(f32(index) /* y */, 1.0) + vec3</* t */float>(1.0).x;', '    b_instances[index] = x + y + z;');
+    const insideChecked = await checkBody(I.motion, inside);
+    assert.equal(insideChecked.ok, true, JSON.stringify(insideChecked.findings));
+    // The first lint's diagnostic says the code alone: the comment it blanked is not a run of spaces in its words.
+    assert.match(insideChecked.initial.find(f => f.code === 'glsl' && f.line === 2).message, /^`float \(` is GLSL/);
+    assert.deepEqual(insideChecked.body.split('\n').slice(1, 4), [
+        '    let x = f32 /* keep */ (index);',
+        '    let y = ((f32(index)) - 2.0 * floor((f32(index)) / 2.0)) /* keep */;',
+        '    let z = atan2(f32(index) /* y */, 1.0) + vec3</* t */f32>(1.0).x;',
+    ]);
+    assert.deepEqual(insideChecked.fixes.map(f => [f.line, f.rule]),
+        [[2, 'float() is f32()'], [3, 'mod(x, y) is x - y * floor(x / y)'], [4, 'vecN<float> is vecNf'], [4, 'atan(y, x) is atan2(y, x)']]);
+    // Without a comment inside, the fix is h1's own text; a nested mod is rewritten outside in, as h1's is; an atan of
+    // one argument is WGSL's own, and stays.
+    assert.equal(fixBody(inMotion('    let v = vec3<float>(1.0);')).body.split('\n')[1], '    let v = vec3f(1.0);');
+    assert.equal(fixBody(inMotion('    let t = atan(1.0);')).body.split('\n')[1], '    let t = atan(1.0);');
+    assert.equal(fixBody(inMotion('    let w = mod(mod(a, 3.0), 2.0);')).body.split('\n')[1],
+        '    let w = (((a - 3.0 * floor(a / 3.0))) - 2.0 * floor(((a - 3.0 * floor(a / 3.0))) / 2.0));');
+    // A rewrite never grows a body past its limit (a nested mod writes its arguments twice): the repair is told of the
+    // mod the model wrote, not of a size it never wrote.
+    const grown = await checkBody(I.motion, inMotion(`    let w = ${'mod('.repeat(30)}f32(index)${', 2.0)'.repeat(30)};`, '    b_instances[index] = w;'));
+    assert.ok(grown.body.length <= BODY_DIAL.maxChars, `${grown.body.length} characters`);
+    assert.ok(grown.skipped.some(s => /line 2: the rewrite would make the body longer than its 12000 characters/.test(s.because)), JSON.stringify(grown.skipped));
+    assert.deepEqual(errors(grown.findings).map(f => [f.code, f.line]), [['glsl', 2]]);
+    // A mod call split across lines is left as written, and said so: no rewrite may change the line count.
+    const split = fixBody(inMotion('    let s = mod(f32(index),', '        2.0);'));
+    assert.equal(split.body, inMotion('    let s = mod(f32(index),', '        2.0);'));
+    assert.ok(split.skipped.some(s => s.rule === 'mod(x, y) is x - y * floor(x / y)' && /line 2: the call spans lines/.test(s.because)), JSON.stringify(split.skipped));
 });
 
 test('EA-M7 L3: the assembled module places the body; a compiler\'s messages land on the body, the host or nowhere, labelled fake', async () => {

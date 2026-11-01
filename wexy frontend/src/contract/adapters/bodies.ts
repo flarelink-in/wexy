@@ -3,11 +3,11 @@
 // (Q79, decided): a body holds the interface's entries, its own helper functions and its own constants, nothing else.
 //
 // L1 lints it: its structure is read from tokens, nested block comments included, never from a regex that assumes one
-// function, and a structure it cannot read refuses. L2 rewrites h1's known slips once, with the body's comments and its
-// own names left alone. L1 then lints the rewritten text, and that verdict decides: the text it judged is the text that
-// is hashed (P9). L3, the compiler, is a seam: a scripted fake here, every verdict it yields labelled so, and the
-// device's in EA5, whose messages map back through the assembled module's lines. Nothing here compiles, allocates or
-// calls a model.
+// function, and a structure it cannot read refuses. L2 rewrites h1's known slips once, over the same tokens, so a
+// comment inside a call neither hides the call nor is lost, and the body's own names are left alone. L1 then lints the
+// rewritten text, and that verdict decides: the text it judged is the text that is hashed (P9). L3, the compiler, is a
+// seam: a scripted fake here, every verdict it yields labelled so, and the device's in EA5, whose messages map back
+// through the assembled module's lines. Nothing here compiles, allocates or calls a model.
 
 import { AUTOFIX_RULES, type AutoFix } from '../autofix';
 import { deepFreeze, type DeepReadonly } from '../engine/frozen';
@@ -88,7 +88,8 @@ const INNER_REFUSED: ReadonlySet<string> = new Set(['fn', 'struct', 'enable', 'r
 interface Param { name: string; type: string; line: number }
 interface Header { name: string; params: Param[]; returns: string }
 interface Fn { name: string; line: number; header: Header; start: number; open: number; close: number }
-interface Const { name: string; line: number }
+/** A module-scope constant: from its `const` (start) to the index after its `;` (end). */
+interface Const { name: string; line: number; start: number; end: number }
 type Fail = (line: number | null, code: string, message: string, severity?: 'error' | 'warning') => void;
 
 /**
@@ -317,9 +318,10 @@ function declarations(tokens: readonly Token[], match: ReadonlyMap<number, numbe
         }
         if (t.kind === 'ident' && t.text === 'const') {
             const name = tokens[i + 1];
-            if (name?.kind === 'ident') consts.push({ name: name.text, line: name.line });
+            const end = skip(tokens, i, match);
+            if (name?.kind === 'ident') consts.push({ name: name.text, line: name.line, start: i, end });
             else fail(t.line, 'scope', 'a `const` needs a name');
-            i = skip(tokens, i, match);
+            i = end;
             continue;
         }
         if (t.text === ';') { i++; continue; }
@@ -430,15 +432,13 @@ export function lintBody(iface: Interface, answer: string): BodyFinding[] {
         }
     }
 
-    // Each function: its loops, its locals, its calls, the names it uses.
+    // Each function: its loops and its locals.
     const edges = new Map<string, Set<string>>(fns.map(f => [f.name, new Set<string>()]));
     const own = new Set<string>(moduleNames);
-    const reportedCall = new Set<string>();
-    const reportedName = new Set<string>();
+    const scopes = new Map<Fn, { names: { name: string; line: number }[]; inScope: Set<string>; calls: Set<string> }>();
     for (const fn of fns) {
         const locals: { name: string; line: number }[] = [];
         const loops: { start: number; end: number; bound: number; line: number }[] = [];
-        const calls = new Set<string>();
         for (let k = fn.open + 1; k < fn.close; k++) {
             const t = tokens[k];
             if (t.kind !== 'ident' || tokens[k - 1]?.text === '.') continue;
@@ -481,29 +481,57 @@ export function lintBody(iface: Interface, answer: string): BodyFinding[] {
 
         const names = [...fn.header.params.filter(p => p.name).map(p => ({ name: p.name, line: p.line })), ...locals];
         for (const n of names) own.add(n.name);
-        const inScope = new Set(names.map(n => n.name));
-        for (let k = fn.start; k <= fn.close; k++) {
+        scopes.set(fn, { names, inScope: new Set(names.map(n => n.name)), calls: new Set() });
+    }
+
+    // The names every declaration uses, functions and module-scope constants alike, in the body's order: each call
+    // resolves, and a value nothing declares is said once, where it is first used. A constant's value is the compiler's
+    // to work out, so whether it is a constant expression is EA5's to say; its calls still resolve here (the review of
+    // 10-31: a constant's value was not read at all).
+    const reportedCall = new Set<string>();
+    const reportedName = new Set<string>();
+    const unknownCall = (t: Token, inScope: ReadonlySet<string>) => {
+        if (CALLABLE.has(t.text) || CONSTRUCTORS.has(t.text) || host.structs.has(t.text) || BANNED.has(t.text) || GLSL_NAMES.has(t.text)
+            || inScope.has(t.text) || reportedCall.has(t.text)) return;
+        reportedCall.add(t.text);
+        fail(t.line, 'call', `calls \`${t.text}\`, which is neither a function of this body, a WGSL built-in nor a type: define it here, or use a built-in`);
+    };
+    /** The identifiers from `from` to `to` (exclusive): each call handed to `called`, each value checked against what is declared. */
+    const uses = (from: number, to: number, inScope: ReadonlySet<string>, called: (t: Token) => void) => {
+        for (let k = from; k < to; k++) {
             const t = tokens[k];
-            if (t.kind !== 'ident' || k === fn.start + 1) continue;
+            if (t.kind !== 'ident') continue;
             const prev = tokens[k - 1]?.text;
             if (prev === '.' || prev === '@' || RESERVED_WORDS.has(t.text)) continue;
             let next = k + 1;
             if (TEMPLATED.has(t.text) && tokens[next]?.text === '<') next = afterTemplate(tokens, next);
             if (tokens[next]?.text === '(') {
-                calls.add(t.text);
-                if (fnNames.has(t.text)) {
-                    edges.get(fn.name)!.add(t.text);
-                } else if (!CALLABLE.has(t.text) && !CONSTRUCTORS.has(t.text) && !host.structs.has(t.text) && !BANNED.has(t.text)
-                    && !GLSL_NAMES.has(t.text) && !inScope.has(t.text) && !reportedCall.has(t.text)) {
-                    reportedCall.add(t.text);
-                    fail(t.line, 'call', `calls \`${t.text}\`, which is neither a function of this body, a WGSL built-in nor a type: define it here, or use a built-in`);
-                }
+                called(t);
             } else if (!KNOWN.has(t.text) && !host.names.has(t.text) && !moduleNames.has(t.text) && !inScope.has(t.text) && !reportedName.has(t.text)) {
                 reportedName.add(t.text);
                 fail(t.line, 'unresolved', `uses \`${t.text}\`, which nothing declares here: the compiler will decide (EA5); declare it, or use a name the interface gives`, 'warning');
             }
         }
+    };
+    const NOTHING: ReadonlySet<string> = new Set();
+    const inOrder = [...fns.map(fn => ({ start: fn.start, fn })), ...consts.map(c => ({ start: c.start, c }))].sort((a, b) => a.start - b.start);
+    for (const d of inOrder) {
+        if ('fn' in d) {
+            const { fn } = d;
+            const scope = scopes.get(fn)!;
+            // From after the function's name: `fn` is a keyword, and the name is the declaration itself.
+            uses(fn.start + 2, fn.close + 1, scope.inScope, t => {
+                scope.calls.add(t.text);
+                if (fnNames.has(t.text)) edges.get(fn.name)!.add(t.text);
+                else unknownCall(t, scope.inScope);
+            });
+        } else {
+            uses(d.c.start + 2, d.c.end, NOTHING, t => { if (!fnNames.has(t.text)) unknownCall(t, NOTHING); });
+        }
+    }
 
+    for (const fn of fns) {
+        const { names, calls } = scopes.get(fn)!;
         // A local or parameter: not a reserved word, not the host's, and not a built-in this function then calls.
         for (const n of names) {
             if (RESERVED_WORDS.has(n.name)) fail(n.line, 'name', `\`${n.name}\` is a reserved word in WGSL and cannot name a variable; choose another name`);
@@ -541,18 +569,112 @@ export function lintBody(iface: Interface, answer: string): BodyFinding[] {
     for (const f of fns) if (!state.has(f.name)) visit(f.name);
 
     // The dial's arrays, and GLSL that survived the auto-fix: said in WGSL's words, unless the body named it itself.
-    for (const m of text.matchAll(/\barray\s*<\s*[\w<>]+\s*(?:,\s*(\d+)[iu]?\s*)?>/g)) {
-        const line = lineOf(m.index!);
-        if (m[1] === undefined) fail(line, 'array', `an array needs a literal size of at most ${BODY_DIAL.maxArray}: \`array<f32, 8>\``);
-        else if (Number(m[1]) > BODY_DIAL.maxArray) fail(line, 'array', `an array of ${m[1]}; at most ${BODY_DIAL.maxArray} elements`);
-    }
+    arrays(tokens, match, fail);
     for (const m of text.matchAll(/(?<![\w.])mod\s*\(/g)) {
         if (!own.has('mod')) fail(lineOf(m.index!), 'glsl', 'there is no `mod()` in WGSL: write `x - y * floor(x / y)`');
     }
     for (const m of text.matchAll(/(?<![\w.])(float|int|uint|double)\s*\(|\bvec[234]\s*<\s*(float|int|uint)\s*>/g)) {
-        if (!own.has(m[1] ?? m[2])) fail(lineOf(m.index!), 'glsl', `\`${m[0].trim()}\` is GLSL: the WGSL scalars are f32, i32 and u32 (\`f32(x)\`, \`vec3f(…)\`)`);
+        // A comment inside it is blank here: say the code alone, its spaces closed up.
+        if (!own.has(m[1] ?? m[2])) fail(lineOf(m.index!), 'glsl', `\`${m[0].replace(/\s+/g, ' ').trim()}\` is GLSL: the WGSL scalars are f32, i32 and u32 (\`f32(x)\`, \`vec3f(…)\`)`);
     }
     return done();
+}
+
+/**
+ * The arguments between `from` and `to` (exclusive), split at their own commas, as index ranges. Brackets and template
+ * lists are passed over whole, so a comma inside one is its own; a trailing comma, which WGSL allows, ends no argument.
+ */
+function argumentsOf(tokens: readonly Token[], from: number, to: number, match: ReadonlyMap<number, number>): [number, number][] {
+    const out: [number, number][] = [];
+    let start = from;
+    for (let i = from; i < to; i++) {
+        const t = tokens[i];
+        if (t.text === '(' || t.text === '[') {
+            i = match.get(i)!;
+        } else if (t.kind === 'ident' && TEMPLATED.has(t.text) && tokens[i + 1]?.text === '<') {
+            const after = afterTemplate(tokens, i + 1);
+            if (after > i + 1) i = after - 1;
+        } else if (t.text === ',') {
+            out.push([start, i]);
+            start = i + 1;
+        }
+    }
+    if (start < to) out.push([start, to]);
+    return out;
+}
+
+/** The value of a literal whole number as WGSL writes one, decimal or hexadecimal, `i` or `u` or neither; else null. */
+function wholeNumber(tokens: readonly Token[], [from, to]: [number, number]): number | null {
+    if (to - from !== 1 || tokens[from].kind !== 'number') return null;
+    const m = /^(?:0[xX]([0-9a-fA-F]+)|(\d+))[iu]?$/.exec(tokens[from].text);
+    return m ? (m[1] !== undefined ? Number.parseInt(m[1], 16) : Number(m[2])) : null;
+}
+
+/**
+ * The dial's arrays (Q79, h1's 64), read from tokens (the review of 10-31: a regex read one decimal size and missed a
+ * hexadecimal one, an expression and an outer array): `array<T, N>` with N a literal whole number; `array(…)` holding
+ * the values it lists; and an array of arrays holding their product, as nested loops multiply. A size the lint cannot
+ * read, a name or an expression, refuses: the dial bounds what one invocation holds, and only a literal shows it. Each
+ * array is judged at its own line; an outer array is not judged again on an inner one's account. A value an inferred
+ * `array(…)` lists by name counts as one: the lint reads tokens, not types.
+ */
+function arrays(tokens: readonly Token[], match: ReadonlyMap<number, number>, fail: Fail): void {
+    const max = BODY_DIAL.maxArray;
+    const example = '`array<f32, 8>`';
+    const sizes = new Map<number, number | null>();
+    const isArray = (i: number | undefined) => i !== undefined && tokens[i]?.kind === 'ident' && tokens[i].text === 'array' && tokens[i - 1]?.text !== '.';
+    /** How many values the array at `at` holds, or null once it is refused (or has no size to judge). */
+    const sizeAt = (at: number): number | null => {
+        if (sizes.has(at)) return sizes.get(at)!;
+        sizes.set(at, null);
+        const line = tokens[at].line;
+        let count: number | null;
+        let element: number | undefined;
+        let listed = false;
+        if (tokens[at + 1]?.text === '<') {
+            const after = afterTemplate(tokens, at + 1);
+            if (after === at + 1) {
+                fail(line, 'array', `this array's \`<\` never closes: an array takes its type and a literal size, as ${example}`);
+                return null;
+            }
+            const args = argumentsOf(tokens, at + 2, after - 1, match);
+            if (args.length !== 2) {
+                fail(line, 'array', args.length === 1 ? `an array needs a literal size of at most ${max}: ${example}` : `an array takes its type and a literal size, as ${example}`);
+                return null;
+            }
+            count = wholeNumber(tokens, args[1]);
+            if (count === null) {
+                const said = tokens.slice(args[1][0], args[1][1]).map(t => t.text).join(' ');
+                fail(line, 'array', `an array's size must be a literal whole number of at most ${max}, as ${example}; \`${said}\` is not`);
+                return null;
+            }
+            element = args[0][0];
+        } else if (tokens[at + 1]?.text === '(') {
+            const args = argumentsOf(tokens, at + 2, match.get(at + 1)!, match);
+            count = args.length;
+            element = args[0]?.[0];
+            listed = true;
+        } else {
+            return null;
+        }
+        if (count < 1) {
+            fail(line, 'array', `an array holds at least one value: ${example}`);
+            return null;
+        }
+        if (count > max) {
+            fail(line, 'array', listed ? `\`array(…)\` holds ${count} values; at most ${max}` : `an array of ${count}; at most ${max} elements`);
+            return null;
+        }
+        const each = isArray(element) ? sizeAt(element!) : 1;
+        if (each === null) return null;
+        if (count * each > max) {
+            fail(line, 'array', `${count} arrays of ${each} values: ${count * each} in all; at most ${max}`);
+            return null;
+        }
+        sizes.set(at, count * each);
+        return count * each;
+    };
+    tokens.forEach((_, i) => { if (isArray(i)) sizeAt(i); });
 }
 
 /** Each finding once, in line order, errors before warnings on a line. */
@@ -568,27 +690,122 @@ function finish(found: readonly BodyFinding[]): BodyFinding[] {
         .sort((a, b) => (a.line ?? 0) - (b.line ?? 0) || (a.severity === b.severity ? 0 : a.severity === 'error' ? -1 : 1));
 }
 
+/** What L2 reads: the body, which of its characters are comments, its tokens and their brackets' pairs. */
+interface Scan { body: string; mask: Uint8Array; tokens: Token[]; match: Map<number, number> }
+/** One rewrite: [from, to) of the body becomes `text`. Never across a line's end, so the line count never changes. */
+interface Edit { from: number; to: number; text: string; line: number }
+/** Says why one place was left as it was. */
+type Note = (line: number, because: string) => void;
+
+/** The body read for L2, or why it cannot be: a comment that never closes, brackets that do not balance. */
+function scanOf(body: string): Scan | string {
+    const { mask, unclosed } = comments(body);
+    if (unclosed !== null) return 'a block comment never closes, so code and comment cannot be told apart';
+    const text = blank(body, mask);
+    const tokens = tokenize(text, lineIndex(text), () => {});
+    if (!balanced(tokens, () => {})) return 'its brackets do not balance, so where a call ends cannot be read';
+    return { body, mask, tokens, match: pairs(tokens) };
+}
+
+const holdsComment = (s: Scan, from: number, to: number) => s.mask.subarray(from, to).includes(1);
+
+/** The comments between `from` and `to`, each as written. */
+function commentsIn(s: Scan, from: number, to: number): string[] {
+    const out: string[] = [];
+    for (let p = from; p < to; p++) {
+        if (!s.mask[p]) continue;
+        let q = p;
+        while (q < to && s.mask[q]) q++;
+        out.push(s.body.slice(p, q));
+        p = q;
+    }
+    return out;
+}
+
+/** Each call of `name`: the identifier, not a member, whose next token is its `(`; a comment or a line end may lie between. */
+const callsTo = (s: Scan, name: string) => s.tokens.flatMap((t, i) =>
+    (t.kind === 'ident' && t.text === name && s.tokens[i - 1]?.text !== '.' && s.tokens[i + 1]?.text === '(' ? [i] : []));
+
+/** The called name alone renamed: whatever lies between it and its `(`, a comment or a line end, stays where it was. */
+const renamed = (s: Scan, name: string, to: string, arity?: number): Edit[] => callsTo(s, name)
+    .filter(i => arity === undefined || argumentsOf(s.tokens, i + 2, s.match.get(i + 1)!, s.match).length === arity)
+    .map(i => ({ from: s.tokens[i].at, to: s.tokens[i].at + name.length, text: to, line: s.tokens[i].line }));
+
+/** `vecN<float>` as h1 writes it, `vecNf`; with a comment or a line end inside, only the scalar is renamed (`vecN<f32>`). */
+function vectors(s: Scan, scalar: string, to: string, suffix: string): Edit[] {
+    const edits: Edit[] = [];
+    s.tokens.forEach((t, i) => {
+        const [open, inner, close] = [s.tokens[i + 1], s.tokens[i + 2], s.tokens[i + 3]];
+        if (t.kind !== 'ident' || !/^vec[234]$/.test(t.text) || s.tokens[i - 1]?.text === '.' || open?.text !== '<' || inner?.text !== scalar
+            || (close?.text !== '>' && close?.text !== '>>')) return;
+        // `>>` closes an outer list too: only its first `>` is this vector's.
+        const end = close.at + 1;
+        if (holdsComment(s, t.at, end) || s.body.slice(t.at, end).includes('\n')) edits.push({ from: inner.at, to: inner.at + scalar.length, text: to, line: inner.line });
+        else edits.push({ from: t.at, to: end, text: `${t.text}${suffix}`, line: t.line });
+    });
+    return edits;
+}
+
+/** h1's `wrap`: an argument in parentheses unless it is a plain name or number, so the rewrite keeps its precedence. */
+const wrap = (text: string) => (/^[\w.]+$/.test(text) ? text : `(${text})`);
+
 /**
- * Each rule of h1's auto-fix, by the name it rewrites. A body that declares that name keeps its own calls: rewriting
- * `float(x)` to `f32(x)` would bypass a helper the body named `float` (the design §7). A rule with no entry here is not
- * applied to a module body at all.
+ * `mod(x, y)` as `(x - y * floor(x / y))`, h1's rewrite, for a call of two arguments on one line. The rewrite writes x
+ * and y twice, so a comment inside the call is kept once, after the rewritten expression. A call across lines is left
+ * as written, and said so: its rewrite could not keep the line count.
  */
-export const AUTOFIX_SOURCE_NAMES: Readonly<Record<string, string>> = {
-    'float() is f32()': 'float',
-    'int() is i32()': 'int',
-    'uint() is u32()': 'uint',
-    'vecN<float> is vecNf': 'float',
-    'vecN<int> is vecNi': 'int',
-    'vecN<uint> is vecNu': 'uint',
-    'inversesqrt() is inverseSqrt()': 'inversesqrt',
-    'atan(y, x) is atan2(y, x)': 'atan',
-    'mod(x, y) is x - y * floor(x / y)': 'mod',
+function modulo(s: Scan, note: Note): Edit[] {
+    return callsTo(s, 'mod').flatMap(i => {
+        const name = s.tokens[i];
+        const closeAt = s.match.get(i + 1)!;
+        const close = s.tokens[closeAt];
+        if (close.line !== name.line) {
+            note(name.line, 'the call spans lines, so it is left as written for the lint and the repair');
+            return [];
+        }
+        const args = argumentsOf(s.tokens, i + 2, closeAt, s.match);
+        if (args.length !== 2 || args.some(([a, b]) => a === b)) return [];
+        const [x, y] = args.map(([a, b]) => {
+            const from = s.tokens[a].at;
+            const to = s.tokens[b - 1].at + s.tokens[b - 1].text.length;
+            const text = s.body.slice(from, to);
+            return wrap(holdsComment(s, from, to) ? blank(text, s.mask.subarray(from, to)).replace(/\s+/g, ' ').trim() : text);
+        });
+        const kept = commentsIn(s, name.at, close.at + 1);
+        return [{ from: name.at, to: close.at + 1, text: `(${x} - ${y} * floor(${x} / ${y}))${kept.length ? ` ${kept.join(' ')}` : ''}`, line: name.line }];
+    });
+}
+
+/**
+ * h1's rules (`AUTOFIX_RULES`, by name), each over the body's tokens, with the name it rewrites. A body that declares
+ * that name keeps its own calls: rewriting `float(x)` to `f32(x)` would bypass a helper the body named `float` (the
+ * design §7). A rule h1 adds with no entry here is not applied to a module body at all, and said so.
+ */
+const REWRITES: Readonly<Record<string, { source: string; edits: (s: Scan, note: Note) => Edit[] }>> = {
+    'float() is f32()': { source: 'float', edits: s => renamed(s, 'float', 'f32') },
+    'int() is i32()': { source: 'int', edits: s => renamed(s, 'int', 'i32') },
+    'uint() is u32()': { source: 'uint', edits: s => renamed(s, 'uint', 'u32') },
+    'vecN<float> is vecNf': { source: 'float', edits: s => vectors(s, 'float', 'f32', 'f') },
+    'vecN<int> is vecNi': { source: 'int', edits: s => vectors(s, 'int', 'i32', 'i') },
+    'vecN<uint> is vecNu': { source: 'uint', edits: s => vectors(s, 'uint', 'u32', 'u') },
+    'inversesqrt() is inverseSqrt()': { source: 'inversesqrt', edits: s => renamed(s, 'inversesqrt', 'inverseSqrt') },
+    'atan(y, x) is atan2(y, x)': { source: 'atan', edits: s => renamed(s, 'atan', 'atan2', 2) },
+    'mod(x, y) is x - y * floor(x / y)': { source: 'mod', edits: modulo },
 };
+
+/** Each of h1's rules with a module-aware form, by the name it rewrites. */
+export const AUTOFIX_SOURCE_NAMES: Readonly<Record<string, string>> = Object.freeze(Object.fromEntries(Object.entries(REWRITES).map(([rule, r]) => [rule, r.source])));
+
+/**
+ * A rule rewrites nested calls outside in, a pass at a time, as h1's does (8 a line); this bounds the passes, and the
+ * body's own size bounds the text, since a nested `mod` rewrite writes its arguments twice.
+ */
+const MAX_PASSES = 8;
 
 export interface FixedBody {
     body: string;
     fixes: AutoFix[];
-    /** The rules left out for this body, and why. */
+    /** The rules left out for this body, and the places a rule left as they were, each with why. */
     skipped: { rule: string; because: string }[];
 }
 
@@ -600,52 +817,82 @@ function declaredNames(text: string): Set<string> {
     return names;
 }
 
+/** The edits that do not overlap, leftmost first: an outer call before the calls inside it, which a later pass reaches. */
+function disjoint(edits: readonly Edit[]): Edit[] {
+    const out: Edit[] = [];
+    let end = -1;
+    for (const e of [...edits].sort((a, b) => a.from - b.from)) {
+        if (e.from >= end) {
+            out.push(e);
+            end = e.to;
+        }
+    }
+    return out;
+}
+
 /**
- * L2: h1's rules, once, over a module body. Comments are never rewritten, block comments included; a rule whose name
- * the body declares itself is skipped; the line count never changes. A body whose comments cannot be read is returned
- * as it is, and its lint refuses it.
+ * L2: h1's rules, once each, over a module body's tokens (the review of 10-31: rules run on the code between comments
+ * missed a call a comment sat inside). Comments are never rewritten, block comments included: a rename touches only
+ * the name, and a `mod` rewrite keeps each comment it held, after the rewritten expression. A rule whose name the body
+ * declares itself is skipped; the line count never changes. A body whose comments or brackets cannot be read is
+ * returned as it is, and its lint refuses it.
  */
 export function fixBody(answer: string): FixedBody {
     const body = answer.replace(/\r\n?/g, '\n');
-    const { mask, unclosed } = comments(body);
-    if (unclosed !== null) {
-        return { body, fixes: [], skipped: AUTOFIX_RULES.map(r => ({ rule: r.name, because: 'a block comment never closes, so code and comment cannot be told apart' })) };
-    }
-    const own = declaredNames(blank(body, mask));
-    const skipped: FixedBody['skipped'] = [];
-    const rules = AUTOFIX_RULES.filter(r => {
-        const name = Object.hasOwn(AUTOFIX_SOURCE_NAMES, r.name) ? AUTOFIX_SOURCE_NAMES[r.name] : undefined;
-        if (name === undefined) skipped.push({ rule: r.name, because: 'it has no module-aware mapping, so it is not applied to a module body' });
-        else if (own.has(name)) skipped.push({ rule: r.name, because: `the body declares \`${name}\` itself, so its calls are its own` });
-        else return true;
-        return false;
-    });
+    const first = scanOf(body);
+    if (typeof first === 'string') return { body, fixes: [], skipped: AUTOFIX_RULES.map(r => ({ rule: r.name, because: first })) };
+    let scan: Scan = first;
+    const own = declaredNames(blank(body, scan.mask));
     const fixes: AutoFix[] = [];
-    let start = 0;
-    const lines = body.split('\n').map((line, n) => {
-        const at = start;
-        start += line.length + 1;
-        let out = '';
-        for (let j = 0; j < line.length;) {
-            const comment = mask[at + j] === 1;
-            let k = j;
-            while (k < line.length && (mask[at + k] === 1) === comment) k++;
-            let part = line.slice(j, k);
-            if (!comment) {
-                for (const rule of rules) {
-                    const next = rule.apply(part);
-                    if (next !== part) {
-                        fixes.push({ line: n + 1, rule: rule.name, before: part.trim(), after: next.trim() });
-                        part = next;
-                    }
-                }
-            }
-            out += part;
-            j = k;
+    const skipped: FixedBody['skipped'] = [];
+    for (const rule of AUTOFIX_RULES) {
+        const rewrite = Object.hasOwn(REWRITES, rule.name) ? REWRITES[rule.name] : undefined;
+        if (rewrite === undefined) {
+            skipped.push({ rule: rule.name, because: 'it has no module-aware form, so it is not applied to a module body' });
+            continue;
         }
-        return out;
-    });
-    return { body: lines.join('\n'), fixes, skipped };
+        if (own.has(rewrite.source)) {
+            skipped.push({ rule: rule.name, because: `the body declares \`${rewrite.source}\` itself, so its calls are its own` });
+            continue;
+        }
+        const said = new Set<string>();
+        const note: Note = (line, because) => {
+            const text = `line ${line}: ${because}`;
+            if (!said.has(text)) {
+                said.add(text);
+                skipped.push({ rule: rule.name, because: text });
+            }
+        };
+        const byLine = new Map<number, AutoFix>();
+        for (let pass = 0; ; pass++) {
+            const edits = disjoint(rewrite.edits(scan, note));
+            if (!edits.length) break;
+            if (pass === MAX_PASSES) {
+                note(edits[0].line, `stopped after ${MAX_PASSES} passes of nested calls; the rest is left for the lint and the repair`);
+                break;
+            }
+            let next = scan.body;
+            for (const e of [...edits].sort((a, b) => b.from - a.from)) next = next.slice(0, e.from) + e.text + next.slice(e.to);
+            // A rewrite never grows a body past its limit: the repair would be told of a size the model never wrote.
+            const read = next.length > Math.max(BODY_DIAL.maxChars, scan.body.length)
+                ? `the rewrite would make the body longer than its ${BODY_DIAL.maxChars} characters` : scanOf(next);
+            if (typeof read === 'string') {
+                note(edits[0].line, `${read}; the rest is left for the lint and the repair`);
+                break;
+            }
+            const before = scan.body.split('\n');
+            const after = next.split('\n');
+            for (const line of new Set(edits.map(e => e.line))) {
+                const known = byLine.get(line);
+                if (known) known.after = after[line - 1].trim();
+                else byLine.set(line, { line, rule: rule.name, before: before[line - 1].trim(), after: after[line - 1].trim() });
+            }
+            scan = read;
+        }
+        fixes.push(...byLine.values());
+    }
+    // In line order, as h1's auto-fix gives them; on one line, in the rules' order.
+    return { body: scan.body, fixes: fixes.sort((a, b) => a.line - b.line), skipped };
 }
 
 export interface CheckedBody {

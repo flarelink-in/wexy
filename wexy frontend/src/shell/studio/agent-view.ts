@@ -4,6 +4,7 @@
 // the model or the backend wrote is set as text, never as HTML (coding principles §2), and this module writes no markup
 // at all. A hand-off says checked, not rendered. Nothing here can reach the stage's world or the GPU: the panel is given
 // a client and the idea's fields, nothing else, and imports neither the runtime nor the verifier (test/agent-turn.test.mjs).
+// Given a module client too (EA4.5), a hand-off's modules can be written beneath it: its candidate (candidate-view.ts).
 
 import type { WorldProgram } from '../../contract/agent';
 import type { AgentClient, AgentTurnRequest } from '../../forge-client/agent-client';
@@ -12,6 +13,7 @@ import { createAgentSession, elapsedMs, PURPOSES, TURN_PHASES, type AgentSession
 import { h } from '../../shared/dom';
 import { fmtBytes, fmtInt, fmtMs } from '../../shared/format';
 import { formatJson } from '../../shared/json';
+import { CandidatePanel, type CandidateOptions } from './candidate-view';
 
 const INTRO = 'One agent turn (EA2): the backend reads the engine\'s documents, proposes a design and a program of adapter '
     + 'nodes, and checks them. Nothing is built or rendered here, and the world on the stage is never touched.';
@@ -25,6 +27,8 @@ export class AgentPanel {
     readonly el: HTMLElement;
     /** Null when this build has no backend to call. */
     readonly session: AgentSession | null;
+    /** A hand-off's candidate (EA4.5); null without a backend or a module client. */
+    readonly candidate: CandidatePanel | null;
     private readonly request: () => AgentTurnRequest;
     private readonly now: () => number;
     private readonly runBtn = h('button', { type: 'button', class: 'btn btn-sm' }, 'Run agent turn');
@@ -42,10 +46,12 @@ export class AgentPanel {
     private timer = 0;
     private state: AgentTurnState | null = null;
 
-    constructor(client: AgentClient | null, request: () => AgentTurnRequest, now: () => number = () => performance.now()) {
+    constructor(client: AgentClient | null, request: () => AgentTurnRequest, options: { now?: () => number; candidate?: CandidateOptions } = {}) {
         this.request = request;
-        this.now = now;
-        this.session = client ? createAgentSession(client, s => this.render(s), now) : null;
+        this.now = options.now ?? (() => performance.now());
+        // Built before the session, so the first state already reaches it.
+        this.candidate = client && options.candidate ? new CandidatePanel(options.candidate) : null;
+        this.session = client ? createAgentSession(client, s => this.render(s), this.now) : null;
         this.runBtn.addEventListener('click', () => void this.run());
         this.cancelBtn.addEventListener('click', () => this.cancel());
         this.el = h('section', { class: 'agent', 'aria-label': 'Agent turn', dataset: { phase: 'idle', success: 'false' } },
@@ -54,6 +60,7 @@ export class AgentPanel {
             this.note, this.reason, this.question,
             h('div', { class: 'agent-actions' }, this.runBtn, this.cancelBtn),
             this.meta, this.calls, this.design.el, this.program.el, this.cost,
+            this.candidate?.el ?? null,
         );
         this.render(null);
     }
@@ -69,6 +76,7 @@ export class AgentPanel {
 
     dispose(): void {
         this.session?.cancel();
+        this.candidate?.dispose();
         clearInterval(this.timer);
     }
 
@@ -106,6 +114,7 @@ export class AgentPanel {
             const unknown = s.unreported ? ` · ${s.unreported} call${s.unreported === 1 ? '' : 's'} reported no usage: cost unknown` : '';
             this.cost.textContent = `${s.calls.length} model call${s.calls.length === 1 ? '' : 's'} · ${usd(s.costMicroUsd)} reported${s.phase === 'running' ? ' so far' : ''}${unknown}`;
         }
+        this.candidate?.turn(s);
         this.tick();
         // The clock runs only while the turn does; once it ends, its time is fixed.
         if (s?.phase === 'running' && !this.timer) this.timer = window.setInterval(() => this.tick(), 100);

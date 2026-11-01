@@ -255,6 +255,8 @@ export interface XIdentity {
     supportStatusHash: string;
     manifest: string;
     manifestHash: string;
+    /** SHA-256 of the canonical variant gates this X was resolved under (the manifest's, or a test's that lifts one: Q80). */
+    gatesHash: string;
     programHash: string;
     policyHash: string;
 }

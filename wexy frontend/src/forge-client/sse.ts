@@ -69,6 +69,39 @@ export async function* parseEventStream(body: ReadableStream<Uint8Array>, maxEve
     }
 }
 
+/**
+ * `body`, stopping when `signal` aborts: the read rejects with the signal's reason and the body is cancelled. A real
+ * fetch does this itself once its signal aborts; a body the caller built (a test's, the harness's) does not. The agent
+ * turn's reader and a module call's both read through it.
+ */
+export function abortable(body: ReadableStream<Uint8Array>, signal: AbortSignal): ReadableStream<Uint8Array> {
+    const reader = body.getReader();
+    let stop: () => void = () => {};
+    return new ReadableStream<Uint8Array>({
+        start(controller) {
+            stop = () => {
+                controller.error(signal.reason);
+                reader.cancel(signal.reason).catch(() => {});
+            };
+            signal.addEventListener('abort', stop, { once: true });
+        },
+        async pull(controller) {
+            const chunk = await reader.read();
+            if (signal.aborted) return;
+            if (chunk.done) {
+                signal.removeEventListener('abort', stop);
+                controller.close();
+            } else {
+                controller.enqueue(chunk.value);
+            }
+        },
+        cancel(reason) {
+            signal.removeEventListener('abort', stop);
+            return reader.cancel(reason);
+        },
+    });
+}
+
 /** The index of the first complete line end in `s`, or -1. A trailing CR waits for the next chunk. */
 function lineEnd(s: string): number {
     for (let i = 0; i < s.length; i++) {

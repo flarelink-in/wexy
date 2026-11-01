@@ -19,9 +19,12 @@ const FIXTURES = fileURLToPath(new URL('./fixtures/agent-wire/', import.meta.url
 const SCHEMA_HASH = '90255491b3061b8b60d61f24a043bfb06ad53eb7f991313d606cd868b06b9858';
 /**
  * SHA-256 over `<name>\n<text>\n` for every recording, sorted by name, LF line ends (as host.test.mjs pins h1). A new
- * recording means the backend's wire changed: a contract change, agreed in both repositories the same day.
+ * recording means the backend's wire changed: a contract change, agreed in both repositories the same day. 11-01 (EA4.4,
+ * Q82 (a)): meta's agent.v4, its revision section and the two Tier-1 rules the live turns broke a little longer than
+ * v3 (the refused turn's reservation with it), and revised.sse, a turn that revises a base; before, 24373afe… (agent.v4
+ * without the two rules), 13b6a9cb… (10-31: agent.v3 and Q80's gates), cb04377c….
  */
-const WIRE_HASH = 'cb04377c691c823887d9caa611e5fc4c7057488d866875e5eade7f0d18e3ce7f';
+const WIRE_HASH = '09ce1a37b791d107cb7da907495a60e9a9b817ef17b7463d7c0f89e45dd4416c';
 
 const lf = (s) => s.replace(/\r\n/g, '\n');
 const recordings = () => Object.fromEntries(readdirSync(FIXTURES).sort().map(n => [n, lf(readFileSync(join(FIXTURES, n), 'utf8'))]));
@@ -45,14 +48,14 @@ test('EA-W2 the schema and every recording are the backend\'s, byte for byte, wh
     for (const [name, text] of Object.entries(files)) assert.equal(text, lf(readFileSync(join(dir, name), 'utf8')), name);
 });
 
-test('EA-W3 every recorded turn quotes this build\'s engine bundle, action contract and adapters, and the agent.v2 prompt, and names its calls in order', () => {
+test('EA-W3 every recorded turn quotes this build\'s engine bundle, action contract and adapters, and the agent.v4 prompt, and names its calls in order', () => {
     for (const [name, text] of Object.entries(recordings())) {
         if (!name.endsWith('.sse')) continue;
         const [meta] = eventData(text, 'meta');
         assert.equal(meta.bundleHash, ENGINE_BUNDLE_HASH, `${name}: regenerate the recordings after the bundle changes`);
         assert.equal(meta.actionSchema, AGENT_ACTION_VERSION, name);
         assert.equal(meta.manifestHash, ADAPTER_MANIFEST_HASH, `${name}: regenerate the recordings after the manifest changes`);
-        assert.equal(meta.promptVersion, 'agent.v2', name);
+        assert.equal(meta.promptVersion, 'agent.v4', name);
         assert.deepEqual(eventData(text, 'call').map(c => c.n), eventData(text, 'call').map((_, i) => i + 1), name);
     }
 });

@@ -65,7 +65,7 @@ test('EA-S1 every recorded way a turn ends reads to its typed result, each event
         [[1, 'first', 'gen-1', 2, null], [2, 'after-tools', 'gen-2', null, false], [3, 'revise', 'gen-3', null, true]]);
     assert.equal(handedOff.result.calls[1].check.findings[0].code, 'buffer-producer');
     assert.equal(handedOff.result.costMicroUsd, 3 * 46_000);
-    assert.deepEqual(handedOff.result.meta, { turnId: 'turn-1', model: 'muse-spark-1.3', source: 'live', promptVersion: 'agent.v2', bundleHash: ENGINE_BUNDLE_HASH,
+    assert.deepEqual(handedOff.result.meta, { turnId: 'turn-1', model: 'muse-spark-1.3', source: 'live', promptVersion: 'agent.v4', bundleHash: ENGINE_BUNDLE_HASH,
         actionSchema: 'agent-action.v2', manifestHash: ADAPTER_MANIFEST_HASH });
     const recorded = Object.fromEntries(events(wire('handed-off.sse')).filter(([e]) => e === 'design' || e === 'program').map(([e, d]) => [e, JSON.parse(d)[e]]));
     assert.deepEqual(handedOff.result.design, recorded.design);
@@ -107,7 +107,7 @@ test('EA-S2 the recorded failures are the backend\'s own errors, after everythin
     await readAgentStream(res(wire('error-budget.sse')), e => seen.push(e), { bundleHash: ENGINE_BUNDLE_HASH }).catch(() => {});
     assert.deepEqual(seen.map(e => e.type), ['meta', 'call', 'usage', 'tools']);
     // No usage came for the first call, so its reservation stands as its cost, and its tokens are unknown.
-    assert.deepEqual(seen[2].usage, { n: 1, generationId: 'gen-1', in: null, out: null, reasoning: null, cached: null, costMicroUsd: 152_593 });
+    assert.deepEqual(seen[2].usage, { n: 1, generationId: 'gen-1', in: null, out: null, reasoning: null, cached: null, costMicroUsd: 154_734 });
 
     await refuses(wire('error-upstream.sse'), 'upstream', /missed the action schema after a repair/);
 });
@@ -442,8 +442,8 @@ test('EA-S19 a turn of another action contract or adapter manifest is refused at
     const cases = [
         [v1, 'actionSchema', 'none', /^EA_VERSION_MISMATCH actionSchema none, runtime agent-action\.v2: .*speaks agent-action\.v1/],
         [editMeta(m => ({ ...m, actionSchema: 'agent-action.v3' })), 'actionSchema', 'agent-action.v3', /^EA_VERSION_MISMATCH actionSchema agent-action\.v3, runtime agent-action\.v2: /],
-        [editMeta(m => ({ ...m, manifestHash: 'f'.repeat(64) })), 'manifest', 'f'.repeat(64), /^EA_VERSION_MISMATCH manifest ffffffffffff, runtime 1de4e9b80b3d: /],
-        [editMeta(({ manifestHash, ...m }) => m), 'manifest', 'none', /^EA_VERSION_MISMATCH manifest none, runtime 1de4e9b80b3d: /],
+        [editMeta(m => ({ ...m, manifestHash: 'f'.repeat(64) })), 'manifest', 'f'.repeat(64), /^EA_VERSION_MISMATCH manifest ffffffffffff, runtime aacc5959c0f6: /],
+        [editMeta(({ manifestHash, ...m }) => m), 'manifest', 'none', /^EA_VERSION_MISMATCH manifest none, runtime aacc5959c0f6: /],
     ];
     for (const [text, identity, server, pattern] of cases) {
         const b = body([text], { keepOpen: true });
