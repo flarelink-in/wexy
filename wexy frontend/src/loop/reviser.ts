@@ -10,14 +10,15 @@
 //   anything else  rejects (a refusal, an error event, a broken stream, another contract), and its calls are unknown,
 //               never zero (the design §8).
 // Whether a hand-off changed S is the machine's to judge, since a program revision may not; the backend keeps S too.
+// Each event goes to the machine as it comes: the candidate keeps the revision's turn, its model, template and every
+// call with its charge, for Developer view and the bundle (the EA4.5 review).
 
 import { TURN_VERSIONS, type AgentClient } from '../forge-client/agent-client';
-import type { AgentEvent } from '../forge-client/agent-stream';
 import type { RevisionResult, Reviser } from './candidate';
 
-/** A Reviser over `client`; `onEvent` sees each of the revision turn's events, as Developer view will (EA4.5). */
-export function createReviser(client: AgentClient, onEvent: (event: AgentEvent) => void = () => {}): Reviser {
-    return async (request, signal): Promise<RevisionResult> => {
+/** A Reviser over `client`: one turn with a base, each of its events handed to the machine's `onEvent`. */
+export function createReviser(client: AgentClient): Reviser {
+    return async (request, signal, onEvent = () => {}): Promise<RevisionResult> => {
         const result = await client.turn({
             prompt: request.request.prompt, style: request.request.style, seconds: request.request.seconds,
             base: { versions: TURN_VERSIONS, design: request.design, program: request.program, findings: request.findings },

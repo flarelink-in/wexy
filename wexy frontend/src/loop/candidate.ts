@@ -6,7 +6,8 @@
 //   resolving   W → X (resolveProgram), its checks (checkGraph), its interfaces (deriveInterfaces), custom lighting gated
 //   authoring   each module, at most two calls at once; a module whose (interface, body, checker) passed before is
 //               reused with no call
-//   checking    L1, L2 once, the final L1 decides (checkBody); then L3, a fake compiler in EA4
+//   checking    L1, L2 once, the final L1 decides (checkBody); then L3 when the attempt has a compiler: a fake in the
+//               tests, the device's own in the studio (EA5.1), each verdict kept for EA5's admission
 //   correcting  a body's finding repairs that module, at most twice a module and three times a candidate; a program's
 //               finding asks for a program revision (Q82 (a): EA4.4's reviser.ts; with no reviser it ends the candidate)
 //   static-verified  every module passed: the host seals the candidate (snapshot.ts), id(C) fixed, with a completion
@@ -19,10 +20,11 @@
 // immutable subject (I4). Every correction, the machine's own repairs included, is an envelope checked against the
 // candidate as it is now, before its call and again before its result is applied: anything else is EA_STALE_EVIDENCE,
 // with no call (P2). After every await, cancellation and the job's own inputs are checked again before anything
-// changes; a late answer may settle the ledger's accounting, never content (P10). Nothing here compiles on a device,
-// admits, renders or touches the Head: the snapshot goes to EA5's authority, and production is still static-only.
+// changes; a late answer may settle the ledger's accounting, never content (P10). Nothing here admits, renders or
+// touches the Head, and it reaches a device only through the compiler it is handed: the snapshot and its L3 verdicts go
+// to EA5's authority.
 
-import { checkBody, compileBody, BODY_CHECKER, type CheckedBody, type ModuleCompiler } from '../contract/adapters/bodies';
+import { checkBody, compileBody, BODY_CHECKER, type CheckedBody, type CompiledBody, type ModuleCompiler } from '../contract/adapters/bodies';
 import { canonicalJson } from '../contract/adapters/canonical';
 import { checkGraph } from '../contract/adapters/checks';
 import { POLICY_V1 } from '../contract/adapters/graph';
@@ -31,7 +33,7 @@ import { programHash, resolveProgram } from '../contract/adapters/resolve';
 import type { SolutionDesign, WorldProgram } from '../contract/agent';
 import { deepFreeze, type DeepReadonly } from '../contract/engine/frozen';
 import type { AgentTurnRequest } from '../forge-client/agent-client';
-import type { AgentTurnResult } from '../forge-client/agent-stream';
+import type { AgentEvent, AgentTurnResult } from '../forge-client/agent-stream';
 import { ForgeError, type ErrorCode } from '../forge-client/errors';
 import { MODULE_VERSIONS, moduleNodes, wireInterface, type ModuleCallBody, type ModuleClient, type WireFinding } from '../forge-client/module-client';
 import { ModuleStreamError, type ModuleOutcome, type ModuleUsage } from '../forge-client/module-stream';
@@ -48,19 +50,67 @@ type Snapshot = DeepReadonly<SealedCandidate>;
 
 export type CandidatePhase = 'resolving' | 'authoring' | 'checking' | 'correcting' | 'static-verified' | 'failed' | 'exhausted' | 'cancelled' | 'superseded';
 
+/** One call of an agent turn, the hand-off's or a program revision's, as its events told it. */
+export interface TurnCallRecord {
+    n: number;
+    /** Why the turn made it, in the backend's words (`first`, `revise`, `repair`, …). */
+    purpose: string;
+    /** Known when the call reported its usage; unknown when it did not. Never zero. */
+    charge: 'known' | 'unknown';
+    costMicroUsd: number | null;
+    generationId: string | null;
+}
+
+/** A turn's calls as records, from the calls its reader or its state kept. */
+export function turnCallsOf(calls: readonly { n: number; purpose: string; usage: { generationId: string; costMicroUsd: number } | null }[]): TurnCallRecord[] {
+    return calls.map(c => ({
+        n: c.n, purpose: c.purpose, charge: c.usage ? 'known' : 'unknown', costMicroUsd: c.usage?.costMicroUsd ?? null, generationId: c.usage?.generationId ?? null,
+    }));
+}
+
 /** What the candidate starts from: a turn handed off (EA2), R and S verbatim, W, and the turn's actual calls. */
 export interface HandOff {
     turnId: string;
     request: AgentTurnRequest;
     design: SolutionDesign;
     program: WorldProgram;
-    /** The turn's own calls, as its records counted them: the ledger is seeded with them (the design §8). */
-    turnCalls: number;
+    /** The turn's model and template, from its meta. */
+    model: string;
+    promptVersion: string;
+    /** The turn's own calls, as its records told them: the ledger is seeded with them (the design §8), the bundle lists them. */
+    calls: TurnCallRecord[];
 }
 
 /** A handed-off turn's result as a hand-off. */
 export function handOffOf(request: AgentTurnRequest, result: Extract<AgentTurnResult, { status: 'handed-off' }>): HandOff {
-    return { turnId: result.meta.turnId, request, design: result.design, program: result.program, turnCalls: result.calls.length };
+    return {
+        turnId: result.meta.turnId, request, design: result.design, program: result.program, model: result.meta.model, promptVersion: result.meta.promptVersion,
+        calls: turnCallsOf(result.calls),
+    };
+}
+
+export type TurnStatus = 'running' | 'handed-off' | 'asked' | 'declined' | 'exhausted' | 'refused' | 'broken' | 'cancelled';
+
+/**
+ * An agent turn the attempt stands on, as Developer view and the bundle tell it (the EA4.5 review): the hand-off's own,
+ * and each program revision's. Every call Q_C counts is a turn's call or a module job.
+ */
+export interface TurnRecord {
+    role: 'hand-off' | 'revision';
+    /** From its meta; null for a revision whose meta never came. */
+    turnId: string | null;
+    /**
+     * The candidate revision its program became, or would have: 0 for the hand-off; for a program revision, the one
+     * after the revision it answered (every judged body is a revision too, so it is not a count of program revisions).
+     */
+    revision: number;
+    status: TurnStatus;
+    model: string | null;
+    promptVersion: string | null;
+    /** Known when its end was seen and each of its calls reported a usage; unknown otherwise, never zero. */
+    charge: 'known' | 'unknown';
+    calls: TurnCallRecord[];
+    error: string | null;
 }
 
 /** The body checker and its version: a passing verdict is reused only under the same version (the design §5). */
@@ -85,13 +135,26 @@ export type RevisionResult =
     | { status: 'handed-off'; turnId: string; design: SolutionDesign; program: WorldProgram; calls: number }
     | { status: 'asked' | 'declined' | 'exhausted'; reason: string; calls: number | null };
 
-/** EA4.4's seam: one revision turn. It rejects when its stream breaks, and then its calls are unknown. */
-export type Reviser = (request: RevisionRequest, signal: AbortSignal) => Promise<RevisionResult>;
+/**
+ * EA4.4's seam: one revision turn. It rejects when its stream breaks, and then its calls are unknown. Each of the turn's
+ * events goes to `onEvent` as it comes, so the candidate keeps the turn's calls (the EA4.5 review).
+ */
+export type Reviser = (request: RevisionRequest, signal: AbortSignal, onEvent?: (event: AgentEvent) => void) => Promise<RevisionResult>;
+
+/** What judged L3 in an attempt: a fake, or a device and its GPU. */
+export interface L3Judge {
+    producedBy: ModuleCompiler['producedBy'];
+    gpu: string | null;
+}
 
 export interface CandidateDeps {
     modules: ModuleClient;
-    /** L3. A scripted fake in EA4 (labelled `fake`); EA5's device compiler later. Absent: L3 is not run. */
-    compiler?: ModuleCompiler;
+    /**
+     * L3: a scripted fake in the tests (labelled `fake`), the device's own compiler in the studio (EA5.1). A function is
+     * asked once at each attempt's start, so a device that comes later serves the attempts after it, and one attempt
+     * never changes its compiler. Absent, or null from the function: L3 is not run, and the candidate is static only.
+     */
+    compiler?: ModuleCompiler | (() => ModuleCompiler | null);
     /** A program revision (EA4.4: `createReviser`, a turn with a base). Absent: a program's finding ends the candidate. */
     revise?: Reviser;
     checker?: BodyChecker;
@@ -175,7 +238,11 @@ export interface CandidateState {
     omitted: Readonly<Record<string, number>>;
     budget: LedgerState;
     limits: CandidateLimits;
+    /** The hand-off's turn, then each program revision's. */
+    turns: TurnRecord[];
     jobs: JobRecord[];
+    /** What judged L3 in this attempt; null when L3 was not run (no compiler, as with no device). */
+    l3: L3Judge | null;
     stop: CandidateStop | null;
     /** The last static-verified candidate of this attempt, kept through a later failure or exhaustion. */
     verified: { id: string; revision: number } | null;
@@ -190,6 +257,11 @@ export interface CandidateSession {
     readonly state: DeepReadonly<CandidateState> | null;
     /** The current revision's sealed candidate once static-verified, for EA5's authority; null otherwise. */
     readonly snapshot: Snapshot | null;
+    /**
+     * The sealed candidate's L3 verdicts, exactly one a body, each the very object its compiler made (EA5.1: a device
+     * compiler's admission accepts no copy); null without a snapshot, or when L3 did not judge every body.
+     */
+    readonly compiled: readonly DeepReadonly<CompiledBody>[] | null;
     /** Runs a candidate from a hand-off, superseding the one before; resolves with its last state, however it ended. */
     start(handOff: HandOff): Promise<DeepReadonly<CandidateState>>;
     /** Cancels the current attempt: shown cancelled at once, no call after, nothing applied. */
@@ -230,6 +302,8 @@ interface ReuseEntry {
     checker: string;
     /** L3 judged it too (true when a compiler ran). */
     compiled: boolean;
+    /** L3's verdict on it, as its compiler made it; null when no compiler ran. */
+    verdict: DeepReadonly<CompiledBody> | null;
     evidence: string[];
 }
 
@@ -262,6 +336,7 @@ class Attempt {
     verifiedEvidence: string[] = [];
     modules = new Map<string, ModuleState>();
     readonly reuse = new Map<string, ReuseEntry>();
+    readonly turns: TurnRecord[];
     readonly jobs: JobRecord[] = [];
     readonly active = new Map<string, Active>();
     readonly ledger: Ledger;
@@ -272,7 +347,13 @@ class Attempt {
     running = false;
     stop: CandidateStop | null = null;
     snapshot: Snapshot | null = null;
+    /** The snapshot's L3 verdicts, one a body, when L3 judged every one; set with each snapshot, read only beside it. */
+    compiled: readonly DeepReadonly<CompiledBody>[] | null = null;
     verified: Snapshot | null = null;
+    /** L3 for this attempt, fixed at its start; null: not run. */
+    readonly compiler: ModuleCompiler | null;
+    /** Each module's L3 verdict on its current body, once it passed. */
+    verdicts = new Map<string, DeepReadonly<CompiledBody>>();
     /** Cancelled or superseded: nothing it does is shown or applied again. */
     closed = false;
     readonly controller = new AbortController();
@@ -281,14 +362,20 @@ class Attempt {
     readonly startedMs: number;
     endedMs: number | null = null;
 
-    constructor(handOff: HandOff, id: string, limits: CandidateLimits, evidence: EvidenceLimits, now: number) {
+    constructor(handOff: HandOff, id: string, limits: CandidateLimits, evidence: EvidenceLimits, now: number, compiler: ModuleCompiler | null) {
         this.id = id;
+        this.compiler = compiler;
         this.turnId = handOff.turnId;
         // R, S and W as they were handed off, copied and frozen: nothing later changes what the attempt started from.
         this.request = deepFreeze(structuredClone({ prompt: handOff.request.prompt, style: handOff.request.style, seconds: handOff.request.seconds })) as AgentTurnRequest;
         this.design = deepFreeze(structuredClone(handOff.design)) as SolutionDesign;
         this.program = deepFreeze(structuredClone(handOff.program)) as WorldProgram;
-        this.ledger = new Ledger(limits, handOff.turnCalls);
+        const calls = structuredClone(handOff.calls);
+        this.turns = [{
+            role: 'hand-off', turnId: handOff.turnId, revision: 0, status: 'handed-off', model: handOff.model, promptVersion: handOff.promptVersion,
+            charge: calls.every(c => c.charge === 'known') ? 'known' : 'unknown', calls, error: null,
+        }];
+        this.ledger = new Ledger(limits, calls.length);
         this.store = new EvidenceStore(evidence, () => this.pinned());
         this.startedMs = now;
     }
@@ -393,7 +480,9 @@ class Attempt {
             modules: [...this.modules.values()].map(m => ({ ...m, evidence: [...m.evidence], addressed: [...m.addressed] })),
             evidence: this.store.list(), omitted: this.store.omissions,
             budget: this.ledger.state, limits: this.ledger.limits,
+            turns: this.turns.map(t => ({ ...t, calls: t.calls.map(c => ({ ...c })) })),
             jobs: this.jobs.map(j => ({ ...j })),
+            l3: this.compiler ? { producedBy: this.compiler.producedBy, gpu: this.compiler.gpu ?? null } : null,
             stop: this.stop, verified: this.verified ? { id: this.verified.id, revision: this.verified.revision } : null,
             startedMs: this.startedMs, endedMs: this.endedMs,
         });
@@ -457,25 +546,54 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
         a.phase = 'correcting';
         a.revising = true;
         a.ledger.dispatched(reservation);
+        // Its turn's record (the EA4.5 review): each call as the turn tells it, shown as it comes, until the attempt
+        // closes. Nothing the turn says after a cancel or a newer candidate is kept or shown.
+        const record: TurnRecord = {
+            role: 'revision', turnId: null, revision: a.revision + 1, status: 'running', model: null, promptVersion: null, charge: 'unknown', calls: [], error: null,
+        };
+        a.turns.push(record);
+        const observe = (event: AgentEvent) => {
+            if (a.closed) return;
+            if (event.type === 'meta') Object.assign(record, { turnId: event.meta.turnId, model: event.meta.model, promptVersion: event.meta.promptVersion });
+            else if (event.type === 'call') record.calls.push({ n: event.call.n, purpose: event.call.purpose, charge: 'unknown', costMicroUsd: null, generationId: null });
+            else if (event.type === 'usage') {
+                const call = record.calls.find(c => c.n === event.usage.n);
+                if (call) Object.assign(call, { charge: 'known', costMicroUsd: event.usage.costMicroUsd, generationId: event.usage.generationId });
+            } else return;
+            publish(a);
+        };
         publish(a);
         let result: RevisionResult;
         try {
             result = await deps.revise({
                 turnId: a.turnId, request: a.request, design: a.design, program: a.program, subject: a.subject({}),
                 findings: findings.slice(0, 32).map(f => ({ id: f.id, code: f.code, path: f.path, message: f.message.slice(0, 400) })),
-            }, AbortSignal.any([a.controller.signal, a.work.signal]));
+            }, AbortSignal.any([a.controller.signal, a.work.signal]), observe);
         } catch (error) {
-            // A revision whose end was not seen keeps its whole reservation, unknown (the design §8).
+            // A revision whose end was not seen keeps its whole reservation, unknown (the design §8); its turn's charge
+            // stays unknown too, whatever its calls reported.
             a.ledger.settle(reservation, null);
             a.revising = false;
-            if (!a.live()) return 'stop';
+            if (!a.live()) {
+                record.status = 'cancelled';
+                return 'stop';
+            }
+            record.error = message(error);
+            // Refused before any stream (an HTTP status), or broken once it ran (an error event, a cut, another contract).
+            record.status = error instanceof ForgeError && error.status >= 400 ? 'refused' : 'broken';
             const code = error instanceof ForgeError ? error.code : 'internal';
             a.halt({ scope: 'host', diagnostic: `revision: ${message(error)}; charge unknown`, sentence: sentenceFor(code) }, 'failed', now());
             return 'stop';
         }
         a.revising = false;
         a.ledger.settle(reservation, result.calls ?? null);
-        if (!a.live()) return 'stop';
+        // Its end seen: the turn's charge is known when each call the result counts is a record with its usage.
+        record.charge = result.calls !== null && record.calls.length === result.calls && record.calls.every(c => c.charge === 'known') ? 'known' : 'unknown';
+        if (!a.live()) {
+            record.status = 'cancelled';
+            return 'stop';
+        }
+        record.status = result.status;
         if (result.status !== 'handed-off') {
             a.halt({ scope: 'program', diagnostic: `the program revision ended ${result.status}: ${result.reason.slice(0, 200)}`, sentence: COPY.candidate.setup }, 'failed', now());
             return 'stop';
@@ -501,6 +619,7 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
         a.graphEvidence = [];
         a.graph = null;
         a.modules = new Map();
+        a.verdicts = new Map();
         publish(a);
         const nodes = a.program.nodes;
         a.programHash = await programHash(nodes);
@@ -548,11 +667,12 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
         for (const iface of derived.interfaces) {
             const entry = a.reuse.get(reuseKey(iface.module, iface.interfaceHash));
             const m = fresh(iface);
-            if (entry && entry.checker === checker.version && (entry.compiled || !deps.compiler)) {
+            if (entry && entry.checker === checker.version && (entry.compiled || !a.compiler)) {
                 Object.assign(m, {
                     body: entry.body, originalBody: entry.originalBody, codeHash: entry.codeHash, phase: 'passed', needs: null,
                     checkerVersion: entry.checker, evidence: [...entry.evidence], reused: true,
                 });
+                if (entry.verdict) a.verdicts.set(iface.module, entry.verdict);
             } else if (entry) {
                 Object.assign(m, { body: entry.body, originalBody: entry.originalBody, codeHash: entry.codeHash, needs: null, reused: true, phase: 'checking' });
                 recheck.push([m, entry.body]);
@@ -597,9 +717,11 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
             publish(a);
             return;
         }
-        if (deps.compiler) {
-            const compiled = await compileBody(iface, checked, deps.compiler);
+        let verdict: DeepReadonly<CompiledBody> | null = null;
+        if (a.compiler) {
+            const compiled = await compileBody(iface, checked, a.compiler);
             if (!still()) return;
+            verdict = compiled;
             const placed = (list: typeof compiled.body, place: 'body' | 'host' | 'unplaced') =>
                 list.map(f => ({ code: f.code, path: null, line: f.line, severity: f.severity, message: f.message, rung: f.rung, place }));
             const ce = a.record({
@@ -632,8 +754,10 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
         m.phase = 'passed';
         m.needs = null;
         m.addressed = [];
+        if (verdict) a.verdicts.set(m.module, verdict);
         a.reuse.set(reuseKey(m.module, m.interfaceHash), {
-            body: checked.body, originalBody: checked.original, codeHash: checked.codeHash, checker: checker.version, compiled: !!deps.compiler, evidence: [...m.evidence],
+            body: checked.body, originalBody: checked.original, codeHash: checked.codeHash, checker: checker.version, compiled: !!a.compiler, verdict,
+            evidence: [...m.evidence],
         });
         publish(a);
     }
@@ -805,6 +929,11 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
             subject: a.subject({ candidate: sealed.snapshot.id }), phase: 'candidate', verdict: 'pass', producedBy: 'host',
             refs: modules.flatMap(m => m.evidence),
         }, 'completion');
+        // L3's verdict on each sealed body, in the snapshot's order, the objects as their compiler made them: EA5's
+        // admission evidence. A module passes only with a verdict on the body it passed with, and the authority checks
+        // each against the snapshot again (the device compiler's provenance), trusting nothing kept here.
+        const verdicts = sealed.snapshot.bodies.map(b => a.verdicts.get(b.module));
+        a.compiled = a.compiler && verdicts.every(v => v !== undefined) ? Object.freeze(verdicts as DeepReadonly<CompiledBody>[]) : null;
         a.snapshot = sealed.snapshot;
         a.verified = sealed.snapshot;
         a.phase = 'static-verified';
@@ -849,9 +978,13 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
         get snapshot() {
             return current && !current.closed ? current.snapshot : null;
         },
+        get compiled() {
+            return current && !current.closed && current.snapshot ? current.compiled : null;
+        },
         async start(handOff) {
             const previous = current;
-            const a = new Attempt(handOff, attemptId(), limits, evidenceLimits, now());
+            const compiler = typeof deps.compiler === 'function' ? deps.compiler() : deps.compiler ?? null;
+            const a = new Attempt(handOff, attemptId(), limits, evidenceLimits, now(), compiler);
             if (previous && !previous.closed) {
                 // Superseded: closed before it is aborted, so nothing it says or resolves to changes anything after.
                 previous.close('superseded', now());
@@ -906,23 +1039,25 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
     };
 }
 
-/** The bundle's format: what EA4.5's Developer view downloads (the design §9). */
-export const CANDIDATE_BUNDLE = 'wexy-candidate-bundle.v1';
+/** The bundle's format: what EA4.5's Developer view downloads (the design §9); v2 holds the turns (the EA4.5 review). */
+export const CANDIDATE_BUNDLE = 'wexy-candidate-bundle.v2';
 
 /**
  * A candidate as a downloadable bundle (the design §9): the candidate, its bodies, its evidence and its identities;
- * the omissions, the checker and template versions, and each call's usage, known or unknown. No credential or App Check
- * token is anywhere in a state, so none is here. It holds R and the bodies, so exporting it is a developer's act.
+ * the omissions, the checker and template versions, and each call's usage, known or unknown: the turns' calls (the
+ * hand-off's and each revision's) and the module jobs, so every call Q_C counts has its record. No credential or App
+ * Check token is anywhere in a state, so none is here. It holds R and the bodies, so exporting it is a developer's act.
  */
 export function candidateBundle(state: DeepReadonly<CandidateState>) {
     const omitted = Object.values(state.omitted).reduce((sum, n) => sum + n, 0);
+    const templates = [...state.turns.map(t => t.promptVersion), ...state.jobs.map(j => j.promptVersion)].filter((v): v is string => v !== null);
     return {
         format: CANDIDATE_BUNDLE,
         attempt: state.attempt,
         revision: state.revision,
         candidate: state.id,
         phase: state.phase,
-        versions: { ...MODULE_VERSIONS, templates: [...new Set(state.jobs.map(j => j.promptVersion).filter((v): v is string => v !== null))] },
+        versions: { ...MODULE_VERSIONS, templates: [...new Set(templates)] },
         request: state.request,
         design: state.design,
         program: state.program,
@@ -937,8 +1072,14 @@ export function candidateBundle(state: DeepReadonly<CandidateState>) {
         calls: {
             budget: state.budget,
             limits: state.limits,
+            turns: state.turns.map(t => ({
+                role: t.role, turnId: t.turnId, revision: t.revision, status: t.status, model: t.model, promptVersion: t.promptVersion, charge: t.charge,
+                calls: t.calls.map(c => ({ n: c.n, purpose: c.purpose, charge: c.charge, costMicroUsd: c.costMicroUsd, generationId: c.generationId })), error: t.error,
+            })),
             jobs: state.jobs.map(j => ({ jobId: j.jobId, module: j.module, purpose: j.purpose, status: j.status, charge: j.charge, costMicroUsd: j.costMicroUsd, model: j.model, generationId: j.generationId, promptVersion: j.promptVersion })),
         },
+        // What judged L3 (EA5.1): the device and its GPU, a fake, or nothing; each compile verdict is in `evidence`.
+        l3: state.l3,
         stop: state.stop,
     };
 }

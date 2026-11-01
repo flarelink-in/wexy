@@ -8,9 +8,10 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
-import { checkBody } from '../src/contract/adapters/bodies.ts';
+import { assembleModule, checkBody } from '../src/contract/adapters/bodies.ts';
 import { deriveInterfaces, invalidated } from '../src/contract/adapters/interfaces.ts';
 import { programHash, resolveProgram } from '../src/contract/adapters/resolve.ts';
+import { createDeviceCompiler } from '../src/exec/device-compiler.ts';
 import { ForgeError } from '../src/forge-client/errors.ts';
 import { MODULE_VERSIONS } from '../src/forge-client/module-client.ts';
 import { candidateBundle, createCandidateSession } from '../src/loop/candidate.ts';
@@ -88,7 +89,11 @@ const DESIGN = {
     intent: 'a field of blocks under a dusk sky', interpretation: null, assumptions: [], visualElements: [{ name: 'blocks', description: 'stone cubes' }],
     motion: 'the blocks drift', animated: true, techniques: [], resourceFlow: [], cameraAndTiming: 'a slow orbit', controls: [], successCriteria: [], unresolved: [],
 };
-const handOff = (nodes = world(), over = {}) => ({ turnId: 'turn-1', request: R, design: DESIGN, program: { nodes }, turnCalls: 3, ...over });
+/** The hand-off turn's three calls, each with its usage: Q_C is seeded with them. */
+const TURN_CALLS = [1, 2, 3].map(n => ({ n, purpose: n === 1 ? 'first' : 'next', charge: 'known', costMicroUsd: 46_000, generationId: `gen-${n}` }));
+const handOff = (nodes = world(), over = {}) => ({
+    turnId: 'turn-1', request: R, design: DESIGN, program: { nodes }, model: 'model-0', promptVersion: 'agent.v4', calls: TURN_CALLS, ...over,
+});
 
 /**
  * A module client from a script: each module's answers in order, the last repeating (a body, `{ error }`, `{ throws }`,
@@ -728,8 +733,8 @@ test('EA-K12 the evidence bounds: history past its bound is dropped oldest first
     assert.ok(after.evidence.some(e => e.phase === 'candidate'));
     // The bundle declares what it omits, the versions and each call's charge; no credential is anywhere in it.
     const bundle = candidateBundle(after);
-    assert.deepEqual([bundle.format, bundle.candidate, bundle.omitted.records, bundle.omitted.byPhase.visual], ['wexy-candidate-bundle.v1', st.id, 3, 3]);
-    assert.deepEqual(bundle.versions.templates, ['module.author.v1']);
+    assert.deepEqual([bundle.format, bundle.candidate, bundle.omitted.records, bundle.omitted.byPhase.visual], ['wexy-candidate-bundle.v2', st.id, 3, 3]);
+    assert.deepEqual(bundle.versions.templates, ['agent.v4', 'module.author.v1']);
     assert.equal(bundle.versions.checker, 'ea4-body.v1');
     assert.ok(bundle.calls.jobs.every(j => j.charge === 'known'));
     assert.deepEqual(bundle.request, R);
@@ -796,4 +801,98 @@ test('EA-K13 no module, a revision that changes S or asks, a finding in the host
     const rateEnd = await refusedRun.s.start(handOff());
     assert.deepEqual([rateEnd.phase, rateEnd.stop.scope, rateEnd.stop.diagnostic, rateEnd.stop.sentence], ['failed', 'host', 'rate: Too many module calls.', COPY.failures.rate]);
     assert.equal(refusedRun.modules.calls.filter(c => c.module.id === 'motion').length, 1, 'never retried');
+});
+
+/**
+ * A fake GPUDevice for EA5.1's L3: WebGPU's scope stack, and `fail(code)` naming the body line (1-based) of a module
+ * source the device refuses, or null.
+ */
+function l3Device(fail = () => null) {
+    const stack = [];
+    let lose;
+    const device = {
+        lost: new Promise(resolve => { lose = resolve; }),
+        pushErrorScope(filter) { stack.push({ filter, errors: [] }); },
+        popErrorScope() { return Promise.resolve(stack.pop()?.errors[0] ?? null); },
+        createShaderModule({ code }) {
+            const line = fail(code);
+            if (line !== null) stack.at(-1)?.errors.push({ message: 'Error while parsing WGSL' });
+            return { getCompilationInfo: async () => ({ messages: line === null ? [] : [{ type: 'error', lineNum: line, linePos: 1, offset: 0, length: 1, message: 'unresolved value: glimmer' }] }) };
+        },
+    };
+    return { device, stack, lose: () => lose({ reason: 'unknown', message: 'reset' }) };
+}
+
+test('EA-D4b EA5.1: the device\'s L3 in the candidate session; its verdicts kept for exactly the sealed bodies; none without it', async () => {
+    // The device refuses motion's first body once, on its second line: the module is repaired, as EA4's L3 routes it.
+    let refusals = 0;
+    const firstMotion = (code) => code.includes('let base = index * B_instances_STRIDE;') && refusals++ === 0;
+    const at = I.motion.preamble.split('\n').length + 2;
+    const fake = l3Device(code => (firstMotion(code) ? at : null));
+    const compiler = createDeviceCompiler(fake.device, { gpu: 'Fake GPU' });
+    const run = session({ compiler });
+    assert.equal(run.s.compiled, null, 'nothing before a candidate');
+    const end = await run.s.start(handOff());
+    assert.equal(end.phase, 'static-verified', JSON.stringify(end.stop));
+    assert.deepEqual(end.l3, { producedBy: 'device', gpu: 'Fake GPU' });
+    assert.deepEqual(run.modules.calls.map(c => [c.module.id, c.purpose]).filter(([m]) => m === 'motion'), [['motion', 'author'], ['motion', 'repair']]);
+    const failed = end.evidence.find(e => e.phase === 'compile' && e.verdict === 'fail');
+    assert.deepEqual([failed.producedBy, failed.subject.module, failed.findings.map(f => [f.rung, f.place, f.line])], ['device', 'motion', [['L3', 'body', 2]]]);
+    assert.ok(end.evidence.filter(e => e.phase === 'compile').every(e => e.producedBy === 'device'));
+    // Exactly one verdict a sealed body, for its very text, each the object the device's compiler registered.
+    const snap = run.s.snapshot;
+    const compiled = run.s.compiled;
+    assert.deepEqual(compiled.map(v => [v.module, v.codeHash, v.ok, v.producedBy]), snap.bodies.map(b => [b.module, b.codeHash, true, 'device']));
+    assert.equal(compiler.provenance(snap, compiled), null);
+    assert.ok(Object.isFrozen(compiled));
+    assert.equal(candidateBundle(end).l3.producedBy, 'device');
+
+    // A program revision that changes motion's interface: motion compiled again, the others reused with their verdicts,
+    // the very objects, so still the device's own.
+    const reviser = fakeReviser([{ status: 'handed-off', turnId: 'turn-2', design: DESIGN, program: { nodes: motionAt(32) }, calls: 1 }]);
+    const revising = session({ compiler, revise: reviser.revise });
+    const firstEnd = await revising.s.start(handOff());
+    const before = revising.s.compiled;
+    const visual = revising.s.visual({ verdict: 'fail', producedBy: 'creator', findings: [{ code: 'pace', message: 'slower' }] });
+    const corrected = await revising.s.correct({ base: baseOf(firstEnd), scope: 'program', changes: [], findingsAddressed: [visual.findings[0].id] });
+    assert.equal(corrected.state.phase, 'static-verified', JSON.stringify(corrected.state.stop));
+    const after = revising.s.compiled;
+    assert.notEqual(after[0], before[0], 'motion\'s new body has a verdict of its own');
+    assert.deepEqual([after[1], after[2]], [before[1], before[2]], 'sky\'s and water\'s reused with their verdicts');
+    assert.equal(compiler.provenance(revising.s.snapshot, after), null);
+
+    // A cancel, a newer candidate: nothing to admit.
+    const cancelled = session({ compiler });
+    await cancelled.s.start(handOff());
+    cancelled.s.cancel();
+    assert.deepEqual([cancelled.s.snapshot, cancelled.s.compiled], [null, null]);
+
+    // No compiler: L3 is not run, and there is nothing for a device's admission.
+    const none = session();
+    const plain = await none.s.start(handOff());
+    assert.deepEqual([plain.phase, plain.l3, none.s.compiled], ['static-verified', null, null]);
+    assert.ok(!plain.evidence.some(e => e.phase === 'compile'));
+    assert.equal(candidateBundle(plain).l3, null);
+
+    // The studio's getter: no device yet, then one. Each attempt keeps the compiler it started with.
+    let device = null;
+    const later = session({ compiler: () => device });
+    const early = await later.s.start(handOff());
+    assert.deepEqual([early.l3, later.s.compiled], [null, null]);
+    device = createDeviceCompiler(l3Device().device, { gpu: 'Later GPU' });
+    const next = await later.s.start(handOff());
+    assert.deepEqual(next.l3, { producedBy: 'device', gpu: 'Later GPU' });
+    assert.equal(device.provenance(later.s.snapshot, later.s.compiled), null);
+
+    // A device lost before the compile: L3 accuses no module, the candidate stops, no repair is spent on it.
+    const lostDevice = l3Device();
+    const lostCompiler = createDeviceCompiler(lostDevice.device, { gpu: 'Lost GPU' });
+    lostDevice.lose();
+    await settle();
+    const lostRun = session({ compiler: lostCompiler });
+    const lostEnd = await lostRun.s.start(handOff());
+    assert.deepEqual([lostEnd.phase, lostEnd.stop.scope, lostRun.s.compiled], ['failed', 'candidate', null]);
+    assert.match(lostEnd.stop.diagnostic, /L3 with no line: L3 could not judge this module on this device: the device was lost \(reset\); no module is accused$/);
+    assert.equal(lostRun.modules.calls.filter(c => c.purpose === 'repair').length, 0);
+    assert.ok(assembleModule(I.motion, BODIES.motion).source.includes(BODIES.motion), 'the device compiles the assembled module');
 });

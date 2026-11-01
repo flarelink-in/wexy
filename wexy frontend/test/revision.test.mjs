@@ -17,7 +17,7 @@ import { BASE_CAPS, createAgentClient, ENGINE_BUNDLE_HASH, TURN_VERSIONS } from 
 import { AgentVersionError } from '../src/forge-client/agent-stream.ts';
 import { ForgeError } from '../src/forge-client/errors.ts';
 import { createApi } from '../src/forge-client/http.ts';
-import { createCandidateSession } from '../src/loop/candidate.ts';
+import { candidateBundle, createCandidateSession, turnCallsOf } from '../src/loop/candidate.ts';
 import { COPY } from '../src/loop/copy.ts';
 import { createReviser } from '../src/loop/reviser.ts';
 
@@ -143,7 +143,11 @@ function machine(answer) {
     return { session, modules, requests };
 }
 
-const handOff = (over = {}) => ({ turnId: 'turn-0', request: R, design: DESIGN, program: BASE_PROGRAM, turnCalls: 3, ...over });
+/** The hand-off turn's own calls, as the recorded hand-off made them: each reported its usage. */
+const TURN_CALLS = ['first', 'after-tools', 'next'].map((purpose, i) => ({ n: i + 1, purpose, charge: 'known', costMicroUsd: 46_000, generationId: `gen-${i + 1}` }));
+const handOff = (over = {}) => ({
+    turnId: 'turn-0', request: R, design: DESIGN, program: BASE_PROGRAM, model: 'muse-spark-1.3', promptVersion: 'agent.v4', calls: TURN_CALLS, ...over,
+});
 
 test('EA-MR3 a program the browser refuses is revised over the recorded wire, resolved again, authored and static-verified; Q_C counts the revision\'s calls', async () => {
     const { session, modules, requests } = machine(res(REVISED));
@@ -189,6 +193,87 @@ test('EA-MR3b a revision\'s hand-off that changed S replaces nothing; a revision
     assert.match(failed.stop.diagnostic, /^revision: .*; charge unknown$/);
     assert.deepEqual([failed.budget.calls, failed.budget.revisions], [{ settled: 3, reserved: 0, unknown: 6 }, 1]);
     assert.deepEqual(failed.program, BASE_PROGRAM);
+});
+
+// The EA4.5 review: a revision's calls were counted in Q_C and kept nowhere else, so neither Developer view nor the bundle
+// could say what they cost, which model made them or under which template. The hand-off turn's own were a count too.
+const revisionCall = { n: 1, purpose: 'revise', charge: 'known', costMicroUsd: 46_000, generationId: 'gen-1' };
+
+test('EA-MR5 the EA4.5 review: the hand-off\'s turn and a revision\'s are kept, each call with its charge, model and template, and the bundle holds them', async () => {
+    // Browser refusal, program revision over the recorded wire, the module authored, static-verified; then the bundle.
+    const { session } = machine(res(REVISED));
+    const end = await session.start(handOff());
+    assert.equal(end.phase, 'static-verified', JSON.stringify(end.stop));
+    assert.deepEqual(end.turns, [
+        { role: 'hand-off', turnId: 'turn-0', revision: 0, status: 'handed-off', model: 'muse-spark-1.3', promptVersion: 'agent.v4', charge: 'known', calls: TURN_CALLS, error: null },
+        { role: 'revision', turnId: 'turn-1', revision: 1, status: 'handed-off', model: 'muse-spark-1.3', promptVersion: 'agent.v4', charge: 'known', calls: [revisionCall], error: null },
+    ]);
+    // Q_C reconciles from the records: each call it settled has one, the turns' and the module job's.
+    assert.equal(end.turns.reduce((n, t) => n + t.calls.length, 0) + end.jobs.length, end.budget.calls.settled);
+    const bundle = candidateBundle(end);
+    assert.equal(bundle.format, 'wexy-candidate-bundle.v2');
+    assert.deepEqual(bundle.calls.turns, end.turns);
+    assert.deepEqual(bundle.versions.templates, ['agent.v4', 'module.author.v1']);
+    const spent = [...bundle.calls.turns.flatMap(t => t.calls), ...bundle.calls.jobs].reduce((sum, c) => sum + c.costMicroUsd, 0);
+    assert.equal(spent, 3 * 46_000 + 46_000 + 1_000, 'the hand-off\'s three calls, the revision\'s one, the author');
+
+    // A revision whose stream fails: its calls as they came, the turn's charge unknown, its error; Q_C holds its six unknown.
+    const broken = machine(res(wire('error-upstream.sse')));
+    const failed = await broken.session.start(handOff());
+    assert.deepEqual([failed.phase, failed.budget.calls], ['failed', { settled: 3, reserved: 0, unknown: 6 }]);
+    const said = eventData(wire('error-upstream.sse'), 'error')[0].message;
+    assert.deepEqual(failed.turns[1], {
+        role: 'revision', turnId: 'turn-1', revision: 1, status: 'broken', model: 'muse-spark-1.3', promptVersion: 'agent.v4', charge: 'unknown',
+        calls: [{ ...revisionCall, purpose: 'first' }, { ...revisionCall, n: 2, purpose: 'repair', generationId: 'gen-2' }], error: said,
+    });
+    assert.equal(candidateBundle(failed).calls.turns[1].charge, 'unknown');
+
+    // Refused before any stream (an envelope): no meta, no call, the refusal's words; still unknown, as Q_C keeps it.
+    const envelope = new Response('{"code":"bad-request","message":"base.versions.manifest is not this server\'s."}', { status: 400, headers: { 'Content-Type': 'application/json' } });
+    const refused = await machine(envelope).session.start(handOff());
+    assert.deepEqual(refused.turns[1], {
+        role: 'revision', turnId: null, revision: 1, status: 'refused', model: null, promptVersion: null, charge: 'unknown', calls: [],
+        error: 'base.versions.manifest is not this server\'s.',
+    });
+
+    // A cancel while the revision runs, over a reviser that honours it and over one deaf to it: nothing its turn says
+    // after the cancel is kept or shown; its record ends cancelled, its charge unknown.
+    for (const deafToIt of [false, true]) {
+        let release, emitted;
+        const gate = new Promise(r => { release = r; });
+        const started = new Promise(r => { emitted = r; });
+        const reviser = async (_request, signal, onEvent) => {
+            onEvent({ type: 'meta', meta: eventData(REVISED, 'meta')[0] });
+            onEvent({ type: 'call', call: { n: 1, purpose: 'revise' } });
+            emitted();
+            if (!deafToIt) await new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason)));
+            await gate;
+            onEvent({ type: 'usage', usage: { n: 1, generationId: 'gen-late', in: 1, out: 1, reasoning: null, cached: null, costMicroUsd: 46_000 } });
+            onEvent({ type: 'call', call: { n: 2, purpose: 'repair' } });
+            return { status: 'handed-off', turnId: 'turn-1', design: DESIGN, program: PROGRAM, calls: 2 };
+        };
+        const states = [];
+        const cancelled = createCandidateSession({ modules: fakeModules(), revise: reviser, attemptId: () => 'attempt-c', now: () => 1_000 }, s => states.push(s));
+        const running = cancelled.start(handOff());
+        await started;
+        const before = states.at(-1);
+        assert.deepEqual([before.phase, before.turns[1].status, before.turns[1].turnId, before.turns[1].calls],
+            ['correcting', 'running', 'turn-1', [{ n: 1, purpose: 'revise', charge: 'unknown', costMicroUsd: null, generationId: null }]], 'the revision shows as it runs');
+        cancelled.cancel();
+        const atCancel = states.at(-1);
+        release();
+        const ended = await running;
+        assert.equal(states.at(-1), atCancel, `nothing published after the cancel (deaf: ${deafToIt})`);
+        assert.deepEqual(ended.turns[1].calls, before.turns[1].calls, `no late event kept (deaf: ${deafToIt})`);
+        assert.deepEqual([ended.phase, ended.turns[1].status, ended.turns[1].charge], ['cancelled', 'cancelled', 'unknown'], `deaf: ${deafToIt}`);
+    }
+
+    // A hand-off call that reported no usage: its record says so, and the hand-off's turn is unknown.
+    assert.deepEqual(turnCallsOf([{ n: 1, purpose: 'first', usage: null }, { n: 2, purpose: 'next', usage: { generationId: 'gen-2', costMicroUsd: 9 } }]), [
+        { n: 1, purpose: 'first', charge: 'unknown', costMicroUsd: null, generationId: null }, { n: 2, purpose: 'next', charge: 'known', costMicroUsd: 9, generationId: 'gen-2' },
+    ]);
+    const unreported = await machine(res(REVISED)).session.start(handOff({ calls: [TURN_CALLS[0], { ...TURN_CALLS[1], charge: 'unknown', costMicroUsd: null, generationId: null }] }));
+    assert.deepEqual([unreported.turns[0].charge, unreported.turns[1].charge, unreported.budget.calls.settled], ['unknown', 'known', 4]);
 });
 
 // The EA4.4 review: a world the server handed off could be too large for the base of its revision. The server now leaves
