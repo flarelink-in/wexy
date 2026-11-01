@@ -67,6 +67,11 @@ public class InMemoryGenerationStore implements GenerationStore {
     }
 
     @Override
+    public synchronized List<Generation> children(String parentId) {
+        return byId.values().stream().filter(g -> parentId.equals(g.parentId()) && !expired(g)).toList();
+    }
+
+    @Override
     public synchronized int okRepairDepth(String id) {
         int depth = 0;
         Generation g = byId.get(id);

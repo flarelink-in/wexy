@@ -24,7 +24,8 @@ import java.util.regex.Pattern;
  * server hands off is one the browser's own check takes. A node is exactly {@code {id, adapterId, adapterVersion, config,
  * inputs}}. Its adapter and version are exact, and its family is one H lets resolve (statically). Its config is JSON text
  * of at most 4,096 UTF-16 units, parsed once and held to its adapter's closed schema, a canonical layout pinning its
- * stride. Each input names a real port, node and output of the port's kind and layout, and every port's count is in
+ * stride, and no value the manifest gates (Q80: {@code upload}, until Tier 2). Each input names a real port, node and
+ * output of the port's kind and layout, and every port's count is in
  * range. A v1 object (symbol, member, args) is refused, never coerced. The browser repeats all of it and more (the
  * resolver, the checks of §7), and never takes this verdict for admission.
  */
@@ -70,19 +71,38 @@ public final class NodeCheck {
     /** The same check, with the nodes it parsed, for the rules that read a whole program (ProgramCheck). */
     public Result checked(JsonNode nodes) {
         List<Finding> out = new ArrayList<>();
+        List<Node> checked = each(nodes, "/program/nodes", MAX_NODES, out);
+        if (out.isEmpty()) {
+            wire(checked, out);
+        }
+        return new Result(List.copyOf(checked), out);
+    }
+
+    /**
+     * Each node on its own, and nothing between them: for a slice of a program (the module route, EA4.2), whose
+     * omitted nodes are not dangling inputs. Every rule of {@link #checked} but the wiring and the ports' counts, with
+     * paths under {@code at}; the browser still checks the whole program.
+     */
+    public Result alone(JsonNode nodes, String at, int maxNodes) {
+        List<Finding> out = new ArrayList<>();
+        return new Result(List.copyOf(each(nodes, at, maxNodes, out)), out);
+    }
+
+    /** The nodes that pass on their own, each finding added to {@code out} at its pointer under {@code under}. */
+    private List<Node> each(JsonNode nodes, String under, int maxNodes, List<Finding> out) {
         List<Node> checked = new ArrayList<>();
         if (!nodes.isArray()) {
-            out.add(Finding.fail("nodes", "/program/nodes", "the program's nodes are not a list"));
-            return new Result(List.of(), out);
+            out.add(Finding.fail("nodes", under, "the program's nodes are not a list"));
+            return checked;
         }
-        if (nodes.isEmpty() || nodes.size() > MAX_NODES) {
-            out.add(Finding.fail("nodes", "/program/nodes", "a program has 1 to " + MAX_NODES + " nodes, not " + nodes.size()));
-            return new Result(List.of(), out);
+        if (nodes.isEmpty() || nodes.size() > maxNodes) {
+            out.add(Finding.fail("nodes", under, "a program has 1 to " + maxNodes + " nodes, not " + nodes.size()));
+            return checked;
         }
         Set<String> seen = new HashSet<>();
         for (int i = 0; i < nodes.size(); i++) {
             JsonNode n = nodes.get(i);
-            String at = "/program/nodes/" + i;
+            String at = under + "/" + i;
             if (!n.isObject()) {
                 out.add(Finding.fail("node", at, "a node is not an object"));
                 continue;
@@ -177,6 +197,18 @@ public final class NodeCheck {
             if (!strides) {
                 continue;
             }
+            // A value the manifest declares and gates (Q80): refused from the same data as the browser's, with its way out.
+            boolean available = true;
+            for (AdapterManifest.Gate g : manifest.unavailable()) {
+                if (g.adapter().equals(adapter.id()) && g.value().equals(config.at(g.path()))) {
+                    out.add(Finding.fail("unavailable", at + "/config" + g.path(), adapter.id() + " config " + g.path() + ": " + shown(g.value())
+                            + " is not available yet: " + g.reason()));
+                    available = false;
+                }
+            }
+            if (!available) {
+                continue;
+            }
             JsonNode inputs = n.path("inputs");
             if (!inputs.isArray() || inputs.size() > MAX_INPUTS) {
                 out.add(Finding.fail("inputs", at + "/inputs", "inputs is a list of at most " + MAX_INPUTS));
@@ -203,10 +235,7 @@ public final class NodeCheck {
                 checked.add(new Node(id, i, adapter, config, List.copyOf(list)));
             }
         }
-        if (out.isEmpty()) {
-            wire(checked, out);
-        }
-        return new Result(List.copyOf(checked), out);
+        return checked;
     }
 
     /** Every input names a real port, node and output of the port's kind and layout; every port's count is in range. */

@@ -1,0 +1,57 @@
+{
+  "graph": "9bb3af308fc62419ce148165595d67bd8324d9f55b840528e1135344d87ac865",
+  "programHash": "d8847854eb54ab8dd5b1507dcb77dc73a11b94dc56bd8ad77aee192efa1999dc",
+  "interface": {
+    "abi": "ea-abi.v2",
+    "preamble": "\n        struct Camera {\n            viewProj: mat4x4<f32>,\n            view: mat4x4<f32>,\n            proj: mat4x4<f32>,\n            invViewProj: mat4x4<f32>,\n            invView: mat4x4<f32>,\n            invProj: mat4x4<f32>,\n\n            eyePos: vec3<f32>,\n            simTime: f32,\n\n            zNear: f32,\n            zFar: f32,\n            fovRads: f32,\n            aspect: f32,\n            _padEnd: vec4<f32>\n        };\n    \n@group(0) @binding(0) var<storage, read_write> b_blocks: array<f32>;\n@group(1) @binding(0) var<uniform> camera: Camera;\nconst B_blocks_STRIDE: u32 = 14u;\nconst EA_INVOCATIONS: u32 = 64u;",
+    "epilogue": "@compute @workgroup_size(64)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    _ = arrayLength(&b_blocks);\n    _ = camera.simTime;\n    if (id.x >= EA_INVOCATIONS) { return; }\n    placeBlocks(id.x);\n}",
+    "entries": [
+      {
+        "stage": "compute",
+        "entry": "placeBlocks",
+        "signature": "fn placeBlocks(index: u32)",
+        "engineEntry": "cs_main"
+      }
+    ],
+    "bindings": [
+      {
+        "group": 0,
+        "binding": 0,
+        "name": "b_blocks",
+        "declaration": "@group(0) @binding(0) var<storage, read_write> b_blocks: array<f32>;",
+        "resource": "blocks#buffer",
+        "access": "read_write",
+        "version": null,
+        "boundBy": "host"
+      },
+      {
+        "group": 1,
+        "binding": 0,
+        "name": "camera",
+        "declaration": "@group(1) @binding(0) var<uniform> camera: Camera;",
+        "resource": "@host#camera",
+        "access": "uniform",
+        "version": null,
+        "boundBy": "host"
+      }
+    ],
+    "constants": [
+      {
+        "name": "B_blocks_STRIDE",
+        "value": 14
+      },
+      {
+        "name": "EA_INVOCATIONS",
+        "value": 64
+      }
+    ],
+    "workgroupSize": 64,
+    "chunks": [
+      {
+        "id": "materials:CommonChunks.CameraStruct",
+        "hash": "47aab28c96a747682308131f5c0d286a0c7bec93b79f51fc0ca4510ebd7f43f8"
+      }
+    ],
+    "interfaceHash": "0d43263a26be379c5f7b7b20fab6b21d27e3806b29e0a5cf131354eb975ccbc9"
+  }
+}

@@ -82,7 +82,9 @@ public class GatewayShieldProperties {
      *
      * An agent turn (the agent-loop design, Q66) makes up to {@link AgentTurn#MAX_CALLS} model calls, so its buckets
      * count calls: a request costs that many tokens, the constant forge-service caps a turn's calls at, so the two
-     * cannot drift. Signed in, two turns at once, then one a minute; anonymous, one, then one every two minutes.
+     * cannot drift. Signed in, two turns at once, then one a minute; anonymous, two at once too, then one every two
+     * minutes: a candidate's program revision (EA4.4) is a second turn right after the first, and one turn's room
+     * refused it for two minutes (the EA4.4 review; Q66 amended 2026-11-01).
      */
     private final Map<String, Bucket> buckets = new LinkedHashMap<>(Map.ofEntries(
             Map.entry("public-read", new Bucket(15, 45)),
@@ -93,7 +95,13 @@ public class GatewayShieldProperties {
             Map.entry("forge-edit-user", new Bucket(0.5, 15)),
             Map.entry("agent-turn", new Bucket(AgentTurn.MAX_CALLS / 30.0, 4 * AgentTurn.MAX_CALLS, AgentTurn.MAX_CALLS)),
             Map.entry("agent-turn-user", new Bucket(AgentTurn.MAX_CALLS / 60.0, 2 * AgentTurn.MAX_CALLS, AgentTurn.MAX_CALLS)),
-            Map.entry("agent-turn-anonymous", new Bucket(AgentTurn.MAX_CALLS / 120.0, AgentTurn.MAX_CALLS, AgentTurn.MAX_CALLS)),
+            Map.entry("agent-turn-anonymous", new Bucket(AgentTurn.MAX_CALLS / 120.0, 2 * AgentTurn.MAX_CALLS, AgentTurn.MAX_CALLS)),
+            // A module call is one model call (EA4.2). An attempt makes at most seven (Q84's proposal: four authors and three
+            // repairs), so these keep the turns' pace: signed in, two attempts at once, then one a minute; anonymous, one,
+            // then one every two minutes.
+            Map.entry("agent-module", new Bucket(14 / 30.0, 28)),
+            Map.entry("agent-module-user", new Bucket(7 / 60.0, 14)),
+            Map.entry("agent-module-anonymous", new Bucket(7 / 120.0, 7)),
             Map.entry("publish", new Bucket(0.1, 10)),
             Map.entry("publish-user", new Bucket(0.05, 5)),
             Map.entry("admin", new Bucket(1, 10))

@@ -231,5 +231,8 @@
       "inputs": [],
       "outputs": [{ "name": "color", "kind": "color" }]
     }
+  ],
+  "unavailable": [
+    { "adapter": "ng.buffer.storage", "path": "/init", "value": "upload", "reason": "no host data source until Tier 2 (assets); seed the buffer with an init-phase compute stage" }
   ]
 }

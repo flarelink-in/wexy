@@ -145,12 +145,16 @@ class AgentWireTest {
 
     /** One turn, read raw: the bytes the studio's reader is given, not events a client decoded. */
     private Answer turn() throws Exception {
+        return turn(BODY);
+    }
+
+    private Answer turn(String body) throws Exception {
         HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/v1/agent/turn"))
                 .header("Content-Type", "application/json")
                 .header("Accept", "text/event-stream")
                 .header(InternalToken.HEADER, AgentRoutesTest.token("uid-agent"))
                 .timeout(Duration.ofSeconds(30))
-                .POST(HttpRequest.BodyPublishers.ofString(BODY, StandardCharsets.UTF_8))
+                .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
                 .build();
         HttpResponse<String> response = HTTP.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         return new Answer(response.statusCode(), response.body());
@@ -158,7 +162,11 @@ class AgentWireTest {
 
     /** A streamed turn, its ids named and its heartbeats dropped. */
     private String streamed() throws Exception {
-        Answer answer = turn();
+        return streamed(BODY);
+    }
+
+    private String streamed(String body) throws Exception {
+        Answer answer = turn(body);
         assertThat(answer.status()).as(answer.body()).isEqualTo(200);
         return wire(answer.body());
     }
@@ -216,6 +224,21 @@ class AgentWireTest {
                 "check", "design", "program", "done");
         assertThat(wire).contains("\"status\":\"handed-off\"").contains("\"ok\":false").contains("\"ok\":true");
         pin("handed-off.sse", wire);
+    }
+
+    /** EA4.4 (Q82 (a)): a turn that revises a base the browser refused, its first call the revise, its design the base's. */
+    @Test
+    void aTurnThatRevisesABaseHandsOffItsProgramWithItsDesign() throws Exception {
+        start();
+        answers(AgentRoutesTest.USAGE, AgentLoopTest.valid("revise"));
+        ObjectNode body = (ObjectNode) JSON.readTree(BODY);
+        body.set("base", AgentLoopTest.baseJson());
+
+        String wire = streamed(body.toString());
+
+        assertThat(events(wire)).containsExactly("meta", "call", "usage", "check", "design", "program", "done");
+        assertThat(wire).contains("\"purpose\":\"revise\"").contains("\"status\":\"handed-off\"").contains("placeBlocks");
+        pin("revised.sse", wire);
     }
 
     @Test

@@ -53,7 +53,7 @@ class NodeCheckTest {
     /** The frontend's EA-A2 program: all nine adapters, each in a minimal valid variant. */
     static ArrayNode world() {
         ArrayNode w = JSON.createArrayNode();
-        w.add(node("instances", "ng.buffer.storage", Map.of("elements", 64, "layout", "instance14", "strideFloats", 14, "pingPong", false, "init", "upload")));
+        w.add(node("instances", "ng.buffer.storage", Map.of("elements", 64, "layout", "instance14", "strideFloats", 14, "pingPong", false, "init", "zero")));
         w.add(node("field", "ng.buffer.storage", Map.of("elements", 4096, "layout", "f32", "strideFloats", 4, "pingPong", true, "init", "zero")));
         w.add(node("move", "ng.compute.stage", Map.of("module", "motion", "entry", "advance", "workgroupSize", 64, "invocations", 64, "phase", "fixedStep"),
                 "reads", "field", "buffer", "writes", "instances", "buffer"));
@@ -132,7 +132,7 @@ class NodeCheckTest {
         fails("a port of another kind", w -> ((ObjectNode) w.get(6).get("inputs").get(1)).put("nodeId", "cube").put("output", "geometry"),
                 "wire", "/program/nodes/6/inputs/1");
         fails("24-float instances into a stock batch", w -> ((ObjectNode) w.get(0)).put("config",
-                "{\"elements\":64,\"layout\":\"instance24\",\"strideFloats\":24,\"pingPong\":false,\"init\":\"upload\"}"), "wire", "/program/nodes/6/inputs/2");
+                "{\"elements\":64,\"layout\":\"instance24\",\"strideFloats\":24,\"pingPong\":false,\"init\":\"zero\"}"), "wire", "/program/nodes/6/inputs/2");
         fails("a required port left empty", w -> ((ArrayNode) w.get(6).get("inputs")).remove(1), "count", "/program/nodes/6/inputs");
         fails("a node fed by itself", w -> ((ObjectNode) w.get(2).get("inputs").get(0)).put("nodeId", "move"), "wire", "/program/nodes/2/inputs/0/nodeId");
         // The EA3.1 review: a canonical layout pins its stride.
@@ -146,5 +146,26 @@ class NodeCheckTest {
         ArrayNode ordered = world();
         ((ArrayNode) ordered.get(2).get("inputs")).addObject().put("port", "after").put("nodeId", "instances").put("output", "buffer");
         assertThat(check.check(ordered)).anySatisfy(f -> assertThat(f.path()).isEqualTo("/program/nodes/2/inputs/2"));
+    }
+
+    @Test
+    void aValueTheManifestGatesIsRefusedWithItsReasonAsTheBrowserRefusesIt() {
+        // Q80: upload stays declared on the buffer's init, and the manifest gates it until Tier 2 brings content.
+        assertThat(MANIFEST.unavailable()).extracting(g -> g.adapter() + " " + g.path() + " " + g.value())
+                .containsExactly("ng.buffer.storage /init \"upload\"");
+        ArrayNode w = world();
+        ((ObjectNode) w.get(0)).put("config", "{\"elements\":64,\"layout\":\"instance14\",\"strideFloats\":14,\"pingPong\":false,\"init\":\"upload\"}");
+        List<Finding> found = check.check(w);
+        assertThat(found).hasSize(1);
+        assertThat(found.get(0).code()).isEqualTo("unavailable");
+        assertThat(found.get(0).path()).isEqualTo("/program/nodes/0/config/init");
+        assertThat(found.get(0).message()).isEqualTo("ng.buffer.storage config /init: \"upload\" is not available yet: no host data source until"
+                + " Tier 2 (assets); seed the buffer with an init-phase compute stage");
+        // After the schema: a config the schema refuses says that, not the gate.
+        ((ObjectNode) w.get(0)).put("config", "{\"elements\":0,\"layout\":\"instance14\",\"strideFloats\":14,\"pingPong\":false,\"init\":\"upload\"}");
+        assertThat(check.check(w)).extracting(Finding::code).containsExactly("config-schema");
+        // The template's adapters say it too, with the way out, so no template text needs a special case.
+        assertThat(MANIFEST.describe()).contains("- not available yet, so refused: config /init \"upload\": no host data source until Tier 2 (assets);"
+                + " seed the buffer with an init-phase compute stage\n");
     }
 }

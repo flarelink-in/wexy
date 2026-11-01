@@ -40,7 +40,7 @@ class ProgramCheckTest {
         }
     }
 
-    /** A complete program, the mock's: uploaded blocks drawn as lit cubes, under a film look. Still. */
+    /** A complete program, the mock's: blocks an init stage places, drawn as lit cubes, under a film look. Still. */
     static ObjectNode valid() {
         return (ObjectNode) read("mock/agent/program.json");
     }
@@ -53,6 +53,18 @@ class ProgramCheckTest {
         for (JsonNode n : nodes(action)) {
             if (id.equals(n.path("id").asText())) {
                 return (ObjectNode) n;
+            }
+        }
+        throw new AssertionError("no node " + id);
+    }
+
+    /** Removes the node of this id. */
+    static void remove(ObjectNode action, String id) {
+        ArrayNode list = nodes(action);
+        for (int i = 0; i < list.size(); i++) {
+            if (id.equals(list.get(i).path("id").asText())) {
+                list.remove(i);
+                return;
             }
         }
         throw new AssertionError("no node " + id);
@@ -104,7 +116,7 @@ class ProgramCheckTest {
         assertThat(check.check(valid())).isEmpty();
         assertThat(ProgramCheck.passes(check.check(valid()))).isTrue();
         assertThat(nodes(valid())).extracting(n -> n.path("adapterId").asText()).containsExactly("ng.buffer.storage",
-                "ng.geometry.primitive", "ng.material.stock", "ng.light.rig", "ng.render.mesh_batch", "ng.post.chain");
+                "ng.geometry.primitive", "ng.material.stock", "ng.light.rig", "ng.render.mesh_batch", "ng.post.chain", "ng.compute.stage");
     }
 
     @Test
@@ -165,29 +177,36 @@ class ProgramCheckTest {
 
     @Test
     void aBufferADrawReadsIsFilled() {
+        // The mock's blocks are placed by its init stage; without it, nothing fills what the terrain draws.
         ObjectNode a = valid();
-        config(a, "blocks", "init", "zero");
+        remove(a, "place");
         assertThat(found(check.check(a))).containsExactly("fail buffer-producer @ /program/nodes/0");
+        // The advice the revision reads never offers what the manifest gates (Q80).
+        assertThat(check.check(a).get(0).message()).isEqualTo("blocks is read to draw, but nothing fills it: wire it to the writes of a compute"
+                + " stage; seed it with one at init");
 
         // Filled by a compute stage, in any phase: once at init is enough to fill it.
-        stage(a, "place", "init", "blocks");
+        stage(a, "seed", "init", "blocks");
         assertThat(check.check(a)).isEmpty();
 
         // A stage that writes another buffer fills nothing the draw reads.
         ObjectNode b = valid();
-        config(b, "blocks", "init", "zero");
+        remove(b, "place");
         add(b, "scratch", "ng.buffer.storage", Map.of("elements", 64, "layout", "f32", "strideFloats", 4, "pingPong", false, "init", "zero"));
-        stage(b, "place", "init", "scratch");
+        stage(b, "seed", "init", "scratch");
         assertThat(found(check.check(b))).containsExactly("fail buffer-producer @ /program/nodes/0");
+
+        // Q80: an upload fills nothing in Tier 1. The node check refuses it, so no whole-program rule judges the program.
+        ObjectNode c = valid();
+        remove(c, "place");
+        config(c, "blocks", "init", "upload");
+        assertThat(found(check.check(c))).containsExactly("fail unavailable @ /program/nodes/0/config/init");
     }
 
     @Test
     void anAnimatedDesignMovesWhatItDraws() {
+        // The mock's only work is its init stage: once, so it moves nothing.
         ObjectNode a = animated();
-        assertThat(found(check.check(a))).containsExactly("fail motion-work @ /program/nodes");
-
-        // Work once at init moves nothing.
-        stage(a, "place", "init", "blocks");
         assertThat(found(check.check(a))).containsExactly("fail motion-work @ /program/nodes");
 
         // Work at fixedStep or frame on what is drawn does.
@@ -222,8 +241,8 @@ class ProgramCheckTest {
 
         List<Finding> findings = check.check(a);
 
-        assertThat(found(findings)).containsExactly("fail reserved @ /program/nodes/6/config/entry",
-                "fail reserved @ /program/nodes/7/config/vertexEntry");
+        assertThat(found(findings)).containsExactly("fail reserved @ /program/nodes/7/config/entry",
+                "fail reserved @ /program/nodes/8/config/vertexEntry");
         assertThat(findings.get(0).message()).isEqualTo("move is a reserved word in WGSL, so it cannot name an entry");
     }
 
@@ -236,5 +255,37 @@ class ProgramCheckTest {
         ObjectNode b = valid();
         b.putNull("design");
         assertThat(found(check.check(b))).containsExactly("fail proposal @ /design");
+    }
+
+    // 2026-11-01, live on the VPS: each of the first three agent.v3 hand-offs broke a Tier-1 rule only the browser held.
+
+    @Test
+    void aModuleServesOneNodeAndAfterOrdersStagesOfOnePhase() {
+        // A second node naming the module the mock's place stage owns, as galaxy's spin did: the later one is told.
+        ObjectNode shared = valid();
+        add(shared, "spin", "ng.compute.stage", Map.of("module", "place", "entry", "spinBlocks", "workgroupSize", 64, "invocations", 64,
+                "phase", "frame"), "writes", "blocks", "buffer");
+        List<Finding> findings = check.check(shared);
+        assertThat(found(findings)).containsExactly("fail module-shared @ /program/nodes/7/config/module");
+        assertThat(findings.get(0).message()).isEqualTo("module place serves place and spin: a module serves one node, so give spin a module of its own");
+        // Any two module owners, of any kind.
+        ObjectNode sky = valid();
+        add(sky, "sky", "ng.render.fullscreen", Map.of("module", "place", "fragmentEntry", "dusk"));
+        assertThat(found(check.check(sky))).containsExactly("fail module-shared @ /program/nodes/7/config/module");
+
+        // after wired across phases, as block-film's tickcarts after seedcarts: at that input, as the browser's resolver.
+        ObjectNode across = valid();
+        add(across, "tick", "ng.compute.stage", Map.of("module", "tick", "entry", "tickBlocks", "workgroupSize", 64, "invocations", 64,
+                "phase", "fixedStep"), "writes", "blocks", "buffer", "after", "place", "done");
+        List<Finding> order = check.check(across);
+        assertThat(found(order)).containsExactly("fail after-phase @ /program/nodes/7/inputs/1");
+        assertThat(order.get(0).message()).isEqualTo("tick runs in fixedStep and place in init: after orders two stages of one phase, so drop it"
+                + " or give both one phase (init runs once, before any fixedStep or frame)");
+
+        // after within one phase orders two writers of one buffer, and passes; so do two modules of their own.
+        ObjectNode within = valid();
+        add(within, "settle", "ng.compute.stage", Map.of("module", "settle", "entry", "settleBlocks", "workgroupSize", 64, "invocations", 64,
+                "phase", "init"), "writes", "blocks", "buffer", "after", "place", "done");
+        assertThat(check.check(within)).isEmpty();
     }
 }

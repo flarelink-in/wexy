@@ -75,7 +75,8 @@ import static org.mockito.Mockito.when;
  * identity filter and the error envelope, against the fake Meta API and the in-memory meter. A turn streams its events
  * with one terminal; a refused first charge is a status with nothing sent upstream; a refused later charge ends the
  * stream with nothing more sent; a client that leaves cancels the call in flight; a request with an image, or past its
- * caps, is refused before any charge. Each call is an {@code AGENT} record under the turn.
+ * caps, is refused before any charge. Each call is an {@code AGENT} record under the turn. A revision's base (EA-MR,
+ * EA4.4) is checked whole before anything is recorded or charged, then revised with its design kept.
  */
 class AgentRoutesTest {
 
@@ -202,7 +203,7 @@ class AgentRoutesTest {
 
         assertThat(names(events)).containsExactly("meta", "call", "usage", "tools", "call", "usage", "check", "design", "program", "done");
         JsonNode meta = data(events, "meta");
-        assertThat(meta.path("promptVersion").asText()).isEqualTo("agent.v2");
+        assertThat(meta.path("promptVersion").asText()).isEqualTo("agent.v4");
         // EA3.6: the action's contract and the adapter manifest its program was checked against.
         assertThat(meta.path("actionSchema").asText()).isEqualTo("agent-action.v2");
         assertThat(meta.path("manifestHash").asText()).isEqualTo(AdapterManifest.HASH);
@@ -218,7 +219,7 @@ class AgentRoutesTest {
         List<Generation> calls = agentCalls();
         assertThat(calls).hasSize(2).allMatch(g -> g.status() == Generation.Status.OK && g.role().equals("agent")
                 && g.parentId().equals(meta.path("turnId").asText()) && g.uid().equals("uid-agent"));
-        assertThat(calls).extracting(Generation::promptVersion).containsOnly("agent.v2");
+        assertThat(calls).extracting(Generation::promptVersion).containsOnly("agent.v4");
         assertThat(ledger.reservations()).isEqualTo(2);
     }
 
@@ -342,7 +343,7 @@ class AgentRoutesTest {
     void aCallWithNoTimeLeftIsRefusedBeforeAnythingIsChargedOrRecorded() {
         start(5_000_000L);
         MeteredModelCaller calls = new MeteredModelCaller(models, catalog, store, "turn-1",
-                new ai.wexy.forge.identity.Caller("uid-agent", true, false, "anonymous"), "{}", "agent.v2", HostContract.VERSION);
+                new ai.wexy.forge.identity.Caller("uid-agent", true, false, "anonymous"), "{}", "agent.v3", HostContract.VERSION);
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> calls.call(1, List.of(ai.wexy.forge.upstream.ChatMessage.user("x")),
                         null, () -> { }, Duration.ZERO))
@@ -364,6 +365,77 @@ class AgentRoutesTest {
 
         assertThat(ledger.untouched()).isTrue();
         assertThat(agentCalls()).isEmpty();
+    }
+
+    // EA-MR (EA4.4; the frontend's candidate-loop design §8, Q82 (a)): a turn that revises a base.
+
+    /** The turn's body with a base, {@code change}d first. */
+    private static ObjectNode revision(java.util.function.Consumer<ObjectNode> change) {
+        ObjectNode body = JSON.valueToTree(BODY);
+        ObjectNode base = AgentLoopTest.baseJson();
+        change.accept(base);
+        body.set("base", base);
+        return body;
+    }
+
+    @Test
+    void aRevisionTurnRevisesItsBaseAndHandsOffWithItsDesign() throws Exception {
+        start(5_000_000L);
+        answers(USAGE, AgentLoopTest.valid("revise"));
+
+        List<ServerSentEvent<String>> events = stream(revision(base -> { }));
+
+        assertThat(names(events)).containsExactly("meta", "call", "usage", "check", "design", "program", "done");
+        assertThat(data(events, "meta").path("promptVersion").asText()).isEqualTo("agent.v4");
+        assertThat(data(events, "call").path("purpose").asText()).isEqualTo("revise");
+        assertThat(data(events, "design").path("design")).isEqualTo(AgentLoopTest.baseJson().path("design"));
+        assertThat(data(events, "done").path("status").asText()).isEqualTo("handed-off");
+        // The model was sent R and then the base, as data: its program and the browser's finding.
+        assertThat(fake.requests()).filteredOn(r -> r.path().endsWith("/chat/completions")).singleElement()
+                .matches(r -> r.body().contains("This turn revises a program the browser refused.") && r.body().contains("step cannot be an entry"));
+        // One record, the turn's request with its base as the input.
+        assertThat(agentCalls()).singleElement().matches(g -> g.status() == Generation.Status.OK && g.input().contains("\"base\"")
+                && g.promptVersion().equals("agent.v4"));
+    }
+
+    @Test
+    void aRevisionsBaseIsCheckedWholeBeforeAnythingIsRecordedOrCharged() throws Exception {
+        start(5_000_000L);
+        answers(USAGE, AgentLoopTest.valid("revise"));
+        ObjectNode nullBase = JSON.valueToTree(BODY);
+        nullBase.putNull("base");
+
+        refused(nullBase, 400, "base is a revision's versions, design, program and findings");
+        refused(revision(b -> b.remove("findings")), 400, "base takes exactly versions, design, program, findings; findings missing");
+        refused(revision(b -> b.put("prompt", "again")), 400, "base takes exactly versions, design, program, findings; not prompt");
+        refused(revision(b -> ((ObjectNode) b.path("versions")).put("manifest", "0".repeat(64))), 400,
+                "base.versions.manifest is \"" + "0".repeat(64) + "\"; this server speaks " + AdapterManifest.HASH);
+        refused(revision(b -> ((ObjectNode) b.path("versions")).put("actionSchema", "agent-action.v1")), 400,
+                "base.versions.actionSchema is \"agent-action.v1\"; this server speaks agent-action.v2");
+        refused(revision(b -> ((ObjectNode) b.path("design")).put("mood", "sepia")), 400, "base does not fit agent-action.v2");
+        refused(revision(b -> ProgramCheckTest.remove(b, "place")), 400, "base.program does not pass the host's check, so no turn could have "
+                + "handed it off: buffer-producer at /program/nodes/0");
+        refused(revision(b -> b.putArray("findings")), 400, "base.findings is 1 to 32 findings");
+        refused(revision(b -> {
+            var list = b.putArray("findings");
+            for (int i = 0; i < 33; i++) {
+                list.addObject().put("id", "ev-1.f" + i).put("code", "work").putNull("path").put("message", "too much work");
+            }
+        }), 400, "base.findings is 1 to 32 findings");
+        refused(revision(b -> ((ObjectNode) b.path("findings").get(0)).put("message", "x".repeat(401))), 400, "A finding of base.findings has an id");
+        refused(revision(b -> ((ObjectNode) b.path("findings").get(0)).put("severity", "error")), 400,
+                "a finding of base.findings takes exactly id, code, path, message; not severity");
+        refused(revision(b -> b.put("padding", "x".repeat(70_000))), 413, "base is at most 65536 bytes as JSON");
+
+        assertThat(fake.requests()).filteredOn(r -> r.path().endsWith("/chat/completions")).isEmpty();
+        assertThat(ledger.untouched()).isTrue();
+        assertThat(agentCalls()).isEmpty();
+    }
+
+    /** One bad base: refused with this status, its envelope's message holding this text. */
+    private void refused(ObjectNode body, int status, String says) throws Exception {
+        String answer = post(body).expectStatus().isEqualTo(status).expectBody(String.class).returnResult().getResponseBody();
+        assertThat(JSON.readTree(answer).path("message").asText()).as(answer).contains(says);
     }
 
     /** The text in three chunks, a stop, the usage when given, then [DONE]. */

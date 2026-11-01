@@ -330,7 +330,7 @@ final class LoopTestServer implements AutoCloseable {
             case AUTHOR -> "author." + fn + ".v1";
             case REPAIR -> "repair.v1";
             case DIRECT -> "director.v1";
-            case AGENT -> "agent.v2";
+            case AGENT -> "agent.v3";
         };
         store.begin(Generation.started(id, kind, parentId, role, "m-1", template, "h1", fn,
                 "{\"prompt\":\"a spiral galaxy\",\"style\":\"cosmic\",\"seconds\":12}", Generation.Source.USER, uid, now));

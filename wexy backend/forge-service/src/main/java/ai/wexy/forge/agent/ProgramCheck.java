@@ -6,6 +6,7 @@ import ai.wexy.forge.templates.WgslWords;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -23,10 +24,15 @@ import java.util.TreeSet;
  *   <li>the nodes, by {@link NodeCheck}, the frontend's {@code checkNodes}: a program handed off is one the browser's own
  *       node check takes;</li>
  *   <li>once the nodes pass, v1's completeness rules restated for nodes: a buffer a draw reads is filled, by its upload
- *       or by a compute stage that writes it; an animated design has a node that moves what is drawn, a compute stage
+ *       (once the manifest no longer gates it, Q80) or by a compute stage that writes it; an animated design has a node
+ *       that moves what is drawn, a compute stage
  *       at fixedStep or frame writing a buffer a draw reads, or a custom batch or fullscreen module, which can move with
  *       the camera's {@code simTime}; and no WGSL reserved word names an entry. The browser refuses more names (its
  *       built-ins, and the names the host generates); a program this passes can still fail its resolver.</li>
+ *   <li>two of the browser's Tier-1 rules (2026-11-01: each of the first three live {@code agent.v3} hand-offs broke one,
+ *       and the browser refused it, with no revision left to the turn): a module serves one node (its
+ *       {@code deriveInterfaces}: two consumers, each with its own bindings, cannot share one body), and {@code after}
+ *       orders two stages of one phase (its resolver). Held here, the turn's own revision answers them.</li>
  * </ul>
  * Paths are JSON pointers into the action ({@code /program/nodes/3/config/entry}). v1's rules over raw engine calls
  * retired with the contract they read ({@link RawCallCheck}).
@@ -44,10 +50,19 @@ public final class ProgramCheck {
 
     private final EngineBundle bundle;
     private final NodeCheck nodes;
+    /**
+     * How an unfilled buffer is filled, in the words the model reads in its revision: never by a value the manifest gates
+     * (Q80), so Tier 2's lifting of upload's gate brings the advice back with no change here.
+     */
+    private final String fill;
 
     public ProgramCheck(EngineBundle bundle, AdapterManifest manifest) {
         this.bundle = bundle;
         this.nodes = new NodeCheck(manifest, bundle);
+        boolean upload = manifest.unavailable().stream().noneMatch(g -> g.adapter().equals("ng.buffer.storage") && g.path().equals("/init")
+                && "upload".equals(g.value().asText()));
+        this.fill = upload ? "give it init upload, or wire it to the writes of a compute stage"
+                : "wire it to the writes of a compute stage; seed it with one at init";
     }
 
     /** Whether a check's findings let the program be handed off: none fails. */
@@ -69,9 +84,50 @@ public final class ProgramCheck {
         out.addAll(checked.findings());
         if (checked.findings().isEmpty()) {
             entries(checked.nodes(), out);
-            completeness(design, checked.nodes(), out);
+            tierOne(checked.nodes(), out);
+            completeness(design, checked.nodes(), fill, out);
         }
         return out;
+    }
+
+    /**
+     * The browser's rules on modules and order, at the browser's places: a module named by a second node fails at that
+     * node's module, as {@code deriveInterfaces} names the later node; an {@code after} wired to a stage of another phase
+     * fails at that input, as the resolver does.
+     */
+    private static void tierOne(List<NodeCheck.Node> nodes, List<Finding> out) {
+        Map<String, NodeCheck.Node> owners = new HashMap<>();
+        Map<String, NodeCheck.Node> byId = new HashMap<>();
+        for (NodeCheck.Node n : nodes) {
+            byId.put(n.id(), n);
+        }
+        for (NodeCheck.Node n : nodes) {
+            if (!ENTRIES.containsKey(n.adapter().id())) {
+                continue;
+            }
+            String module = n.config().path("module").asText();
+            NodeCheck.Node first = owners.putIfAbsent(module, n);
+            if (first != null) {
+                out.add(Finding.fail("module-shared", "/program/nodes/" + n.index() + "/config/module", "module " + module + " serves "
+                        + first.id() + " and " + n.id() + ": a module serves one node, so give " + n.id() + " a module of its own"));
+            }
+        }
+        for (NodeCheck.Node n : nodes) {
+            if (!"ng.compute.stage".equals(n.adapter().id())) {
+                continue;
+            }
+            String phase = n.config().path("phase").asText();
+            for (int j = 0; j < n.inputs().size(); j++) {
+                NodeCheck.Input w = n.inputs().get(j);
+                NodeCheck.Node before = "after".equals(w.port()) ? byId.get(w.nodeId()) : null;
+                String theirs = before == null ? phase : before.config().path("phase").asText();
+                if (!phase.equals(theirs)) {
+                    out.add(Finding.fail("after-phase", "/program/nodes/" + n.index() + "/inputs/" + j, n.id() + " runs in " + phase + " and "
+                            + w.nodeId() + " in " + theirs + ": after orders two stages of one phase, so drop it or give both one phase "
+                            + "(init runs once, before any fixedStep or frame)"));
+                }
+            }
+        }
     }
 
     private void names(JsonNode design, List<Finding> out) {
@@ -120,7 +176,7 @@ public final class ProgramCheck {
     }
 
     /** What a draw reads is filled; an animated design moves something drawn (v1's buffer-producer and motion-work). */
-    private static void completeness(JsonNode design, List<NodeCheck.Node> nodes, List<Finding> out) {
+    private static void completeness(JsonNode design, List<NodeCheck.Node> nodes, String fill, List<Finding> out) {
         Set<String> drawn = new LinkedHashSet<>();
         for (NodeCheck.Node n : nodes) {
             String port = DRAW_READS.get(n.adapter().id());
@@ -146,8 +202,7 @@ public final class ProgramCheck {
         }
         for (NodeCheck.Node n : nodes) {
             if (drawn.contains(n.id()) && !"upload".equals(n.config().path("init").asText()) && !written.contains(n.id())) {
-                out.add(Finding.fail("buffer-producer", "/program/nodes/" + n.index(), n.id() + " is read to draw, but nothing fills it: "
-                        + "give it init upload, or wire it to the writes of a compute stage"));
+                out.add(Finding.fail("buffer-producer", "/program/nodes/" + n.index(), n.id() + " is read to draw, but nothing fills it: " + fill));
             }
         }
         if (design.path("animated").asBoolean(false)) {

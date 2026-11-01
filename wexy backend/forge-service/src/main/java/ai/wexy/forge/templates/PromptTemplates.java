@@ -58,7 +58,8 @@ public class PromptTemplates {
             "escalator", List.of("repair"),
             "director", List.of("director"),
             "paper", List.of("paper"),
-            "agent", List.of("agent"));
+            "agent", List.of("agent"),
+            "module", List.of("module.author", "module.repair"));
 
     /** The request fields each template's variable part may use (all authors share theirs). */
     static final Map<String, Set<String>> REQUEST_FIELDS = Map.of(
@@ -67,7 +68,9 @@ public class PromptTemplates {
             "repair", Set.of("fn", "attempt", "params", "code", "diagnostics"),
             "director", Set.of("world", "turn"),
             "paper", Set.of("documents", "request"),
-            "agent", Set.of("budgets", "style", "seconds", "request"));
+            "agent", Set.of("budgets", "style", "seconds", "request", "base"),
+            "module.author", Set.of("request", "design", "module", "kind", "nodes", "preamble", "entries", "epilogue"),
+            "module.repair", Set.of("request", "design", "module", "kind", "nodes", "preamble", "entries", "epilogue", "code", "findings"));
 
     static final Pattern PLACEHOLDER = Pattern.compile("\\{\\{([A-Za-z]+)}}");
 
@@ -78,6 +81,8 @@ public class PromptTemplates {
     private static final String PAPER_REQUESTS = "classpath:paper/requests.v1.json";
     /** The mock's agent program: the example agent.v2 shows, and the answer the mock gives. */
     private static final String AGENT_EXAMPLE = "classpath:mock/agent/program.json";
+    /** The mock program's module body: the example the module templates show, and the answer the mock gives (EA4.2). */
+    private static final String MODULE_EXAMPLE = "classpath:mock/modules/place.wgsl";
     /**
      * The documents every agent call carries (Q65, the agent-loop design). They are part of the agent template: a change
      * is a new version of it, so records and the prompt cache name what a call was given.
@@ -204,6 +209,10 @@ public class PromptTemplates {
                 fill.put("adapters", AdapterManifest.load(json).describe());
                 fill.put("example", exampleProgram(resources, json));
             }
+        } else if (name.startsWith("module.")) {
+            // EA4.2: a module body for a turn's program; the mock world's own body is the example, as for the agent.
+            fill.put("engineVersion", EngineBundle.load(json).engineVersion());
+            fill.put("example", fenced("wgsl", HostContract.read(resources.getResource(MODULE_EXAMPLE)).strip()));
         }
         return fill;
     }

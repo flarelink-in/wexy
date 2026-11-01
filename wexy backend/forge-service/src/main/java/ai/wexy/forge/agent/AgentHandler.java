@@ -40,7 +40,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * {@code POST /v1/agent/turn} (the agent-loop design §5, §10; EA2.4): one turn of the agent loop as one SSE stream.
+ * {@code POST /v1/agent/turn} (the agent-loop design §5, §10; EA2.4): one turn of the agent loop as one SSE stream. A
+ * turn may bring a {@code base} to revise (Q82 (a); EA4.4): it is checked whole here, before any record or charge
+ * ({@link AgentBase}), and the loop then revises it.
  *
  * <p>The loop runs off the event loop and says nothing until its first call is charged (the {@code charged} callback).
  * So the route waits for its first word before it answers: a turn that ended having said nothing (the first charge
@@ -51,11 +53,12 @@ import java.util.concurrent.atomic.AtomicReference;
 @Component
 public class AgentHandler {
 
+    /** R's three fields: a turn's own request, as a module call quotes it (ModuleRequest) too. */
     static final Set<String> FIELDS = Set.of("prompt", "style", "seconds");
+    /** A turn's fields: R's three, and a program revision's base (Q82 (a); EA4.4, {@link AgentBase}), which a first turn leaves out. */
+    static final Set<String> TURN_FIELDS = Set.of("prompt", "style", "seconds", "base");
     private static final Logger log = LoggerFactory.getLogger(AgentHandler.class);
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final String PROMPT_VERSION = "agent.v2";
-
     private final AgentLoop loop;
     private final MeteredModelClient models;
     private final ModelCatalog catalog;
@@ -79,15 +82,18 @@ public class AgentHandler {
         return request.bodyToMono(JsonNode.class)
                 .switchIfEmpty(Mono.error(() -> new ForgeException(ErrorCode.BAD_REQUEST, "The request needs a body.")))
                 .flatMap(body -> {
-                    AgentRequest turn = validated(body, loopProperties.caps());
+                    AgentRequest turn = validated(body, loopProperties.caps(), TURN_FIELDS);
+                    // A revision's base is checked whole before anything is recorded or charged (AgentBase).
+                    AgentBase base = body.has("base") ? loop.base(body.path("base"), bundle.bundleHash()) : null;
                     String turnId = Ulid.next(Instant.now());
+                    // The template the loop builds every call from: records and meta name it, never a copy of its id.
                     MeteredModelCaller calls = new MeteredModelCaller(models, catalog, store, turnId, caller,
-                            body.toString(), PROMPT_VERSION, HostContract.VERSION);
+                            body.toString(), loop.promptVersion(), HostContract.VERSION);
                     Sinks.Many<ServerSentEvent<String>> events = Sinks.many().unicast().onBackpressureBuffer();
                     Sinks.One<Boolean> opened = Sinks.one();
                     AtomicReference<AgentOutcome> silent = new AtomicReference<>();
                     AtomicBoolean cancelled = new AtomicBoolean();
-                    Schedulers.boundedElastic().schedule(() -> run(turnId, turn, calls, events, opened, silent, cancelled));
+                    Schedulers.boundedElastic().schedule(() -> run(turnId, turn, base, calls, events, opened, silent, cancelled));
                     // A client that leaves before the first word ends the turn too (gate A): no call starts after it,
                     // and one the meter is deciding stops there; the body's own cancel covers the stream after.
                     return opened.asMono().doOnCancel(() -> {
@@ -107,11 +113,11 @@ public class AgentHandler {
     }
 
     /** The turn, on its own thread: the loop, then its terminal event, or nothing at all when it never spoke. */
-    private void run(String turnId, AgentRequest turn, MeteredModelCaller calls, Sinks.Many<ServerSentEvent<String>> events,
+    private void run(String turnId, AgentRequest turn, AgentBase base, MeteredModelCaller calls, Sinks.Many<ServerSentEvent<String>> events,
                      Sinks.One<Boolean> opened, AtomicReference<AgentOutcome> silent, AtomicBoolean cancelled) {
         AgentOutcome outcome;
         try {
-            outcome = loop.run(turn, calls, event -> {
+            outcome = loop.run(turn, base, calls, event -> {
                 if (opened.tryEmitValue(Boolean.TRUE).isSuccess()) {
                     events.tryEmitNext(encode("meta", meta(turnId)));
                 }
@@ -136,19 +142,25 @@ public class AgentHandler {
         events.tryEmitComplete();
     }
 
-    /** The request as §5.1 takes it: only its three fields, within the planner's caps. */
+    /** R as §5.1 takes it: only its three fields, within the planner's caps (a module call's quoted request). */
     static AgentRequest validated(JsonNode body, LoopProperties.Caps caps) {
+        return validated(body, caps, FIELDS);
+    }
+
+    /** R within the planner's caps, from a body that may hold only {@code fields}; a base, when allowed, is the caller's to check. */
+    static AgentRequest validated(JsonNode body, LoopProperties.Caps caps, Set<String> fields) {
         if (!body.isObject()) {
             throw new ForgeException(ErrorCode.BAD_REQUEST, "The request must be a JSON object.");
         }
         List<String> extra = new ArrayList<>();
         body.fieldNames().forEachRemaining(name -> {
-            if (!FIELDS.contains(name)) {
+            if (!fields.contains(name)) {
                 extra.add(name);
             }
         });
         if (!extra.isEmpty()) {
-            throw new ForgeException(ErrorCode.BAD_REQUEST, "A turn takes only prompt, style and seconds, not " + String.join(", ", extra) + ".");
+            throw new ForgeException(ErrorCode.BAD_REQUEST, (fields.contains("base") ? "A turn takes only prompt, style, seconds and base"
+                    : "A turn takes only prompt, style and seconds") + ", not " + String.join(", ", extra) + ".");
         }
         JsonNode seconds = body.path("seconds");
         // A number beyond an int is refused, not wrapped into range (4294967308 is not 12).
@@ -163,7 +175,7 @@ public class AgentHandler {
         meta.put("turnId", turnId);
         meta.put("model", catalog.role(MeteredModelCaller.ROLE).model());
         meta.put("source", "live");
-        meta.put("promptVersion", PROMPT_VERSION);
+        meta.put("promptVersion", loop.promptVersion());
         meta.put("bundleHash", bundle.bundleHash());
         // EA3.6: the action's contract and the adapter manifest its program was checked against, so a client built for
         // another refuses the turn before it reads a design or a program, as it refuses another bundle.

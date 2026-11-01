@@ -32,3 +32,6 @@ wexy:
       agent-turn: { refill-per-second: 30, burst-capacity: 600, request-cost: 6 }
       agent-turn-user: { refill-per-second: 30, burst-capacity: 600, request-cost: 6 }
       agent-turn-anonymous: { refill-per-second: 30, burst-capacity: 600, request-cost: 6 }
+      agent-module: { refill-per-second: 30, burst-capacity: 600 }
+      agent-module-user: { refill-per-second: 30, burst-capacity: 600 }
+      agent-module-anonymous: { refill-per-second: 30, burst-capacity: 600 }

@@ -38,6 +38,11 @@ import static ai.wexy.forge.agent.AgentOutcome.Status.HANDED_OFF;
  * must match {@code agent-action.v2} and carry its kind's payload (one repair is allowed). A {@code need_context} runs
  * its reads; a proposal runs the check, which hands off or asks for a revision; {@code ask} and {@code finish} end the
  * turn.
+ *
+ * <p>A turn may revise a base (Q82 (a); EA4.4, {@link AgentBase}): a program a turn handed off and the browser refused,
+ * with what it found. Its first message carries the base after the request, its first call asks for the revise, and
+ * every proposal of the turn is checked and handed off with the base's design, which a program revision may not change
+ * (the frontend's candidate-loop design §8): an answer that changed it is told, as a {@code warn}, and not used.
  */
 public final class AgentLoop {
 
@@ -48,6 +53,11 @@ public final class AgentLoop {
     private final AgentBudget budget;
     private final LongSupplier clockMillis;
     private final ObjectMapper json = new ObjectMapper();
+
+    /** The template every call of a turn is built from ({@code agent.v4}), as its records and its meta name it. */
+    public String promptVersion() {
+        return prompts.version("agent");
+    }
 
     public AgentLoop(AgentTools tools, ProgramCheck check, JsonSchemas schemas, PromptBuilder prompts, AgentBudget budget,
                      LongSupplier clockMillis) {
@@ -61,7 +71,17 @@ public final class AgentLoop {
 
     /** One turn, to its end; its events go to {@code events} as they happen, and {@code cancelled} is asked between steps. */
     public AgentOutcome run(AgentRequest request, ModelCaller caller, Consumer<AgentEvent> events, BooleanSupplier cancelled) {
-        return new Turn(request, caller, events, cancelled).run();
+        return run(request, null, caller, events, cancelled);
+    }
+
+    /** One turn that revises {@code base}, or a first turn when it is null. */
+    public AgentOutcome run(AgentRequest request, AgentBase base, ModelCaller caller, Consumer<AgentEvent> events, BooleanSupplier cancelled) {
+        return new Turn(request, base, caller, events, cancelled).run();
+    }
+
+    /** A revision's base, checked as this loop checks a proposal (its schema, then the program check); refused otherwise. */
+    AgentBase base(JsonNode base, String bundleHash) {
+        return AgentBase.validated(base, bundleHash, schemas, check);
     }
 
     /** The {@code response_format} every call sends: the action's schema, strict (the tests price a call by it too). */
@@ -86,13 +106,26 @@ public final class AgentLoop {
         private long spent;
         /** A design proposed alone, waiting for its program. */
         private JsonNode pendingDesign;
-        private String purpose = "first";
+        /** A revision's design, which every proposal of the turn is checked and handed off with; null in a first turn. */
+        private final JsonNode fixedDesign;
+        private String purpose;
 
-        Turn(AgentRequest request, ModelCaller caller, Consumer<AgentEvent> events, BooleanSupplier cancelled) {
+        Turn(AgentRequest request, AgentBase base, ModelCaller caller, Consumer<AgentEvent> events, BooleanSupplier cancelled) {
             this.caller = caller;
             this.events = events;
             this.cancelled = cancelled;
-            Prompt first = prompts.agent(request.prompt(), request.style(), request.seconds(), budget.describe());
+            Prompt first;
+            if (base == null) {
+                first = prompts.agent(request.prompt(), request.style(), request.seconds(), budget.describe());
+                fixedDesign = null;
+                purpose = "first";
+            } else {
+                first = prompts.agent(request.prompt(), request.style(), request.seconds(), budget.describe(), base.design(), base.program(),
+                        base.findings().stream().map(f -> new PromptBuilder.ProgramFinding(f.code(), f.path(), f.message())).toList());
+                fixedDesign = base.design();
+                // The first call is the revise the base asks for: the template's "A turn that revises a program".
+                purpose = "revise";
+            }
             messages.addAll(first.messages());
             format = responseFormat(schemas);
         }
@@ -219,14 +252,22 @@ public final class AgentLoop {
             say(s.toString().stripTrailing(), "after-tools");
         }
 
-        private AgentOutcome propose(JsonNode design, JsonNode program) {
+        private AgentOutcome propose(JsonNode proposed, JsonNode program) {
+            // S is fixed in a revision: the base's design is the one checked and handed off, whatever the answer carried.
+            boolean kept = fixedDesign != null && !fixedDesign.equals(proposed);
+            JsonNode design = fixedDesign != null ? fixedDesign : proposed;
             ObjectNode proposal = json.createObjectNode();
             proposal.set("design", design);
             proposal.set("program", program);
             List<Finding> findings = new ArrayList<>(check.check(proposal));
+            if (kept) {
+                findings.add(Finding.warn("design-kept", "/design", "a program revision keeps the design it was given: the design this answer "
+                        + "carried differs, and was not used"));
+            }
             // What the browser could not read is not handed off: a part past the stream's limit is a finding to revise.
             wireSize("design", design, findings);
             wireSize("program", program, findings);
+            baseSize(design, program, findings);
             boolean ok = ProgramCheck.passes(findings);
             List<Map<String, Object>> listed = new ArrayList<>();
             for (Finding f : findings) {
@@ -249,6 +290,19 @@ public final class AgentLoop {
             }
             say(s.toString(), "revise");
             return null;
+        }
+
+        /**
+         * A hand-off no revision could carry fails {@code base-size} (the EA4.4 review): its design and program, as JSON in
+         * a base, must leave {@link AgentBase#RESERVE_BYTES} of the base's bound for the pins and a finding.
+         */
+        private void baseSize(JsonNode design, JsonNode program, List<Finding> findings) {
+            int bytes = ModuleRequest.utf8(design.toString()) + ModuleRequest.utf8(program.toString());
+            int room = AgentBase.MAX_BASE_BYTES - AgentBase.RESERVE_BYTES;
+            if (bytes > room) {
+                findings.add(Finding.fail("base-size", "/program", "the design and program are " + bytes + " bytes together as JSON, more than the "
+                        + room + " a revision of this world could carry: make them smaller (fewer nodes, shorter configs and strings)"));
+            }
         }
 
         /** A part whose event, {@code {"<name>": part}}, would pass {@link AgentTurn#MAX_EVENT_CHARS} fails {@code wire-size}. */

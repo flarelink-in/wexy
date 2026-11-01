@@ -34,8 +34,8 @@ import java.util.function.Function;
  *   <li><b>admin:</b> an address budget and the admin allow-list.</li>
  * </ul>
  *
- * Exactly two routes spend App Check tokens, forge-plan and worlds-publish; the frontend mints a
- * fresh token only for those (ForgeRoutesTest pins the set). Showcase publishing needs an account,
+ * Exactly four routes spend App Check tokens, forge-plan, agent-turn, agent-module and worlds-publish;
+ * the frontend mints a fresh token only for those (ForgeRoutesTest pins the set). Showcase publishing needs an account,
  * which forge-service checks from the token's {@code anon} claim when publishing (backend §7).
  */
 @Configuration
@@ -63,6 +63,14 @@ public class ForgeRoutes {
                 .filter(appCheck.singleUse())
                 .filter(authorization.anonymousAllowed())
                 .filter(rateLimits.byUserTiered("agent-turn-user", "agent-turn-anonymous"));
+
+        // A module call (EA4.2, the frontend's candidate-loop design §6): one metered call each, with its own buckets and
+        // a single-use App Check token, as the turn has.
+        Function<GatewayFilterSpec, UriSpec> agentModule = f -> f
+                .filter(rateLimits.byClient("agent-module"))
+                .filter(appCheck.singleUse())
+                .filter(authorization.anonymousAllowed())
+                .filter(rateLimits.byUserTiered("agent-module-user", "agent-module-anonymous"));
 
         Function<GatewayFilterSpec, UriSpec> forgeCreate = f -> f
                 .filter(rateLimits.byClient("forge-create"))
@@ -106,6 +114,8 @@ public class ForgeRoutes {
                         .filters(forgeEdit).uri(forgeService))
                 .route("agent-turn", r -> r.path("/v1/agent/turn").and().method(HttpMethod.POST)
                         .filters(agentEntry).uri(forgeService))
+                .route("agent-module", r -> r.path("/v1/agent/module").and().method(HttpMethod.POST)
+                        .filters(agentModule).uri(forgeService))
 
                 // --- Public reads ---
                 .route("forge-mode", r -> r.path("/v1/forge/mode").and().method(HttpMethod.GET)

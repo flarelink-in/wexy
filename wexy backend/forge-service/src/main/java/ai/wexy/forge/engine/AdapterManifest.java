@@ -13,6 +13,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -25,13 +26,13 @@ import java.util.Set;
  * {@code resources/adapters/} (Q74: the frontend owns it, the backend embeds it). Its hash over LF line ends is pinned
  * here and in the frontend's tests, so a copy that drifted is refused at startup. It checks itself as the frontend's
  * {@code checkManifest} does: every config schema in the validator's strict subset with its objects closed, every port
- * of a known kind and count, and every layout key an enum of pinned layouts. The program check of {@code agent-action.v2}
- * holds each adapter node to it (EA3.6).
+ * of a known kind and count, every layout key an enum of pinned layouts, and every variant gate (Q80) an enum value its
+ * adapter declares. The program check of {@code agent-action.v2} holds each adapter node to it (EA3.6).
  */
 public final class AdapterManifest {
 
-    /** sha256 of descriptors.json with LF line ends; the frontend's EA-A1 pins the same (10-30, after Q77). */
-    public static final String HASH = "1de4e9b80b3d604f712cac856a17e58b66a00cc0d7a981cf88e65fd5fd87ba64";
+    /** sha256 of descriptors.json with LF line ends; the frontend's EA-A1 pins the same (10-31, after Q80's gates). */
+    public static final String HASH = "aacc5959c0f66277befb062ee140fa2b0dbae14d7a9fe0796ca032403b7293a3";
 
     static final Set<String> PORT_KINDS = Set.of("storage_buffer", "geometry", "material", "lights", "color", "stage");
     /** What the strict subset uses: the frontend's {@code contract/agent} validator implements exactly these. */
@@ -58,17 +59,28 @@ public final class AdapterManifest {
         }
     }
 
+    /**
+     * A config value an adapter declares but the manifest marks unavailable for now (Q80, decided): the node check refuses
+     * it from this data, with its reason. Tier 2 lifts a gate by removing its entry: a data change, nothing else.
+     *
+     * @param path a JSON pointer into the adapter's config (RFC 6901), through its schema's properties to an enum
+     */
+    public record Gate(String adapter, String path, JsonNode value, String reason) {
+    }
+
     private final String version;
     private final Map<String, Adapter> adapters;
     /** Each pinned layout's floats an element; null when the node declares its own (f32). */
     private final Map<String, Integer> layouts;
+    private final List<Gate> unavailable;
     /** The manifest as read, for {@link #describe()}: its summaries and symbols are for the model, not the checks. */
     private final JsonNode source;
 
-    private AdapterManifest(String version, Map<String, Adapter> adapters, Map<String, Integer> layouts, JsonNode source) {
+    private AdapterManifest(String version, Map<String, Adapter> adapters, Map<String, Integer> layouts, List<Gate> unavailable, JsonNode source) {
         this.version = version;
         this.adapters = adapters;
         this.layouts = layouts;
+        this.unavailable = unavailable;
         this.source = source;
     }
 
@@ -163,13 +175,84 @@ public final class AdapterManifest {
             adapters.put(id, new Adapter(id, a.path("version").asInt(), a.path("family").asText(), config, factory.getSchema(config),
                     List.copyOf(inputs), List.copyOf(outputs)));
         }
-        return new AdapterManifest(name, Collections.unmodifiableMap(adapters), Collections.unmodifiableMap(layouts), m.deepCopy());
+        return new AdapterManifest(name, Collections.unmodifiableMap(adapters), Collections.unmodifiableMap(layouts),
+                gates(m.path("unavailable"), adapters, name), m.deepCopy());
     }
 
     /**
-     * The manifest as the agent's template quotes it (agent.v2): the layouts, then each adapter with its version, its
-     * summary, the engine exports it wraps, its config schema as compact JSON and its ports. The same bytes every time,
-     * so every call sends the same system message.
+     * The variant gates (Q80), checked as the frontend's {@code checkManifest} checks them: each exactly {adapter, path,
+     * value, reason}, naming an adapter, an enum of its config by pointer through properties, a value that enum holds, and
+     * its way out in 1 to 200 characters; never the same value twice, and never every value of an enum.
+     */
+    private static List<Gate> gates(JsonNode table, Map<String, Adapter> adapters, String name) {
+        if (!table.isArray()) {
+            throw bad(name, "unavailable is not a list");
+        }
+        List<Gate> gates = new ArrayList<>();
+        Map<String, Set<JsonNode>> gated = new HashMap<>();
+        for (JsonNode g : table) {
+            String where = "unavailable " + g.path("adapter") + " " + g.path("path");
+            Set<String> keys = new HashSet<>();
+            g.fieldNames().forEachRemaining(keys::add);
+            if (!g.isObject() || !keys.equals(Set.of("adapter", "path", "value", "reason"))) {
+                throw bad(name, where + ": a gate is exactly {adapter, path, value, reason}");
+            }
+            Adapter adapter = adapters.get(g.path("adapter").asText());
+            if (adapter == null || !g.path("adapter").isTextual()) {
+                throw bad(name, where + ": there is no such adapter");
+            }
+            String path = g.path("path").asText();
+            JsonNode values = g.path("path").isTextual() ? enumAt(adapter.config(), path) : null;
+            JsonNode value = g.path("value");
+            boolean holds = false;
+            for (JsonNode v : values == null ? List.<JsonNode>of() : values) {
+                holds |= v.equals(value);
+            }
+            if (!holds) {
+                throw bad(name, where + ": not an enum of its config that holds " + value);
+            }
+            String reason = g.path("reason").isTextual() ? g.path("reason").asText() : "";
+            if (reason.isBlank() || reason.length() > 200) {
+                throw bad(name, where + ": its reason is 1 to 200 characters");
+            }
+            Set<JsonNode> set = gated.computeIfAbsent(adapter.id() + " " + path, k -> new HashSet<>());
+            if (!set.add(value)) {
+                throw bad(name, where + ": " + value + " is gated twice");
+            }
+            boolean every = true;
+            for (JsonNode v : values) {
+                every &= set.contains(v);
+            }
+            if (every) {
+                throw bad(name, where + ": every value of the enum is gated, so no node could take one");
+            }
+            gates.add(new Gate(adapter.id(), path, value.deepCopy(), reason));
+        }
+        return List.copyOf(gates);
+    }
+
+    /** The enum a config schema holds at a pointer through its properties, or null. */
+    private static JsonNode enumAt(JsonNode schema, String path) {
+        if (!path.startsWith("/")) {
+            return null;
+        }
+        JsonNode at = schema;
+        for (String token : path.substring(1).split("/", -1)) {
+            String key = token.replace("~1", "/").replace("~0", "~");
+            JsonNode properties = at.path("properties");
+            at = properties.isObject() && properties.has(key) ? properties.get(key) : null;
+            if (at == null) {
+                return null;
+            }
+        }
+        JsonNode values = at.path("enum");
+        return values.isArray() ? values : null;
+    }
+
+    /**
+     * The manifest as the agent's template quotes it (agent.v2 on): the layouts, then each adapter with its version, its
+     * summary, the engine exports it wraps, its config schema as compact JSON, each value it gates as not available yet
+     * with the way out (Q80), and its ports. The same bytes every time, so every call sends the same system message.
      */
     public String describe() {
         StringBuilder s = new StringBuilder("Adapters ").append(version).append(", manifest ").append(HASH, 0, 12)
@@ -198,8 +281,14 @@ public final class AdapterManifest {
                     .append(a.path("summary").asText()).append('\n')
                     .append("- family ").append(adapter.family()).append("; wraps ")
                     .append(symbols.isEmpty() ? "no engine export" : String.join(", ", symbols)).append('\n')
-                    .append("- config: ").append(adapter.config().toString()).append('\n')
-                    .append("- inputs: ").append(inputs.isEmpty() ? "none" : String.join("; ", inputs)).append('\n')
+                    .append("- config: ").append(adapter.config().toString()).append('\n');
+            for (Gate g : unavailable) {
+                if (g.adapter().equals(adapter.id())) {
+                    s.append("- not available yet, so refused: config ").append(g.path()).append(' ').append(g.value()).append(": ")
+                            .append(g.reason()).append('\n');
+                }
+            }
+            s.append("- inputs: ").append(inputs.isEmpty() ? "none" : String.join("; ", inputs)).append('\n')
                     .append("- outputs: ").append(outputs.isEmpty() ? "none" : String.join("; ", outputs)).append('\n');
         }
         return s.toString().stripTrailing();
@@ -257,5 +346,10 @@ public final class AdapterManifest {
     /** The pinned layout's floats an element; null for f32, which declares its own; absent for an unpinned name. */
     public Map<String, Integer> layouts() {
         return layouts;
+    }
+
+    /** The values the manifest gates as not available yet (Q80), in its order. */
+    public List<Gate> unavailable() {
+        return unavailable;
     }
 }

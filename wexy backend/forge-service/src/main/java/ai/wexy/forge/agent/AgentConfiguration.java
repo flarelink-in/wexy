@@ -12,10 +12,11 @@ import org.springframework.web.reactive.function.server.RouterFunctions;
 import org.springframework.web.reactive.function.server.ServerResponse;
 
 /**
- * The agent loop's beans and route (the agent-loop design §3, §10): the engine bundle and the adapter manifest, each
- * verified once at startup, the loop over them with the turn's budgets, and {@code POST /v1/agent/turn}, which the
- * internal token guards like every
- * forge route ({@code InternalTokenFilter}); the gateway puts sign-in, App Check and its buckets in front.
+ * The agent loop's beans and routes (the agent-loop design §3, §10): the engine bundle and the adapter manifest, each
+ * verified once at startup, the loop over them with the turn's budgets, {@code POST /v1/agent/turn}, and
+ * {@code POST /v1/agent/module} (EA4.2: one module's body for a turn's program, the frontend's candidate-loop design
+ * §6). The internal token guards both like every forge route ({@code InternalTokenFilter}); the gateway puts sign-in,
+ * App Check and its buckets in front.
  */
 @Configuration
 public class AgentConfiguration {
@@ -41,5 +42,11 @@ public class AgentConfiguration {
     @Bean
     public RouterFunction<ServerResponse> agentRoutes(AgentHandler handler) {
         return RouterFunctions.route().POST("/v1/agent/turn", handler::turn).build();
+    }
+
+    /** One module's body for a turn's program (EA4.2); WebFlux combines it with the turn's route. */
+    @Bean
+    public RouterFunction<ServerResponse> moduleRoutes(ModuleHandler handler) {
+        return RouterFunctions.route().POST("/v1/agent/module", handler::module).build();
     }
 }

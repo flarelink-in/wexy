@@ -60,7 +60,7 @@ import java.util.regex.Pattern;
  *
  * <p><b>Scenarios</b> ({@code wexy.mock.scenario}, or {@code WEXY_MOCK_SCENARIO}): {@code ok};
  * {@code fault} serves {@code mock/faults/<world>.evolve.wgsl}, an evolve with one real WGSL
- * mistake, so the repair path runs end to end; {@code slow} goes quiet for
+ * mistake, so the repair path runs end to end, and a module's first body {@code mock/modules/<module>.fault.wgsl}; {@code slow} goes quiet for
  * {@code wexy.mock.slow-millis} after the first chunk, for the heartbeat and the deadline;
  * {@code error-mid-stream} sends Meta's {@code {"type": "error", …}} event after the first chunk.
  *
@@ -89,6 +89,9 @@ public class MockMetaApi {
     private static final String AGENT_PROGRAM = "classpath:mock/agent/program.json";
     private static final Pattern TITLE_LINE = Pattern.compile("^Title: (.+)$", Pattern.MULTILINE);
     private static final Pattern REPAIR_FN = Pattern.compile("^The function: (evolve|look|sky) ", Pattern.MULTILINE);
+    /** A module call's bodies (EA4.2), by module: {@code <module>.wgsl}, and {@code <module>.fault.wgsl} for the fault scenario. */
+    private static final String MODULES = "classpath:mock/modules/*.wgsl";
+    private static final Pattern MODULE_LINE = Pattern.compile("^The module: ([A-Za-z0-9_-]+), a ", Pattern.MULTILINE);
 
     private final MockProperties properties;
     private final ModelCatalog catalog;
@@ -98,6 +101,7 @@ public class MockMetaApi {
     private final Map<String, String> templatesBySystem = new LinkedHashMap<>();
     private final Map<String, Plan> plans = new LinkedHashMap<>();
     private final Map<String, String> faults = new LinkedHashMap<>();
+    private final Map<String, String> modules = new LinkedHashMap<>();
     private final String edit;
     private final String agentRead;
     private final String agentProgram;
@@ -146,6 +150,9 @@ public class MockMetaApi {
         }
         for (Resource file : list(resources, FAULTS)) {
             faults.put(stem(file), read(file));
+        }
+        for (Resource file : list(resources, MODULES)) {
+            modules.put(stem(file), read(file).strip());
         }
         this.edit = read(resources.getResource(EDIT));
         this.agentRead = read(resources.getResource(AGENT_READ)).strip();
@@ -247,6 +254,22 @@ public class MockMetaApi {
         if (template == null) {
             error(exchange, 400, "invalid_request_error", "The mock answers only Wexy's own templates, and this system message "
                     + "matches none of " + new TreeSet<>(templatesBySystem.values()) + ".");
+            return;
+        }
+        // A module call is answered by its module's body, or refused when the mock has none for it.
+        if (template.startsWith("module.")) {
+            Matcher named = MODULE_LINE.matcher(user);
+            String module = named.find() ? named.group(1) : "";
+            boolean faulty = template.equals("module.author") && "fault".equals(scenario) && modules.containsKey(module + ".fault");
+            String written = modules.get(faulty ? module + ".fault" : module);
+            if (written == null) {
+                error(exchange, 400, "invalid_request_error", "The mock has no body for the module '" + module + "'; it answers " + modules.keySet() + ".");
+                return;
+            }
+            Recording answer = new Recording("modules/" + (faulty ? module + ".fault" : module), written);
+            int cap = request.path("max_completion_tokens").asInt(0);
+            long cachedTokens = streamedSystems.add(system) ? 0 : tokens(system);
+            stream(exchange, model, template, answer, cap > 0 ? cap : Integer.MAX_VALUE, tokens(system) + tokens(user), cachedTokens);
             return;
         }
         // An agent turn sends its first call with two messages and every later one with more (agent-loop design §2).

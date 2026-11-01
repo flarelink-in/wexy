@@ -31,7 +31,7 @@ class ForgeRoutesTest {
     private static final List<String> PUBLIC_READS = List.of("forge-mode", "archive-match", "worlds-read",
             "showcase", "stats");
     private static final List<String> SIGNED_IN = List.of("forge-plan", "forge-author", "forge-repair",
-            "forge-direct", "forge-outcomes", "agent-turn", "worlds-publish", "worlds-complete", "worlds-report");
+            "forge-direct", "forge-outcomes", "agent-turn", "agent-module", "worlds-publish", "worlds-complete", "worlds-report");
 
     @Autowired
     private RouteLocator routeLocator;
@@ -50,7 +50,7 @@ class ForgeRoutesTest {
         List<String> ids = routeLocator.getRoutes().map(Route::getId).collectList().block();
 
         assertThat(ids).containsExactlyInAnyOrder("forge-plan", "forge-author", "forge-repair", "forge-direct",
-                "forge-outcomes", "agent-turn", "forge-mode", "archive-match", "worlds-read", "showcase", "stats",
+                "forge-outcomes", "agent-turn", "agent-module", "forge-mode", "archive-match", "worlds-read", "showcase", "stats",
                 "worlds-publish", "worlds-complete", "worlds-report", "admin");
     }
 
@@ -62,7 +62,7 @@ class ForgeRoutesTest {
                 .collectList()
                 .block();
 
-        assertThat(spending).containsExactlyInAnyOrder("forge-plan", "agent-turn", "worlds-publish");
+        assertThat(spending).containsExactlyInAnyOrder("forge-plan", "agent-turn", "agent-module", "worlds-publish");
 
         // Spending includes the attestation, so neither runs the plain check as well.
         assertThat(route("forge-plan").getFilters()).doesNotContain(appCheck);
@@ -138,6 +138,45 @@ class ForgeRoutesTest {
             assertThat(shield.getBuckets().get(bucket).getRequestCost()).as(bucket).isEqualTo(ai.wexy.common.AgentTurn.MAX_CALLS);
         }
         assertThat(shield.getBuckets().get("forge-create-user").getRequestCost()).isEqualTo(1);
+    }
+
+    /**
+     * The EA4.4 review: a candidate's program revision is a second turn right after the first, and an anonymous bucket of
+     * one turn refused it for two minutes. Every bucket on the route takes a turn and its revision at once, on the
+     * gateway's own bucket and its default sizes; an anonymous creator's third turn then waits for the refill.
+     */
+    @Test
+    void aTurnAndItsProgramRevisionGoAtOnceEvenAnonymous() {
+        for (String name : List.of("agent-turn", "agent-turn-user", "agent-turn-anonymous")) {
+            GatewayShieldProperties.Bucket b = shield.getBuckets().get(name);
+            ai.wexy.gateway.shield.LocalTokenBucket bucket = new ai.wexy.gateway.shield.LocalTokenBucket(b.getRefillPerSecond(), b.getBurstCapacity(), 10);
+            assertThat(bucket.tryConsume("uid", b.getRequestCost()).allowed()).as("%s: the turn", name).isTrue();
+            assertThat(bucket.tryConsume("uid", b.getRequestCost()).allowed()).as("%s: its revision, at once", name).isTrue();
+        }
+        GatewayShieldProperties.Bucket anonymous = shield.getBuckets().get("agent-turn-anonymous");
+        ai.wexy.gateway.shield.LocalTokenBucket bucket = new ai.wexy.gateway.shield.LocalTokenBucket(anonymous.getRefillPerSecond(), anonymous.getBurstCapacity(), 10);
+        bucket.tryConsume("uid", anonymous.getRequestCost());
+        bucket.tryConsume("uid", anonymous.getRequestCost());
+        assertThat(bucket.tryConsume("uid", anonymous.getRequestCost()).allowed()).as("a third anonymous turn waits for the refill").isFalse();
+        assertThat(anonymous.getRefillPerSecond() * 120).as("then one turn every two minutes")
+                .isCloseTo(anonymous.getRequestCost(), org.assertj.core.api.Assertions.within(1e-9));
+    }
+
+    /** A module call is one model call (EA4.2): tiered as a turn is, a token a request, at an attempt's seven calls. */
+    @Test
+    void theModuleCallIsTieredAndItsBucketsCountOneCallEach() {
+        RateLimits.Tiered tiered = route("agent-module").getFilters().stream()
+                .filter(f -> f instanceof RateLimits.Tiered)
+                .map(f -> (RateLimits.Tiered) f)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("agent-module has no tiered limiter"));
+        assertThat(tiered.signedIn().bucket()).isEqualTo("agent-module-user");
+        assertThat(tiered.anonymous().bucket()).isEqualTo("agent-module-anonymous");
+        for (String bucket : List.of("agent-module", "agent-module-user", "agent-module-anonymous")) {
+            assertThat(shield.getBuckets().get(bucket).getRequestCost()).as(bucket).isEqualTo(1);
+        }
+        assertThat(shield.getBuckets().get("agent-module-anonymous").getBurstCapacity()).isEqualTo(7);
+        assertThat(route("agent-module").getFilters()).contains(appCheck.singleUse()).doesNotContain(appCheck);
     }
 
     /**
