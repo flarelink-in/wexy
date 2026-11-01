@@ -8,6 +8,14 @@
    "reviewed": "2026-10-29",
    "by": "Claude (agent), fixing the EA1 review; not yet confirmed by the maintainer",
    "evidence": "dev/engine-bundle.mjs's automatic checks pass: 8c1a2f9's package.json is version 1.2.0 with the installed exports map; its sources (src/, 210 files) export the installed declarations' 874 names, subpath by subpath; its dist/index.js, the core bundle and the one built file it tracks, is byte-identical to the installed one. 39bc98e is the release commit of the 1.2.0 already on npm; 8c1a2f9 adds only the agent guide's 'WGSL names' section (11 lines). The scanner finds no name the 36 documents import, use through a namespace or take from lib.<family> that 1.2.0 does not export. Not checked: what the prose says about behavior, and the 17 subpath bundles npm ships and the checkout does not track (their export names are checked through the sources)."
+  },
+  {
+   "packageHash": "6e3513632017a286e01340869daa5f76c6729616777831ab587ede042812e41f",
+   "package": "null-graph 1.2.1, as npm ships it (latest since 2026-11-01)",
+   "docs": "null-graph@8c1a2f9+worktree",
+   "reviewed": "2026-11-01",
+   "by": "Claude (agent), adopting 1.2.1 in EA5.0 (Q86 (a)); not yet confirmed by the maintainer",
+   "evidence": "dev/engine-bundle.mjs's automatic checks pass with --worktree (the 1.2.1 release is built and published but not yet committed in the checkout): its package.json is version 1.2.1 with the installed exports map; its sources export the installed declarations' 876 names, subpath by subpath; its working tree's dist/index.js is byte-identical to the installed package's (so the production build npm ships). The bundled documents 1.2.1 changes were read against the release notes (docs/release-1.2.1.md) and the declarations: agent/guide (the manifest and release anchor say 1.2.1), api/core (removePass, createBatchAsync, clearBatch, removeComputeStage, each as declared), api/post (PostChain.destroy releases its engine batches and passes), api/film (output.hardwareAcceleration). Not checked: the rest of the prose's behavior claims, and the subpath bundles the checkout does not track (their export names are checked through the sources)."
   }
  ],
  "reviewedStale": []

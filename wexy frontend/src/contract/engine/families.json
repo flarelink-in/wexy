@@ -1,6 +1,6 @@
 {
   "version": "ea-k1",
-  "engine": "null-graph@1.2.0",
+  "engine": "null-graph@1.2.1",
   "families": [
     {
       "id": "core",
