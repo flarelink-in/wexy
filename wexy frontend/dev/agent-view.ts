@@ -12,10 +12,14 @@
 //          capture, engine or Firebase module loaded
 //   EA-V7  a hand-off's candidate (EA4.5) over the backend's module recordings (test/fixtures/module-wire): each module
 //          with its body as checked and its verdicts, Q_C, the calls, the evidence, the sealed id(C), and the bundle
-//          the developer downloads
+//          the developer downloads; a turn not handed off (running, or cancelled with its program) offers no modules
 //   EA-V8  an unusable answer called again within Q_C; a refusal before the stream ends the candidate in both voices
 //   EA-V9  markup in a module's body shows as text
-//   EA-V10 a new turn retires a running candidate, and a cancel stops one: nothing their calls say after shows
+//   EA-V10 while a candidate runs only Cancel is offered; a new turn, a cancel and the panel's dispose each stop it:
+//          nothing their calls say after shows
+//   EA-V11 (the EA4.5 review) a program the browser refuses, revised over the recorded wire (revised.sse) and its
+//          module written: the revision's turn shown beside the hand-off's, each call with its charge, model and
+//          template, and the downloaded bundle holding both
 
 import '../src/styles/base.css';
 import '../src/styles/studio.css';
@@ -23,7 +27,9 @@ import { createAgentClient, ENGINE_BUNDLE_HASH, type AgentClient, type AgentTurn
 import { readAgentStream, type AgentEvent, type AgentTurnResult } from '../src/forge-client/agent-stream';
 import { createApi } from '../src/forge-client/http';
 import { createModuleClient, type ModuleClient } from '../src/forge-client/module-client';
+import type { Reviser } from '../src/loop/candidate';
 import { COPY } from '../src/loop/copy';
+import { createReviser } from '../src/loop/reviser';
 import { AgentPanel } from '../src/shell/studio/agent-view';
 import moduleAuthorWire from '../test/fixtures/module-wire/author.sse?raw';
 import moduleDeniedJson from '../test/fixtures/module-wire/denied.json?raw';
@@ -37,6 +43,7 @@ import errorUpstreamWire from '../test/fixtures/agent-wire/error-upstream.sse?ra
 import exhaustedDeadlineWire from '../test/fixtures/agent-wire/exhausted-deadline.sse?raw';
 import exhaustedRevisionsWire from '../test/fixtures/agent-wire/exhausted-revisions.sse?raw';
 import handedOffWire from '../test/fixtures/agent-wire/handed-off.sse?raw';
+import revisedWire from '../test/fixtures/agent-wire/revised.sse?raw';
 
 const trap = (window as unknown as { __trap__: { requestAdapter: number; getContext: number; innerHTML: number; armed: boolean } }).__trap__;
 const logEl = document.getElementById('log')!;
@@ -368,8 +375,8 @@ function moduleClient(answer: (request: any) => Response | Promise<Response>): M
     return createModuleClient(createApi(CONFIG, IDENTITY, fetchImpl));
 }
 
-function candidatePanel(client: AgentClient, modules: ModuleClient, label: string, saved: { name: string; text: string }[] = []): AgentPanel {
-    const p = new AgentPanel(client, () => REQUEST, { candidate: { modules, attemptId: () => 'attempt-1', save: (name, text) => saved.push({ name, text }) } });
+function candidatePanel(client: AgentClient, modules: ModuleClient, label: string, saved: { name: string; text: string }[] = [], revise?: Reviser): AgentPanel {
+    const p = new AgentPanel(client, () => REQUEST, { candidate: { modules, revise, attemptId: () => 'attempt-1', save: (name, text) => saved.push({ name, text }) } });
     p.el.dataset.case = label;
     panels.append(p.el);
     return p;
@@ -392,6 +399,9 @@ function lookCandidate(p: AgentPanel) {
         modules: [...c.querySelectorAll<HTMLElement>('.cand-module')].map(m => ({
             module: m.dataset.module, phase: m.dataset.phase, head: m.querySelector('.cand-module-head')?.textContent ?? '',
             verdicts: [...m.querySelectorAll('.cand-verdict')].map(v => v.textContent ?? ''), body: m.querySelector('.cand-body pre')?.textContent ?? null,
+        })),
+        turns: [...c.querySelectorAll<HTMLElement>('.cand-turn')].map(t => ({
+            role: t.dataset.role, head: t.querySelector('.cand-turn-head')?.textContent ?? '', calls: [...t.querySelectorAll('.cand-turn-call')].map(x => x.textContent ?? ''),
         })),
         jobs: [...c.querySelectorAll('.cand-job')].map(j => j.textContent ?? ''),
         evidence: text('.cand-evidence summary'),
@@ -427,9 +437,24 @@ async function candidates(): Promise<void> {
     candidateButton(p, 'Download bundle').click();
     const bundle = saved.length === 1 ? JSON.parse(saved[0].text) : null;
     check('EA-V7 Download bundle saves the candidate: its id, its body, its evidence, each call\'s charge, and no credential', saved.length === 1
-        && saved[0].name === 'wexy-candidate-attempt-1.json' && bundle?.format === 'wexy-candidate-bundle.v1' && (v.id ?? '').includes(bundle.candidate.slice(0, 12))
+        && saved[0].name === 'wexy-candidate-attempt-1.json' && bundle?.format === 'wexy-candidate-bundle.v2' && (v.id ?? '').includes(bundle.candidate.slice(0, 12))
         && bundle.modules[0].body === RECORDED_BODY && bundle.evidence.length === 5 && bundle.calls.jobs[0].charge === 'known'
         && !/Bearer|dev\.anonymous/.test(saved[0]?.text ?? ''), { name: saved[0]?.name, candidate: bundle?.candidate, evidence: bundle?.evidence?.length });
+
+    // A turn holds its design and program before it ends (a program the browser refuses, or a cancel, leaves them there):
+    // only a hand-off offers its modules.
+    const late = stream(handedOffWire, 0, 12);
+    const unfinished = candidatePanel(liveClient(() => late.response), moduleClient(() => { throw new Error('no module call is expected'); }),
+        'candidate: a turn not handed off');
+    const turning = unfinished.run();
+    await until(() => look(unfinished).program !== null);
+    const whileRunning = lookCandidate(unfinished);
+    cancelButton(unfinished).click();
+    await turning;
+    const once = lookCandidate(unfinished);
+    check('EA-V7 a turn not handed off offers no modules: not while it runs with its design and program, nor once it is cancelled',
+        look(unfinished).phase === 'cancelled' && look(unfinished).program !== null && whileRunning.enabled['Write the modules'] === false
+        && once.enabled['Write the modules'] === false && once.note === 'A turn that hands off comes first.' && once.phase === 'idle', { whileRunning, once });
 
     // EA-V8: an answer the server judged unusable is called again within Q_C; a refusal before the stream ends it.
     let calls = 0;
@@ -486,13 +511,57 @@ async function candidates(): Promise<void> {
     await stopped.run();
     candidateButton(stopped, 'Write the modules').click();
     await until(() => held.length === 2 && lookCandidate(stopped).phase === 'authoring');
+    // While it runs, a second click must not start another candidate's calls: only Cancel is offered.
+    const running = lookCandidate(stopped);
     candidateButton(stopped, 'Cancel').click();
     const atCancel = lookCandidate(stopped);
     held[1].release();
     await sleep(300);
     const afterCancel = lookCandidate(stopped);
-    check('EA-V10 a cancel shows at once; its call is cancelled and nothing after shows', atCancel.phase === 'cancelled' && atCancel.status === 'Cancelled'
-        && held[1].cancelled() && JSON.stringify(afterCancel) === JSON.stringify(atCancel) && atCancel.enabled.Cancel === false, { atCancel, afterCancel });
+    check('EA-V10 while a candidate runs only Cancel is offered; a cancel shows at once, its call is cancelled and nothing after shows',
+        running.enabled['Write the modules'] === false && running.enabled.Cancel === true && atCancel.phase === 'cancelled' && atCancel.status === 'Cancelled'
+        && held[1].cancelled() && JSON.stringify(afterCancel) === JSON.stringify(atCancel) && atCancel.enabled.Cancel === false, { running, atCancel, afterCancel });
+    // The panel disposed (the studio done with it): a running candidate is cancelled with it, its call too.
+    const disposed = candidatePanel(liveClient(() => stream(handedOffWire).response), hold, 'candidate: disposed');
+    await disposed.run();
+    candidateButton(disposed, 'Write the modules').click();
+    await until(() => held.length === 3 && lookCandidate(disposed).phase === 'authoring');
+    disposed.dispose();
+    const atDispose = lookCandidate(disposed);
+    held[2].release();
+    await sleep(300);
+    const afterDispose = lookCandidate(disposed);
+    check('EA-V10 dispose cancels a running candidate: its call is cancelled and nothing after shows', atDispose.phase === 'cancelled' && held[2].cancelled()
+        && JSON.stringify(afterDispose) === JSON.stringify(atDispose), { atDispose, afterDispose });
+
+    // EA-V11 (the EA4.5 review): the recorded hand-off with its place stage's entry named `step`, which the browser
+    // refuses; the program revised over the recorded wire (its turn hands the recorded program back), and its module
+    // written by the recorded answer. The revision's turn shows beside the hand-off's, and the bundle holds both.
+    const stepped = edit(handedOffWire, 'program', 0, (d: any) => ({
+        program: { nodes: d.program.nodes.map((n: any) => (n.id === 'place' ? { ...n, config: JSON.stringify({ ...JSON.parse(n.config), entry: 'step' }) } : n)) },
+    }));
+    const revisedSaved: { name: string; text: string }[] = [];
+    const revising = candidatePanel(liveClient(() => stream(stepped).response), moduleClient(r => stream(echoed(moduleAuthorWire, r)).response),
+        'candidate: refused, revised, written', revisedSaved, createReviser(liveClient(() => stream(revisedWire).response)));
+    await revising.run();
+    candidateButton(revising, 'Write the modules').click();
+    await until(() => settled(revising), 5_000);
+    const r = lookCandidate(revising);
+    check('EA-V11 a program the browser refuses is revised: the revision\'s turn shows beside the hand-off\'s, each call with its charge, model and template',
+        r.phase === 'static-verified' && r.budget === 'Q_C: 5 of 19 calls · authors 1/4 · repairs 0/3 · revisions 1/1' && r.turns.length === 2
+        && r.turns[0].role === 'hand-off' && r.turns[0].head === 'turn-1 hand-off: handed-off · 3 calls · $0.1380 · muse-spark-1.3 · agent.v4'
+        && r.turns[0].calls.length === 3 && r.turns[1].role === 'revision'
+        && r.turns[1].head === 'turn-1 program revision: handed-off · 1 call · $0.0460 · muse-spark-1.3 · agent.v4'
+        && JSON.stringify(r.turns[1].calls) === JSON.stringify(['1 revise: $0.0460 · gen-1']) && r.jobs.length === 1 && r.jobs[0].includes('place author: ok'), r);
+    candidateButton(revising, 'Download bundle').click();
+    const revisedBundle = revisedSaved.length === 1 ? JSON.parse(revisedSaved[0].text) : null;
+    const revision = revisedBundle?.calls?.turns?.[1];
+    const records = revisedBundle ? revisedBundle.calls.turns.reduce((n: number, t: { calls: unknown[] }) => n + t.calls.length, 0) + revisedBundle.calls.jobs.length : -1;
+    check('EA-V11 the downloaded bundle holds the revision\'s turn: its call, charge, model and template; each call Q_C settled has its record',
+        revisedBundle?.format === 'wexy-candidate-bundle.v2' && revision?.role === 'revision' && revision.status === 'handed-off' && revision.model === 'muse-spark-1.3'
+        && revision.promptVersion === 'agent.v4' && revision.charge === 'known' && revision.calls.length === 1 && revision.calls[0].purpose === 'revise'
+        && revision.calls[0].costMicroUsd === 46_000 && revisedBundle.versions.templates.includes('agent.v4') && records === revisedBundle.calls.budget.calls.settled,
+        { turns: revisedBundle?.calls?.turns, templates: revisedBundle?.versions?.templates, records });
 }
 
 async function run(): Promise<void> {

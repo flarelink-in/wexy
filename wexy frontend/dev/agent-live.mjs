@@ -15,8 +15,12 @@
 //
 // --candidate (EA4.3's machine, live): a hand-off that resolves is made a candidate, each module written and repaired by
 // live calls to /v1/agent/module (the turn's own caller, its single-use App Check), each body checked by the host's
-// L1, auto-fix and final L1, no compiler (no L3: no GPU here) and no program revision. Its bundle (bodies, evidence,
-// each call's charge) goes to <name>.candidate.json; its calls count against --max-usd.
+// L1, auto-fix and final L1, no compiler (no L3: no GPU here). A program the browser refuses goes to one program
+// revision (EA4.4's createReviser: a turn with a base, the same caller), as the studio's candidate does. Its bundle
+// (bodies, evidence, the turns and every call's charge) goes to <name>.candidate.json; its module calls and its
+// revision's count against --max-usd. --force-revision (with --candidate) tests that revision live: the harness renames
+// the first compute stage's entry to `step`, which the server's check passes and the browser refuses (a WGSL built-in),
+// before the candidate starts; the report marks the program as altered by the harness, never as the model's.
 //
 // --probe spends nothing: it reads the mode and sends an empty turn and an empty plan, which the service refuses
 // before any charge. The empty turn still costs the gateway's buckets a whole turn (agent-turn-anonymous: two turns, a
@@ -50,6 +54,7 @@ import { createApi } from '../src/forge-client/http.ts';
 import { createIdentity } from '../src/forge-client/identity.ts';
 import { createModuleClient } from '../src/forge-client/module-client.ts';
 import { candidateBundle, createCandidateSession, handOffOf } from '../src/loop/candidate.ts';
+import { createReviser } from '../src/loop/reviser.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
@@ -63,6 +68,7 @@ const style = opt('style', 'auto');
 const seconds = Number(opt('seconds', '15'));
 const maxMicroUsd = Math.round(Number(opt('max-usd', '1.5')) * 1e6);
 const runCandidate = argv.includes('--candidate');
+const forceRevision = argv.includes('--force-revision');
 
 /** The paper test's requests (the backend's forge-service/src/main/resources/paper/requests.v1.json). */
 const PAPER = {
@@ -279,32 +285,53 @@ async function runTurn({ name, prompt }) {
                 interfaces: d.ok ? d.interfaces.map(i => ({ module: i.module, node: i.node, kind: i.kind, entries: i.entries.map(e => e.signature), interfaceHash: i.interfaceHash })) : { diagnostics: d.diagnostics },
             };
         }
-        if (runCandidate) entry.candidate = await candidateOf(name, entry.result, { prompt, style, seconds });
+        if (runCandidate) {
+            let handed = entry.result;
+            if (forceRevision) {
+                // The harness's change, not the model's: the first compute stage's entry renamed to a WGSL built-in.
+                const stage = handed.program.nodes.find(n => n.adapterId === 'ng.compute.stage');
+                if (stage) {
+                    const config = JSON.parse(stage.config);
+                    entry.forcedRevision = { node: stage.id, entry: config.entry, renamedTo: 'step' };
+                    handed = { ...handed, program: { nodes: handed.program.nodes.map(n => (n === stage ? { ...n, config: JSON.stringify({ ...config, entry: 'step' }) } : n)) } };
+                    console.log(`  forced: the harness renamed ${stage.id}'s entry ${config.entry} to step, which the browser refuses`);
+                }
+            }
+            entry.candidate = await candidateOf(name, handed, { prompt, style, seconds });
+        }
     }
     return entry;
 }
 
 /**
  * The hand-off made a candidate (EA4.3's machine) with live module calls: the same caller and App Check as the turn,
- * the host's checker, no compiler and no reviser. What it did, and the bundle Developer view will download (EA4.5).
+ * the host's checker, no compiler, and a program revision through the turn route (EA4.4). What it did, and the bundle
+ * Developer view downloads (EA4.5).
  */
 async function candidateOf(name, result, request) {
     const t0 = performance.now();
     const phases = [];
-    const session = createCandidateSession({ modules: createModuleClient(createApi(config, identity)) }, s => {
+    const session = createCandidateSession({
+        modules: createModuleClient(createApi(config, identity)), revise: createReviser(createAgentClient(createApi(config, identity))),
+    }, s => {
         if (phases.at(-1)?.phase !== s.phase) phases.push({ at: Math.round(performance.now() - t0), phase: s.phase });
     });
     const end = await session.start(handOffOf(request, result));
     writeFileSync(join(OUT, `${name}.candidate.json`), `${JSON.stringify(candidateBundle(end), null, 2)}\n`);
+    // The hand-off's own calls are the turn's, counted with it; a revision's are the candidate's.
+    const revisions = end.turns.filter(t => t.role === 'revision');
+    const known = (calls) => calls.reduce((s, c) => s + (c.costMicroUsd ?? 0), 0);
     return {
         phase: end.phase, id: end.id, stop: end.stop, elapsedMs: Math.round(performance.now() - t0), phases,
         modules: end.modules.map(m => ({ module: m.module, kind: m.kind, phase: m.phase, calls: m.calls, repairs: m.repairs, lines: m.body?.split('\n').length ?? null })),
+        revisions: revisions.map(t => ({ turnId: t.turnId, status: t.status, model: t.model, promptVersion: t.promptVersion, charge: t.charge, error: t.error,
+            calls: t.calls.map(c => ({ n: c.n, purpose: c.purpose, charge: c.charge, costMicroUsd: c.costMicroUsd })) })),
         jobs: end.jobs.map(j => ({ jobId: j.jobId, module: j.module, purpose: j.purpose, status: j.status, charge: j.charge, costMicroUsd: j.costMicroUsd, model: j.model, promptVersion: j.promptVersion, error: j.error })),
         verdicts: end.evidence.filter(e => e.phase === 'lint' || e.phase === 'candidate' || e.verdict === 'fail').map(e => ({
             phase: e.phase, verdict: e.verdict, module: e.subject.module, findings: e.findings.map(f => `${f.severity} ${f.code}${f.line ? ` line ${f.line}` : ''}: ${f.message.slice(0, 160)}`),
         })),
         budget: end.budget,
-        knownCostMicroUsd: end.jobs.reduce((s, j) => s + (j.costMicroUsd ?? 0), 0),
+        knownCostMicroUsd: known(end.jobs) + known(revisions.flatMap(t => t.calls)),
     };
 }
 
@@ -358,8 +385,12 @@ for (const t of turns) {
     if (e.candidate) {
         const c = e.candidate;
         spent += c.knownCostMicroUsd;
-        console.log(`  candidate: ${c.phase} after ${c.elapsedMs} ms (${c.phases.map(p => `${p.phase}@${p.at}`).join(' → ')}); ${c.jobs.length} module call(s), ${usd(c.knownCostMicroUsd)} known`
-            + `${c.stop ? `; stopped (${c.stop.scope}): ${c.stop.diagnostic}` : ''}`);
+        console.log(`  candidate: ${c.phase} after ${c.elapsedMs} ms (${c.phases.map(p => `${p.phase}@${p.at}`).join(' → ')}); ${c.jobs.length} module call(s), `
+            + `${c.revisions.length} revision(s), ${usd(c.knownCostMicroUsd)} known${c.stop ? `; stopped (${c.stop.scope}): ${c.stop.diagnostic}` : ''}`);
+        for (const t of c.revisions) {
+            console.log(`    revision ${t.turnId ?? '(no turn id)'}: ${t.status}, ${t.charge}, ${t.model ?? '-'} ${t.promptVersion ?? ''}${t.error ? `: ${t.error}` : ''}; `
+                + `calls ${t.calls.map(x => `${x.n} ${x.purpose} ${usd(x.costMicroUsd)}`).join(', ') || 'none'}`);
+        }
         for (const j of c.jobs) console.log(`    ${j.jobId} ${j.module} ${j.purpose}: ${j.status}, ${j.charge} ${usd(j.costMicroUsd)}, ${j.model ?? '-'} ${j.promptVersion ?? ''}${j.error ? `: ${j.error}` : ''}`);
         for (const v of c.verdicts) console.log(`    ${v.phase} ${v.module ?? ''} ${v.verdict}${v.findings.length ? `: ${v.findings.join(' | ')}` : ''}`);
         if (c.phase !== 'static-verified') failed = true;

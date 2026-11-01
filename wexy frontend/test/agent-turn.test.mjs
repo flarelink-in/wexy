@@ -206,18 +206,33 @@ function reach(roots) {
 }
 
 test('EA-T6 the agent\'s modules reach no runtime, verifier, capture or engine code, set no HTML, and load only behind ?agent=1', () => {
-    const modules = ['src/shell/studio/agent-view.ts', 'src/loop/agent-turn.ts', 'src/forge-client/agent-client.ts', 'src/forge-client/agent-stream.ts', 'src/contract/agent/index.ts'];
+    // EA4.5: the candidate path too (its panel, machine, reviser and module client), which checks bodies. EA5.1: and the
+    // device compiler, handed a GPUDevice alone, which the panel never imports: the studio hands it in.
+    const modules = [
+        'src/shell/studio/agent-view.ts', 'src/shell/studio/candidate-view.ts', 'src/loop/agent-turn.ts', 'src/loop/candidate.ts', 'src/loop/reviser.ts',
+        'src/forge-client/agent-client.ts', 'src/forge-client/agent-stream.ts', 'src/forge-client/module-client.ts', 'src/forge-client/module-stream.ts',
+        'src/contract/agent/index.ts', 'src/exec/device-compiler.ts',
+    ];
     const reached = [...reach(modules)];
     assert.ok(reached.includes('src/forge-client/sse.ts') && reached.includes('src/shared/dom.ts'), 'the walk follows imports');
+    assert.ok(reached.includes('src/loop/snapshot.ts') && reached.includes('src/contract/lint.ts'), 'the walk follows the candidate into its checks');
     assert.deepEqual(reached.filter(p => /^src\/(runtime|verify|capture)\//.test(p) || /^(null-graph|mediabunny|firebase)(\/|$)/.test(p)), [],
         'nothing the agent path loads can reach the world, the GPU, a film or Firebase');
-    // Firebase arrives only through the Api the studio hands the client; the view is handed no world at all.
-    const view = readFileSync(join(ROOT, 'src/shell/studio/agent-view.ts'), 'utf8');
-    for (const sink of ['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write', "html:", "'html'"]) {
-        assert.ok(!view.includes(sink), `agent-view.ts uses ${sink}`);
+    // Firebase arrives only through the Api the studio hands the clients; the views are handed no world at all.
+    for (const file of ['src/shell/studio/agent-view.ts', 'src/shell/studio/candidate-view.ts']) {
+        const view = readFileSync(join(ROOT, file), 'utf8');
+        for (const sink of ['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write', "html:", "'html'"]) {
+            assert.ok(!view.includes(sink), `${file} uses ${sink}`);
+        }
     }
     const main = readFileSync(join(ROOT, 'src/shell/studio/main.ts'), 'utf8');
-    assert.ok(!/^import [^;]*(agent-view|agent-client|agent-stream|agent-turn)/m.test(main), 'the studio does not load the agent path statically');
+    assert.ok(!/^import [^;]*(agent-view|agent-client|agent-stream|agent-turn|candidate-view|module-client|module-stream|loop\/candidate|reviser|exec\/)/m.test(main),
+        'the studio does not load the agent path statically');
     assert.match(main, /import\('\.\/agent-view'\)/);
+    assert.match(main, /import\('\.\.\/\.\.\/forge-client\/module-client'\)/);
+    assert.match(main, /import\('\.\.\/\.\.\/loop\/reviser'\)/);
+    assert.match(main, /import\('\.\.\/\.\.\/exec\/device-compiler'\)/);
+    assert.match(main, /if \(agent\) void this\.mountDeviceCompiler\(vp\)/, 'the device compiler only behind ?agent=1');
+    assert.ok(!readFileSync(join(ROOT, 'src/shell/studio/candidate-view.ts'), 'utf8').includes('exec/'), 'the panel is handed its compiler');
     assert.match(main, /params\.get\('agent'\) === '1'/);
 });
