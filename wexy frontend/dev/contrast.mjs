@@ -27,8 +27,8 @@ const ratio = (a, b) => {
 };
 
 const surfaces = ['--bg', '--bg-2', '--panel', '--panel-2', '--panel-3'].map(n => [n, rgb(token(n))]);
-// The primary gradient's two ends, at rest and on hover (base.css .btn-primary, studio.css .cap-record).
-const primary = ['#ff7a48', '#ff5a35', '#ff8a5a', '#ff6640'].map(h => [h, rgb(h)]);
+// The primary fill, at rest and on hover (base.css .btn-primary, studio.css .cap-record): solid ink since 11-01.
+const primary = ['--accent', '--accent-hover'].map(n => [n, rgb(token(n))]);
 const label = rgb(token('--on-primary'));
 
 /** [what, text colour (rgb or rgba), surfaces, the ratio it must reach, or 0 for record only] */
@@ -38,8 +38,7 @@ const pairs = [
     ['--text-3-strong (essential small text)', rgb(token('--text-3-strong')), surfaces, 4.5],
     ['--text-3 (non-essential only)', rgb(token('--text-3')), surfaces, 0],
     ['--on-primary label', label, primary, 4.5],
-    ['white label (the playground\'s, for the record)', [255, 255, 255], primary, 0],
-    ['--on-primary kbd at 75%', [...label, 0.75], primary, 0],
+    ['--on-primary kbd at 70%', [...label, 0.7], primary, 0],
 ];
 
 let failed = 0;

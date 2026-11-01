@@ -44,13 +44,25 @@ export function icon(name: IconName, size = 16): string {
     return `<svg class="icon" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]}</svg>`;
 }
 
-/** The mark: a spark inside an orbit, on an ember tile (the playground's, until Wexy has its own). */
+// The brand, from public/icon.svg and public/icon_full.svg (the off-white #f8f7f2 on #060606).
+// Both draw in currentColor, so they follow the text colour.
+const MARK = "<path d=\"M269.842 235.192L416.38 381.73V405.46L553.846 542.926C589.85 504.166 609.9 453.246 609.985 400.344C610.071 347.441 590.187 296.456 554.309 257.58C518.43 218.703 469.201 194.801 416.462 190.65C363.723 186.499 311.36 202.407 269.842 235.192Z\"/><path d=\"M246.154 257.074L383.62 394.54V418.27L530.158 564.808C488.64 597.593 436.277 613.501 383.538 609.35C330.799 605.199 281.569 581.297 245.691 542.42C209.812 503.544 189.929 452.559 190.014 399.656C190.1 346.754 210.15 295.834 246.154 257.074Z\"/>";
+const LOCKUP = "<path d=\"M372.822 313.672L449.58 390.43V402.86L521.586 474.866C540.446 454.563 550.948 427.891 550.993 400.18C551.038 372.469 540.622 345.763 521.829 325.399C503.035 305.035 477.248 292.515 449.623 290.341C421.998 288.166 394.57 296.499 372.822 313.672Z\"/><path d=\"M360.414 325.134L432.42 397.14V409.57L509.178 486.328C487.431 503.501 460.003 511.834 432.377 509.66C404.752 507.485 378.965 494.965 360.172 474.601C341.378 454.237 330.963 427.531 331.008 399.82C331.053 372.109 341.555 345.437 360.414 325.134Z\"/><path d=\"M618.85 450L611.5 372.75H633.4L638.5 431.4L661.75 420.9V372.75H683.5V421.05L706.75 431.4L711.85 372.75H733.75L726.4 450H705.85L672.55 435.3L639.4 450H618.85ZM786.1 450.75C772.7 450.75 762.25 447.45 754.75 440.85C747.25 434.15 743.5 424.35 743.5 411.45C743.5 398.45 747.25 388.65 754.75 382.05C762.25 375.35 772.7 372 786.1 372H823.6C832.4 372 839.1 374.1 843.7 378.3C848.4 382.4 850.75 388.3 850.75 396C850.75 411.7 841.7 419.55 823.6 419.55H766.9C769 428.85 775.4 433.5 786.1 433.5H846.85V450.75H786.1ZM786.1 389.25C775.8 389.25 769.45 393.6 767.05 402.3H822.55C824.55 402.3 826.1 401.7 827.2 400.5C828.4 399.3 829 397.65 829 395.55C829 391.35 826.85 389.25 822.55 389.25H786.1ZM852.982 450L882.082 411.45L852.982 372.9H878.482L900.832 402.75H911.782L934.282 372.9H959.632L930.682 411.45L959.632 450H934.282L911.632 420H900.832L878.482 450H852.982ZM986.849 483.75V466.5H1032.15C1038.15 466.5 1041.15 463.45 1041.15 457.35V450H994.799C985.999 450 979.549 447.8 975.449 443.4C971.449 439 969.449 433.3 969.449 426.3V372.75H991.199V423.75C991.199 429.75 994.199 432.75 1000.2 432.75H1040.4V372.75H1062.9V460.05C1062.9 467.15 1060.85 472.85 1056.75 477.15C1052.65 481.55 1046.25 483.75 1037.55 483.75H986.849ZM1080.21 450V428.55H1104.21V450H1080.21ZM1142.34 450C1134.24 450 1128.04 447.95 1123.74 443.85C1119.44 439.75 1117.29 433.9 1117.29 426.3C1117.29 418.8 1119.44 413 1123.74 408.9C1128.04 404.8 1134.24 402.75 1142.34 402.75H1199.94V399.15C1199.94 393.05 1196.94 390 1190.94 390H1127.34V372.75H1196.64C1205.74 372.75 1212.19 374.85 1215.99 379.05C1219.79 383.15 1221.69 388.95 1221.69 396.45V450H1142.34ZM1146.24 432.75H1199.94V420H1146.24C1144.34 420 1142.84 420.6 1141.74 421.8C1140.74 422.9 1140.24 424.4 1140.24 426.3C1140.24 428.2 1140.74 429.75 1141.74 430.95C1142.84 432.15 1144.34 432.75 1146.24 432.75ZM1238.25 450V372.75H1260V450H1238.25ZM1238.1 360V343.05H1260.15V360H1238.1Z\"/>";
+
+/** The mark: two halves of a circle, offset along a diagonal cut. */
 export function logo(size = 26): string {
-    const id = `logo${Math.random().toString(36).slice(2, 7)}`;
-    return `<svg class="logo" width="${size}" height="${size}" viewBox="0 0 32 32" aria-hidden="true">
-<defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff9a4d"/><stop offset="0.55" stop-color="#ff5a3d"/><stop offset="1" stop-color="#d93a7a"/></linearGradient></defs>
-<rect width="32" height="32" rx="9" fill="url(#${id})"/>
-<ellipse cx="16" cy="16.5" rx="11.5" ry="4.6" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="1.3" transform="rotate(-18 16 16.5)"/>
-<path d="M16 6.2c.85 4.4 3.2 6.75 7.6 7.6-4.4.85-6.75 3.2-7.6 7.6-.85-4.4-3.2-6.75-7.6-7.6 4.4-.85 6.75-3.2 7.6-7.6Z" fill="#fff"/>
-</svg>`;
+    return `<svg class="logo" width="${size}" height="${size}" viewBox="190 190 420 420" fill="currentColor" aria-hidden="true">${MARK}</svg>`;
+}
+
+/** The mark and the wordmark "wexy.ai", as one lockup, `height` pixels tall. */
+export function wordmark(height = 24): string {
+    const width = Math.round((height * 938) / 220);
+    return `<svg class="wordmark" width="${width}" height="${height}" viewBox="331 290 938 220" fill="currentColor" aria-hidden="true">${LOCKUP}</svg>`;
+}
+
+/** One of the brand loaders in public/ (loader1 to loader3: the mark turning, parting, shading). Still under
+ *  prefers-reduced-motion: the first frame is the mark at rest. */
+export function loader(n: 1 | 2 | 3 = 1, size = 64): string {
+    const still = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    return `<video class="loader" src="/loader${n}.mp4" width="${size}" height="${size}" muted playsinline loop preload="auto" ${still ? '' : 'autoplay '}aria-hidden="true" tabindex="-1" disablepictureinpicture></video>`;
 }

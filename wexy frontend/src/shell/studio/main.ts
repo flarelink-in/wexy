@@ -7,8 +7,9 @@
 // view, reached only by ?dev=1 (design guidelines §0), adds the technical log, the scene file, the WGSL editor
 // and the GPU numbers.
 
-import '@fontsource-variable/inter';
-import '@fontsource-variable/jetbrains-mono';
+import '@fontsource-variable/geist';
+import '@fontsource-variable/unbounded';
+import '@fontsource-variable/geist-mono';
 import '../../styles/base.css';
 import '../../styles/studio.css';
 
@@ -34,7 +35,7 @@ import { hookHeader } from '../../contract/wgsl';
 import { $, download, h, isTyping } from '../../shared/dom';
 import { fmtInt, fmtMs } from '../../shared/format';
 import { highlightWgslLine } from '../../shared/highlight';
-import { icon, logo } from '../../shared/icons';
+import { icon, loader, logo, wordmark } from '../../shared/icons';
 import { formatJson } from '../../shared/json';
 import { programText, QUALITY_UNIFORM, targetsOf, withProgramText, type ProgramTarget, type SceneSpec, type Style } from '../../contract/spec';
 import { CodeView, type CodeMark } from './code-view';
@@ -154,7 +155,7 @@ class Studio {
     private readonly snapBtn = $('#btn-snapshot') as HTMLButtonElement;
 
     async init(): Promise<void> {
-        $('#brand-logo').innerHTML = logo(24);
+        $('#brand-logo').innerHTML = wordmark(22);
         const params = new URLSearchParams(location.search);
         const config = readConfig();
         // One identity for every client: Firebase starts once per page.
@@ -216,14 +217,18 @@ class Studio {
     }
 
     /**
-     * ?agent=1: the agent turn in Developer view (EA2.5), beside h1's own Create, which it leaves as it is. Its code
-     * loads only then, so the creator's page carries none of it, and it is handed the idea's fields, never the world.
+     * ?agent=1: the agent turn in Developer view (EA2.5), beside h1's own Create, which it leaves as it is, and a hand-off's
+     * candidate beneath it (EA4.5: its modules written by the module route, a program revision by a turn with a base).
+     * Its code loads only then, so the creator's page carries none of it, and it is handed the idea's fields, never the world.
      */
     private async mountAgent(api: Api | null): Promise<void> {
-        const [{ AgentPanel }, { createAgentClient }] = await Promise.all([import('./agent-view'), import('../../forge-client/agent-client')]);
-        const panel = new AgentPanel(api ? createAgentClient(api) : null, () => ({
+        const [{ AgentPanel }, { createAgentClient }, { createModuleClient }, { createReviser }] = await Promise.all([
+            import('./agent-view'), import('../../forge-client/agent-client'), import('../../forge-client/module-client'), import('../../loop/reviser'),
+        ]);
+        const client = api ? createAgentClient(api) : null;
+        const panel = new AgentPanel(client, () => ({
             prompt: this.prompt.value, style: this.style.value as Style | 'auto', seconds: this.duration,
-        }));
+        }), { candidate: api && client ? { modules: createModuleClient(api), revise: createReviser(client) } : undefined });
         panel.el.classList.add('dev-only');
         $('#left').insertBefore(panel.el, this.trace.el);
     }
@@ -332,9 +337,10 @@ class Studio {
             return b;
         });
         this.empty.replaceChildren(h('div', { class: 'empty-card' },
-            h('span', { class: 'empty-logo', html: logo(40) }),
+            h('span', { class: 'empty-logo', html: logo(64) }),
             h('h3', null, 'Describe a world'),
-            h('p', null, 'Type an idea on the left, or tap one below. It turns into a living 3D world you can fly around, and then into a video.'),
+            h('p', { class: 'empty-building', role: 'status' }, 'Follow the steps on the left'),
+            h('p', { class: 'empty-lede' }, 'Type an idea on the left, or tap one below. It turns into a living 3D world you can fly around, and then into a video.'),
             h('div', { class: 'empty-examples' }, chips),
         ));
     }
@@ -752,7 +758,18 @@ class Studio {
         this.forgeBtn.disabled = busy || !this.viewport;
         this.forgeBtn.classList.toggle('is-busy', busy);
         this.forgeBtn.querySelector('span')!.textContent = busy ? 'Creating…' : 'Create world';
+        this.setBuilding(busy);
         this.swapBtn.disabled = busy || !this.draftSpec || (this.editedTargets.size === 0 && this.draftIsLive);
+    }
+
+    /** While the empty stage waits for a first world, the mark turns (public/loader1.mp4). */
+    private setBuilding(busy: boolean): void {
+        const mark = this.empty.querySelector<HTMLElement>('.empty-logo:not(.warn)');
+        if (!mark || this.empty.classList.contains('is-building') === busy) return;
+        this.empty.classList.toggle('is-building', busy);
+        mark.innerHTML = busy ? loader(1, 132) : logo(64);
+        const title = this.empty.querySelector('h3');
+        if (title) title.textContent = busy ? 'Making your world' : 'Describe a world';
     }
 
     // ------------------------------------------------------------------ WGSL + spec views

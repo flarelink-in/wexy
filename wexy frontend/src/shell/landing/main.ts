@@ -1,8 +1,9 @@
 // The marketing page. The hero is not a video: it is the studio's own Kerr archetype rendered live
 // by NullGraph, with a still underneath for browsers without WebGPU.
 
-import '@fontsource-variable/inter';
-import '@fontsource-variable/jetbrains-mono';
+import '@fontsource-variable/geist';
+import '@fontsource-variable/unbounded';
+import '@fontsource-variable/geist-mono';
 import '../../styles/base.css';
 import '../../styles/landing.css';
 
@@ -11,10 +12,11 @@ import { kerrBlackHole } from '../../forge-client/archetypes/kerr-black-hole';
 import { cameraPath, firstView } from '../../runtime/camera-path';
 import { SceneRuntime } from '../../runtime/scene-runtime';
 import { Viewport } from '../../runtime/viewport';
-import { icon, logo, type IconName } from '../../shared/icons';
+import { icon, logo, wordmark, type IconName } from '../../shared/icons';
 import type { SceneSpec } from '../../contract/spec';
 
-for (const el of document.querySelectorAll<HTMLElement>('[data-logo]')) el.innerHTML = logo(26);
+for (const el of document.querySelectorAll<HTMLElement>('[data-logo]')) el.innerHTML = wordmark(Number(el.dataset.logo) || 24);
+for (const el of document.querySelectorAll<HTMLElement>('[data-mark]')) el.outerHTML = logo(Number(el.dataset.mark) || 26).replace('class="logo"', `class="logo ${el.className}"`);
 for (const el of document.querySelectorAll<HTMLElement>('[data-icon]')) el.outerHTML = icon(el.dataset.icon as IconName, 15);
 
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;

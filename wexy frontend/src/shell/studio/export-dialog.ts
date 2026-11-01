@@ -11,7 +11,7 @@ import type { SceneRuntime } from '../../runtime/scene-runtime';
 import type { Viewport } from '../../runtime/viewport';
 import { download, h } from '../../shared/dom';
 import { fmtBytes, fmtClock, fmtInt, fmtMs } from '../../shared/format';
-import { icon } from '../../shared/icons';
+import { icon, loader } from '../../shared/icons';
 import type { SceneSpec } from '../../contract/spec';
 import { FORMATS, frameSize, QUALITIES, type FormatId, type QualityId } from './formats';
 
@@ -292,7 +292,7 @@ export class ExportDialog {
         const frameLine = h('div', { class: 'ex-frame', html: '<b>0%</b> · getting started' });
         const rate = h('div', { class: 'ex-rate dev-only' });
         this.body.replaceChildren(
-            h('div', { class: 'ex-progress' }, frameLine, bar, rate),
+            h('div', { class: 'ex-progress' }, h('div', { class: 'ex-progress-head', html: loader(2, 44) }, frameLine), bar, rate),
             h('p', { class: 'ex-note-block' }, 'Every frame is drawn at full quality on its own copy of the scene, so a slower computer takes longer, but no frame is ever skipped.'),
         );
         const stop = h('button', { type: 'button', class: 'btn' }, 'Cancel');
