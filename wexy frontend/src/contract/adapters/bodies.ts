@@ -960,11 +960,19 @@ export interface CompileMessage {
     type: 'error' | 'warning' | 'info';
 }
 
-/** L3's seam. EA4 has only a scripted fake; EA5's device compiler implements it. */
+/** L3's seam: a scripted fake in the tests, the device's own compiler in EA5.1 (src/exec/device-compiler.ts). */
 export interface ModuleCompiler {
     /** Whose verdict it is: a fake's proves nothing about a device (I6). */
     readonly producedBy: 'fake' | 'device';
+    /** The GPU that compiles, as the studio names it; a fake has none. */
+    readonly gpu?: string;
     compile(source: string, label: string): Promise<readonly CompileMessage[]>;
+    /**
+     * Told of the verdict compileBody made from this compiler's compile of `source` (EA5.1). A device compiler registers
+     * it, bound to its device and generation, so its admission can tell its own verdict from a copy (executor-design.md
+     * §6). It never throws; one it does not register proves nothing.
+     */
+    attest?(verdict: DeepReadonly<CompiledBody>, source: string): Promise<void> | void;
 }
 
 export interface CompiledBody {
@@ -1009,7 +1017,7 @@ export async function compileBody(iface: Interface, checked: DeepReadonly<Checke
             placed.host.push({ rung: 'L3', line: null, code: 'host-source', severity, message: `${message} (the host's ${where}, line ${line} of the module)` });
         }
     }
-    return deepFreeze({
+    const verdict = deepFreeze({
         ok: ![...placed.body, ...placed.host, ...placed.unplaced].some(f => f.severity === 'error'),
         producedBy: compiler.producedBy,
         module: iface.module,
@@ -1017,6 +1025,12 @@ export async function compileBody(iface: Interface, checked: DeepReadonly<Checke
         codeHash: checked.codeHash,
         ...placed,
     });
+    // The verdict as made, for the compiler's own record: an attestation that fails leaves it unregistered, which an
+    // admission refuses (the safe direction), never a body's fault.
+    try {
+        await compiler.attest?.(verdict, assembled.source);
+    } catch { /* unregistered: proves nothing */ }
+    return verdict;
 }
 
 /**
