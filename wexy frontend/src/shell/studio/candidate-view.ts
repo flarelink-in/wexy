@@ -4,16 +4,21 @@
 //   - each module: its kind and phase, its calls and repairs, its body as checked (and as written, when the auto-fix
 //     changed it), and every verdict about it, findings with their rung, line and place;
 //   - the candidate: its phase, its sealed id(C) or why it stopped (the developer's diagnostic, the creator's sentence),
-//     Q_C as spent, every call with its charge, known or unknown, and the evidence records, with what was dropped.
+//     Q_C as spent, and every call it counts with its charge, known or unknown: the hand-off turn's and a program
+//     revision's, each with its model and template (the EA4.5 review), and each module job; the evidence records, with
+//     what was dropped.
 // The bundle downloads as JSON (candidateBundle): a developer's explicit act, since it holds R and the bodies. Everything
-// the model or the backend wrote is set as text, never as HTML, and nothing here compiles on a device, admits, renders or
-// reaches the stage's world (EA5): a static-verified candidate is checked, not compiled.
+// the model or the backend wrote is set as text, never as HTML. Given the studio's device compiler (EA5.1), each body
+// that passed its checks is compiled on this device too (L3); without one (no WebGPU) the candidate is checked only.
+// Nothing here admits, builds, renders or reaches the stage's world: that is EA5's Run.
 
+import type { ModuleCompiler } from '../../contract/adapters/bodies';
 import type { DeepReadonly } from '../../contract/engine/frozen';
 import type { ModuleClient } from '../../forge-client/module-client';
 import type { AgentTurnState } from '../../loop/agent-turn';
 import {
-    candidateBundle, createCandidateSession, type CandidatePhase, type CandidateSession, type CandidateState, type HandOff, type ModuleState, type Reviser,
+    candidateBundle, createCandidateSession, turnCallsOf, type CandidatePhase, type CandidateSession, type CandidateState, type HandOff, type ModuleState,
+    type Reviser, type TurnRecord,
 } from '../../loop/candidate';
 import type { CandidateEvidence, EvidenceSubject } from '../../loop/candidate-evidence';
 import { download, h } from '../../shared/dom';
@@ -40,6 +45,20 @@ export const CANDIDATE_PHASES: Readonly<Record<CandidatePhase | 'idle', { label:
     'superseded': { label: 'Superseded', tone: 'quiet', note: 'A newer candidate took its place.' },
 };
 
+/** With this device's compiler (EA5.1), the words that change: L3 runs here, and still nothing is built or rendered. */
+export const DEVICE_PHASES: Readonly<Partial<Record<CandidatePhase | 'idle', { label?: string; note: string }>>> = {
+    'idle': {
+        note: 'After a hand-off, Write the modules: one model call each, checked here against the interface the host derives, '
+            + 'then compiled on this device (L3). Nothing is built or rendered (EA5\'s Run), and the world on the stage is untouched.',
+    },
+    'checking': { note: 'Each body against its interface: the lint, the auto-fix, the lint again; then this device\'s compiler (L3).' },
+    'static-verified': {
+        label: 'Static-verified: compiled on this device',
+        note: 'Every module passed the host\'s checks and compiled on this device (L3), and the candidate is sealed by its id(C). '
+            + 'Nothing was built or rendered, and the world on the stage is unchanged: that is EA5\'s Run.',
+    },
+};
+
 const RUNNING: ReadonlySet<string> = new Set(['resolving', 'authoring', 'checking', 'correcting']);
 /** Micro-USD as dollars, to the hundredth of a cent. */
 const usd = (micro: number) => `$${(micro / 1e6).toFixed(4)}`;
@@ -50,6 +69,11 @@ export interface CandidateOptions {
     modules: ModuleClient;
     /** A program revision (EA4.4); absent, a program's finding ends the candidate. */
     revise?: Reviser;
+    /**
+     * L3 (EA5.1): the studio's device compiler, asked at each attempt's start; null until the device exists, and with no
+     * WebGPU. Absent: the candidate is checked, never compiled.
+     */
+    compiler?: () => ModuleCompiler | null;
     /** A new attempt's id: random by default; a harness names it to replay recorded calls. */
     attemptId?: () => string;
     /** Saves the bundle: a download by default. */
@@ -62,6 +86,9 @@ export class CandidatePanel {
     readonly el: HTMLElement;
     readonly session: CandidateSession;
     private readonly save: (name: string, text: string) => void;
+    private readonly compiler: () => ModuleCompiler | null;
+    private readonly sub = h('span', { class: 'panel-sub' });
+    private readonly l3 = h('p', { class: 'cand-l3' });
     private readonly writeBtn = h('button', { type: 'button', class: 'btn btn-sm', disabled: true }, 'Write the modules');
     private readonly cancelBtn = h('button', { type: 'button', class: 'btn btn-sm btn-quiet', disabled: true }, 'Cancel');
     private readonly downloadBtn = h('button', { type: 'button', class: 'btn btn-sm btn-quiet', disabled: true }, 'Download bundle');
@@ -71,6 +98,7 @@ export class CandidatePanel {
     private readonly reason = h('p', { class: 'cand-reason', hidden: true });
     private readonly budget = h('p', { class: 'cand-budget', hidden: true });
     private readonly modules = h('ol', { class: 'cand-modules' });
+    private readonly turnList = h('ol', { class: 'cand-turns' });
     private readonly jobs = h('ol', { class: 'cand-jobs' });
     private readonly evidenceTag = h('span', { class: 'cand-tag' });
     private readonly evidenceList = h('ol', { class: 'cand-evidence-list' });
@@ -81,19 +109,20 @@ export class CandidatePanel {
 
     constructor(options: CandidateOptions) {
         this.save = options.save ?? ((name, text) => download(new Blob([text], { type: 'application/json' }), name));
-        this.session = createCandidateSession({ modules: options.modules, revise: options.revise, attemptId: options.attemptId }, s => {
+        this.compiler = options.compiler ?? (() => null);
+        this.session = createCandidateSession({ modules: options.modules, revise: options.revise, attemptId: options.attemptId, compiler: this.compiler }, s => {
             this.state = s;
             this.render();
         });
         this.writeBtn.addEventListener('click', () => void this.write());
         this.cancelBtn.addEventListener('click', () => this.cancel());
         this.downloadBtn.addEventListener('click', () => this.download());
-        this.el = h('section', { class: 'cand', 'aria-label': 'Candidate', dataset: { phase: 'idle' } },
-            h('header', { class: 'cand-head' }, h('h3', null, 'Candidate'), h('span', { class: 'panel-sub' }, 'EA4 · checked, never compiled')),
+        this.el = h('section', { class: 'cand', 'aria-label': 'Candidate', dataset: { phase: 'idle', l3: 'none' } },
+            h('header', { class: 'cand-head' }, h('h3', null, 'Candidate'), this.sub),
             h('div', { class: 'cand-status' }, this.phase, this.id),
-            this.note, this.reason,
+            this.l3, this.note, this.reason,
             h('div', { class: 'cand-actions' }, this.writeBtn, this.cancelBtn, this.downloadBtn),
-            this.budget, this.modules, this.jobs, this.evidence,
+            this.budget, this.modules, this.turnList, this.jobs, this.evidence,
         );
         this.render();
     }
@@ -109,7 +138,10 @@ export class CandidatePanel {
             this.state = null;
         }
         this.handOff = s?.phase === 'handed-off' && s.meta && s.design && s.program
-            ? { turnId: s.meta.turnId, request: s.request, design: s.design, program: s.program, turnCalls: s.calls.length }
+            ? {
+                turnId: s.meta.turnId, request: s.request, design: s.design, program: s.program, model: s.meta.model, promptVersion: s.meta.promptVersion,
+                calls: turnCallsOf(s.calls),
+            }
             : null;
         this.render();
     }
@@ -133,11 +165,25 @@ export class CandidatePanel {
         this.session.cancel();
     }
 
+    /** Shows the panel again as it is now: the studio calls it once its device compiler exists. */
+    refresh(): void {
+        this.render();
+    }
+
     private render(): void {
         const s = this.state;
-        const look = CANDIDATE_PHASES[s?.phase ?? 'idle'];
+        // What judges L3: the attempt's own compiler once one runs, else the one the next attempt would get.
+        const now = this.compiler();
+        const judge = s ? s.l3 : now ? { producedBy: now.producedBy, gpu: now.gpu ?? null } : null;
+        const device = judge?.producedBy === 'device';
+        const base = CANDIDATE_PHASES[s?.phase ?? 'idle'];
+        const look = { ...base, ...(device ? DEVICE_PHASES[s?.phase ?? 'idle'] : undefined) };
         const running = !!s && RUNNING.has(s.phase);
         this.el.dataset.phase = s?.phase ?? 'idle';
+        this.el.dataset.l3 = judge?.producedBy ?? 'none';
+        this.sub.textContent = device ? 'EA5.1 · checked, compiled on this device, never built' : 'EA4 · checked, never compiled';
+        this.l3.textContent = !judge ? 'L3 not run: no device compiler here, so bodies are checked, never compiled.'
+            : judge.producedBy === 'device' ? `L3 on this device: ${judge.gpu ?? 'its GPU'}.` : 'L3 by a fake compiler: its verdicts prove nothing about a device.';
         this.writeBtn.disabled = !this.handOff || running;
         this.writeBtn.textContent = s && !running ? 'Write the modules again' : 'Write the modules';
         this.cancelBtn.disabled = !running;
@@ -153,6 +199,8 @@ export class CandidatePanel {
         this.budget.hidden = !s;
         this.budget.textContent = s ? budgetLine(s) : '';
         this.modules.replaceChildren(...(s?.modules ?? []).map(m => moduleRow(m, s!)));
+        // Every call Q_C counts: the turns' (the hand-off's, a revision's), then the module jobs.
+        this.turnList.replaceChildren(...(s?.turns ?? []).map(turnRow));
         this.jobs.replaceChildren(...(s?.jobs ?? []).map(j => h('li', { class: `cand-job is-${j.status}`, dataset: { job: j.jobId } },
             h('code', null, j.jobId), ` ${j.module} ${j.purpose}: ${j.status} · `,
             j.charge === 'known' && j.costMicroUsd !== null ? usd(j.costMicroUsd) : 'charge unknown',
@@ -190,6 +238,19 @@ function moduleRow(m: DeepReadonly<ModuleState>, s: Candidate): HTMLElement {
         m.originalBody !== null && m.originalBody !== m.body ? h('details', { class: 'cand-body' }, h('summary', null, 'As the model wrote it'),
             h('pre', { class: 'cand-code' }, m.originalBody)) : null,
     );
+}
+
+/** An agent turn and each of its calls: what it cost, known or unknown, which model made it, under which template. */
+function turnRow(t: DeepReadonly<TurnRecord>): HTMLElement {
+    const known = t.calls.reduce((sum, c) => sum + (c.charge === 'known' && c.costMicroUsd !== null ? c.costMicroUsd : 0), 0);
+    const cost = t.charge === 'known' ? usd(known) : t.calls.some(c => c.charge === 'known') ? `${usd(known)} reported, charge unknown` : 'charge unknown';
+    return h('li', { class: `cand-turn is-${t.status}`, dataset: { role: t.role, status: t.status } },
+        h('div', { class: 'cand-turn-head' }, h('code', null, t.turnId ?? 'no turn id'),
+            ` ${t.role === 'hand-off' ? 'hand-off' : 'program revision'}: ${t.status} · ${plural(t.calls.length, 'call')} · ${cost}`,
+            t.model ? ` · ${t.model}` : '', t.promptVersion ? ` · ${t.promptVersion}` : '', t.error ? ` · ${t.error}` : ''),
+        t.calls.length ? h('ol', { class: 'cand-turn-calls' }, t.calls.map(c => h('li', { class: `cand-turn-call is-${c.charge}` },
+            `${c.n} ${c.purpose}: `, c.charge === 'known' && c.costMicroUsd !== null ? usd(c.costMicroUsd) : 'charge unknown',
+            c.generationId ? ` · ${c.generationId}` : ''))) : null);
 }
 
 function subjectText(s: DeepReadonly<EvidenceSubject>): string {

@@ -30,6 +30,7 @@ import { COPY } from '../../loop/copy';
 import { completeOutcome } from '../../loop/outcome';
 import { SceneRuntime } from '../../runtime/scene-runtime';
 import { Viewport, type CameraMode } from '../../runtime/viewport';
+import type { ModuleCompiler } from '../../contract/adapters/bodies';
 import { assembleModule } from '../../contract/host';
 import { hookHeader } from '../../contract/wgsl';
 import { $, download, h, isTyping } from '../../shared/dom';
@@ -111,6 +112,11 @@ class Studio {
     private format: FormatId = 'wide';
     private guideOn = false;
     private toastTimer = 0;
+    /** ?agent=1 only: L3 on this device (EA5.1), once the viewport's device exists; null without WebGPU. */
+    private deviceCompiler: ModuleCompiler | null = null;
+    /** The device's generation: it moves on a device loss, and evidence from before proves nothing (EA5). */
+    private deviceGeneration = 0;
+    private candidatePanel: { refresh(): void } | null = null;
 
     // Components and the elements they live in.
     private readonly trace = new TracePanel();
@@ -200,7 +206,11 @@ class Studio {
         $('#gpu-pill').title = 'The adapter WebGPU gave this page. On hybrid-GPU laptops Chrome may pick the integrated GPU: set Chrome to "High performance" in Windows graphics settings.';
         vp.onFrame = stats => this.onFrame(stats.fps, stats.width, stats.height, stats.quality, stats.scale);
         vp.onOrbitTakeover = () => this.setMode('orbit', false);
-        vp.onDeviceLost = msg => this.showMessage(`Your graphics card stopped responding (${msg}). Reload the page to carry on.`, 'error');
+        vp.onDeviceLost = msg => {
+            this.deviceGeneration++;
+            this.showMessage(`Your graphics card stopped responding (${msg}). Reload the page to carry on.`, 'error');
+        };
+        if (agent) void this.mountDeviceCompiler(vp);
         if (params.has('rung')) vp.pin(Number(params.get('rung')));
         vp.start();
         // Films a closed or crashed tab left in OPFS, and finished films no tab is showing (film.ts).
@@ -228,9 +238,22 @@ class Studio {
         const client = api ? createAgentClient(api) : null;
         const panel = new AgentPanel(client, () => ({
             prompt: this.prompt.value, style: this.style.value as Style | 'auto', seconds: this.duration,
-        }), { candidate: api && client ? { modules: createModuleClient(api), revise: createReviser(client) } : undefined });
+        }), {
+            candidate: api && client ? { modules: createModuleClient(api), revise: createReviser(client), compiler: () => this.deviceCompiler } : undefined,
+        });
+        this.candidatePanel = panel.candidate;
         panel.el.classList.add('dev-only');
         $('#left').insertBefore(panel.el, this.trace.el);
+    }
+
+    /**
+     * ?agent=1: L3 on this device (EA5.1). The compiler is handed the viewport's GPUDevice and nothing else; every body
+     * it compiles passed L1 and L2 first, and compiling runs nothing on the GPU. Its code loads only then.
+     */
+    private async mountDeviceCompiler(vp: Viewport): Promise<void> {
+        const { createDeviceCompiler } = await import('../../exec/device-compiler');
+        this.deviceCompiler = createDeviceCompiler(vp.engine.device, { generation: () => this.deviceGeneration, gpu: vp.gpuLabel });
+        this.candidatePanel?.refresh();
     }
 
     /**

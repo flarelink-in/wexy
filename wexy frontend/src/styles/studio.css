@@ -175,12 +175,13 @@
 .cand-phase.tone-warn { color: var(--warn); }
 .cand-phase.tone-err { color: var(--err); }
 .cand-id { font: 11px var(--mono); color: var(--text-3-strong); white-space: nowrap; }
-.cand-note, .cand-reason, .cand-budget { margin: 0; font-size: 12px; line-height: 1.55; color: var(--text-2); overflow-wrap: anywhere; }
+.cand-note, .cand-reason, .cand-budget, .cand-l3 { margin: 0; font-size: 12px; line-height: 1.55; color: var(--text-2); overflow-wrap: anywhere; }
 .cand-reason code { font: 11px var(--mono); color: var(--text); }
 .cand-budget { font: 11px/1.45 var(--mono); color: var(--text-3-strong); }
+.cand-l3 { font: 11px/1.45 var(--mono); color: var(--text-3-strong); }
 .cand-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.cand-modules, .cand-jobs, .cand-evidence-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.cand-modules:empty, .cand-jobs:empty { display: none; }
+.cand-modules, .cand-turns, .cand-jobs, .cand-evidence-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.cand-modules:empty, .cand-turns:empty, .cand-jobs:empty { display: none; }
 .cand-module { padding: 7px 9px; border: 1px solid var(--line); border-radius: var(--radius-xs); background: var(--bg-2); font-size: 12px; }
 .cand-module.is-passed .cand-module-head { color: var(--ok); }
 .cand-module.is-failed .cand-module-head { color: var(--err); }
@@ -198,10 +199,11 @@
 .cand-body summary, .cand-evidence summary { cursor: pointer; font-size: 11.5px; font-weight: 600; color: var(--text); }
 .cand-tag { font-weight: 400; color: var(--text-3-strong); }
 .cand-code { margin: 4px 0 0; max-height: 240px; overflow: auto; padding: 8px; border-radius: var(--radius-xs); background: var(--bg); font: 10.5px/1.5 var(--mono); color: var(--text-2); white-space: pre; }
-.cand-job, .cand-record { font: 11px/1.45 var(--mono); color: var(--text-3-strong); overflow-wrap: anywhere; }
-.cand-job code, .cand-record code { color: var(--text-2); }
+.cand-job, .cand-record, .cand-turn-head, .cand-turn-call { font: 11px/1.45 var(--mono); color: var(--text-3-strong); overflow-wrap: anywhere; }
+.cand-job code, .cand-record code, .cand-turn-head code { color: var(--text-2); }
 .cand-job.is-unusable, .cand-job.is-stale { color: var(--warn); }
-.cand-job.is-broken, .cand-job.is-refused { color: var(--err); }
+.cand-job.is-broken, .cand-job.is-refused, .cand-turn.is-broken .cand-turn-head, .cand-turn.is-refused .cand-turn-head { color: var(--err); }
+.cand-turn-calls { list-style: none; margin: 2px 0 0; padding: 0 0 0 10px; }
 
 /* journey: the plain-language progress */
 .journey { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
