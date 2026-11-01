@@ -5,6 +5,7 @@
 // the bundles in and keeps window.__L3__.result.
 
 import { checkBody, compileBody, type BodyFinding, type CompiledBody } from '../src/contract/adapters/bodies';
+import { resolveProgram } from '../src/contract/adapters/resolve';
 import type { DeepReadonly } from '../src/contract/engine/frozen';
 import { createDeviceCompiler } from '../src/exec/device-compiler';
 import { sealCandidate } from '../src/loop/snapshot';
@@ -36,8 +37,16 @@ async function run(bundles: { name: string; bundle: Bundle }[]) {
     log(`adapter: ${gpu}`);
     const worlds = [];
     for (const { name, bundle } of bundles) {
+        // Sealed under this build's X: a bundle made before a resolver change (EA5.0's adoption and releases) names an
+        // older X, so its id(C) moves too, while each body is still judged against the interface it was written for.
+        const resolved = await resolveProgram(bundle.program.nodes);
+        if (!resolved.ok) {
+            log(`${name}: does not resolve: ${resolved.diagnostics[0]?.message ?? ''}`);
+            worlds.push({ name, sealed: false, reason: `does not resolve: ${resolved.diagnostics[0]?.code ?? ''}` });
+            continue;
+        }
         const sealed = await sealCandidate({
-            attempt: bundle.attempt, revision: bundle.revision, program: bundle.program.nodes, graph: bundle.graph,
+            attempt: bundle.attempt, revision: bundle.revision, program: bundle.program.nodes, graph: resolved.graph.hash,
             bodies: bundle.modules.map(m => ({ module: m.module, interfaceHash: m.interfaceHash, body: m.body, codeHash: m.codeHash })),
         });
         if (!sealed.ok) {
@@ -60,8 +69,10 @@ async function run(bundles: { name: string; bundle: Bundle }[]) {
             log(`${name}/${b.module} (${iface.kind}, ${b.body.split('\n').length} lines): ${v.ok ? 'compiles' : 'REFUSED'} on the device in ${ms} ms${findings.length ? `, ${findings.length} message(s)` : ''}`);
         }
         const provenance = compiler.provenance(snap, verdicts);
-        log(`${name}: id(C) ${snap.id.slice(0, 12)}… ${snap.id === bundle.candidate ? 'as the bundle' : 'NOT the bundle\'s'}; provenance ${provenance ?? 'holds'}`);
-        worlds.push({ name, sealed: true, candidate: snap.id, sameId: snap.id === bundle.candidate, graph: snap.x.hash, modules, provenance });
+        const sameX = snap.x.hash === bundle.graph;
+        log(`${name}: X ${sameX ? 'as the bundle\'s' : `moved since the bundle (${bundle.graph.slice(0, 12)}… → ${snap.x.hash.slice(0, 12)}…)`}; `
+            + `id(C) ${snap.id.slice(0, 12)}… ${snap.id === bundle.candidate ? 'as the bundle' : 'another'}; every interface as the bundle's; provenance ${provenance ?? 'holds'}`);
+        worlds.push({ name, sealed: true, candidate: snap.id, sameX, sameId: snap.id === bundle.candidate, graph: snap.x.hash, bundleGraph: bundle.graph, modules, provenance });
     }
     return { gpu, adapter: { vendor: info.vendor, architecture: info.architecture, description: info.description }, uncaptured, lost, browser: navigator.userAgent, worlds };
 }

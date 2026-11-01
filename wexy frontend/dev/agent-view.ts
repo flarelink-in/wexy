@@ -20,6 +20,11 @@
 //   EA-V11 (the EA4.5 review) a program the browser refuses, revised over the recorded wire (revised.sse) and its
 //          module written: the revision's turn shown beside the hand-off's, each call with its charge, model and
 //          template, and the downloaded bundle holding both
+//   EA-V12 (EA5.3) Run on this GPU: not offered without the studio's stage; offered for a sealed candidate with a
+//          device-labelled verdict on every body (a scripted stand-in here, which the real gate refuses by provenance)
+//          once the stage is ready; a press hands the stage the sealed candidate and its verdicts, shows the Run while it
+//          lasts, then a refusal in the developer's words, or the world on the stage with its numbers; markup in a reason
+//          shows as text; a new write moves the turn the stage's Run is bound to
 
 import '../src/styles/base.css';
 import '../src/styles/studio.css';
@@ -30,7 +35,9 @@ import { createModuleClient, type ModuleClient } from '../src/forge-client/modul
 import type { Reviser } from '../src/loop/candidate';
 import { COPY } from '../src/loop/copy';
 import { createReviser } from '../src/loop/reviser';
+import type { ModuleCompiler } from '../src/contract/adapters/bodies';
 import { AgentPanel } from '../src/shell/studio/agent-view';
+import type { CandidatePanel, RunControl, RunSummary } from '../src/shell/studio/candidate-view';
 import moduleAuthorWire from '../test/fixtures/module-wire/author.sse?raw';
 import moduleDeniedJson from '../test/fixtures/module-wire/denied.json?raw';
 import moduleEmptyWire from '../test/fixtures/module-wire/error-empty.sse?raw';
@@ -200,7 +207,7 @@ async function endings(): Promise<void> {
     const shown = v.programText ?? '';
     check('EA-V1 handed-off: the program is its adapter nodes, each config shown parsed, under the contract and adapters it was checked by',
         /"adapterId": "ng\.buffer\.storage"/.test(shown) && /"layout": "instance14"/.test(shown) && /"effect": "Tonemap"/.test(shown)
-        && !shown.includes('\\"layout\\"') && /agent-action\.v2, as this build/.test(v.meta ?? '') && /aacc5959c0f6…, as this build/.test(v.meta ?? ''),
+        && !shown.includes('\\"layout\\"') && /agent-action\.v2, as this build/.test(v.meta ?? '') && /3c7775588fb8…, as this build/.test(v.meta ?? ''),
         { program: shown.slice(0, 600), meta: v.meta });
 
     v = await ending(askedWire, 'asked');
@@ -233,7 +240,7 @@ async function endings(): Promise<void> {
     v = await ending(errorBudgetWire, 'error-budget');
     check('EA-V1 a later charge refused: failed, the code and where, the first call\'s reservation held', v.phase === 'failed' && v.success === 'false'
         && v.reason === 'budget in the stream: Live creation has reached its spending limit for now.'
-        && v.calls[0].includes('? in / ? out · $0.1547 held, no usage came'), v);
+        && v.calls[0].includes('? in / ? out · $0.1560 held, no usage came'), v);
 
     v = await ending(errorUpstreamWire, 'error-upstream');
     check('EA-V1 answers off the schema twice: failed, as upstream', v.phase === 'failed'
@@ -564,6 +571,80 @@ async function candidates(): Promise<void> {
         { turns: revisedBundle?.calls?.turns, templates: revisedBundle?.versions?.templates, records });
 }
 
+// ---- EA5.3: Run on this GPU, over a stage the harness stands in -----------------------------------------------------
+
+/** A compiler that labels its verdicts the device's and passes every body: what the real gate refuses by provenance. */
+const SCRIPTED_DEVICE: ModuleCompiler = { producedBy: 'device', gpu: 'a scripted stand-in', compile: async () => [] };
+
+async function running(): Promise<void> {
+    const runButton = (p: AgentPanel) => candidateButton(p, 'Run') ?? candidateButton(p, 'Running');
+    const runLine = (p: AgentPanel) => p.el.querySelector<HTMLElement>('.cand-run')!;
+    const runState = (p: AgentPanel) => p.el.querySelector<HTMLElement>('.cand')!.dataset.run;
+
+    // No stage, no Run: the studio hands the panel one only behind ?agent=1, once its device compiler exists.
+    const none = candidatePanel(liveClient(() => stream(handedOffWire).response), moduleClient(r => stream(echoed(moduleAuthorWire, r)).response), 'run: no stage');
+    await none.run();
+    check('EA-V12 without the studio\'s stage, Run is not offered', runButton(none).hidden && runLine(none).hidden && runState(none) === 'idle');
+
+    let ready = false;
+    const calls: { candidate: string; compiled: number; producedBy: string[] }[] = [];
+    let answer: (s: RunSummary) => void = () => {};
+    const control: RunControl = {
+        blocked: () => (ready ? null : 'The stage is starting: its device compiler loads first.'),
+        go: (snapshot, compiled) => {
+            calls.push({ candidate: snapshot.id, compiled: compiled.length, producedBy: compiled.map(c => c.producedBy) });
+            return new Promise(resolve => { answer = resolve; });
+        },
+    };
+    const p = new AgentPanel(liveClient(() => stream(handedOffWire).response), () => REQUEST, {
+        candidate: { modules: moduleClient(r => stream(echoed(moduleAuthorWire, r)).response), attemptId: () => 'attempt-1', compiler: () => SCRIPTED_DEVICE, run: control },
+    });
+    p.el.dataset.case = 'run: Run on this GPU';
+    panels.append(p.el);
+    const panel = p.candidate as CandidatePanel;
+    await p.run();
+    const unsealed = { disabled: runButton(p).disabled, line: runLine(p).textContent, title: runButton(p).title };
+    const epoch = panel.epoch;
+    candidateButton(p, 'Write the modules').click();
+    await until(() => settled(p), 5_000);
+    const sealedLook = lookCandidate(p);
+    const starting = { disabled: runButton(p).disabled, line: runLine(p).textContent };
+    check('EA-V12 Run waits for a sealed candidate with this device\'s verdicts, and for the stage', !runButton(p).hidden && unsealed.disabled
+        && unsealed.line === 'Run needs a sealed candidate: Write the modules first.' && unsealed.title === unsealed.line
+        && sealedLook.phase === 'static-verified' && sealedLook.status === 'Static-verified: compiled on this device'
+        && starting.disabled && starting.line === 'The stage is starting: its device compiler loads first.' && panel.epoch === epoch + 1, { unsealed, starting, sealedLook, epoch: panel.epoch });
+    ready = true;
+    panel.refresh();
+    const offered = { disabled: runButton(p).disabled, line: runLine(p).textContent };
+    runButton(p).click();
+    await until(() => runState(p) === 'running');
+    const during = { label: runButton(p).textContent, disabled: runButton(p).disabled, write: candidateButton(p, 'Write the modules again').disabled, line: runLine(p).textContent };
+    check('EA-V12 a press hands the stage the sealed candidate and its verdict on every body, and shows the Run while it lasts', !offered.disabled
+        && offered.line?.startsWith('Ready: Run on this GPU puts it on the stage') && calls.length === 1 && (sealedLook.id ?? '').includes(calls[0].candidate.slice(0, 12))
+        // Write stays offered: a newer candidate supersedes the Run (its turn moves), the way to stop one.
+        && calls[0].compiled === 1 && calls[0].producedBy.join() === 'device' && during.label === 'Running…' && during.disabled && !during.write
+        && during.line?.startsWith('Running on this GPU: the gate, the build, the probe, the first frame offscreen.'), { offered, during, calls });
+    answer({ status: 'refused', reason: 'EA_ELIGIBILITY ng.buffer.storage@1 (node blocks) has no coverage for amd/gcn-5 chrome/156 (ea5-exec.v1); static only', numbers: '' });
+    await until(() => runState(p) === 'refused');
+    const refused = runLine(p).textContent;
+    runButton(p).click();
+    await until(() => runState(p) === 'running');
+    answer({ status: 'failed', reason: 'EA_SANITY black: <img src=x onerror="window.__ran__=1"> declares at least 2.0', numbers: 'probe: init 3.0 ms' });
+    await until(() => runState(p) === 'failed');
+    const marked = { line: runLine(p).textContent, images: p.el.querySelectorAll('.cand-run img').length };
+    runButton(p).click();
+    await until(() => runState(p) === 'running');
+    answer({ status: 'installed', reason: null, numbers: 'probe: init 3.0 ms, step 0.0 ms, frame 2.1 ms · worst submission 3.0 ms of 250 ms' });
+    await until(() => runState(p) === 'installed');
+    const installed = { line: runLine(p).textContent, enabled: !runButton(p).disabled };
+    check('EA-V12 a refusal shows in the developer\'s words, markup in it as text; an install shows the world on the stage with its numbers',
+        refused === 'refused: EA_ELIGIBILITY ng.buffer.storage@1 (node blocks) has no coverage for amd/gcn-5 chrome/156 (ea5-exec.v1); static only'
+        && marked.line === 'failed: EA_SANITY black: <img src=x onerror="window.__ran__=1"> declares at least 2.0 · probe: init 3.0 ms' && marked.images === 0
+        && !(window as unknown as { __ran__?: number }).__ran__ && calls.length === 3
+        && /^On the stage: id\(C\) [0-9a-f]{12}… · probe: init 3\.0 ms, step 0\.0 ms, frame 2\.1 ms · worst submission 3\.0 ms of 250 ms$/.test(installed.line ?? '')
+        && installed.enabled, { refused, marked, installed });
+}
+
 async function run(): Promise<void> {
     const world = document.getElementById('world')!.outerHTML;
     trap.armed = true;
@@ -573,6 +654,7 @@ async function run(): Promise<void> {
     await superseding();
     await cancelling();
     await candidates();
+    await running();
     trap.armed = false;
     check('EA-V5 the world on the stage is untouched', document.getElementById('world')!.outerHTML === world);
     check('EA-V5 no WebGPU adapter, no canvas context, and no markup written while the turns ran', trap.requestAdapter === 0 && trap.getContext === 0 && trap.innerHTML === 0, { ...trap });

@@ -2,10 +2,23 @@
   "hosting": [
     {
       "target": "dev",
-      "public": "dist-dev",
+      "public": "hosting-dev",
+      "predeploy": ["node scripts/prepare-hosting.mjs dev --check"],
+      "redirects": [{ "source": "/index.html", "destination": "/", "type": 301 }],
       "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
       "rewrites": [
-        { "source": "/studio", "destination": "/studio.html" }
+        {
+          "source": "/studio",
+          "destination": "/studio.html"
+        },
+        {
+          "regex": "^/(|robots[.]txt|sitemap[.]xml)$",
+          "function": {
+            "functionId": "renderPublicDev",
+            "region": "us-central1",
+            "pinTag": true
+          }
+        }
       ],
       "headers": [
         {
@@ -42,10 +55,13 @@
     },
     {
       "target": "prod",
-      "public": "dist",
+      "public": "hosting-prod",
+      "predeploy": ["node scripts/prepare-hosting.mjs prod --check"],
+      "redirects": [{ "source": "/index.html", "destination": "/", "type": 301 }],
       "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
       "rewrites": [
-        { "source": "/studio", "destination": "/studio.html" }
+        { "source": "/studio", "destination": "/studio.html" },
+        { "regex": "^/(|robots[.]txt|sitemap[.]xml)$", "function": { "functionId": "renderPublicProd", "region": "us-central1", "pinTag": true } }
       ],
       "headers": [
         {
@@ -79,5 +95,18 @@
         }
       ]
     }
-  ]
+  ],
+  "functions": [{
+    "source": "functions",
+    "codebase": "public-html",
+    "runtime": "nodejs22",
+    "ignore": ["node_modules", ".git", "*.log", ".env", ".env.*"],
+    "predeploy": ["npm --prefix \"$RESOURCE_DIR\" run check"]
+  }],
+  "emulators": {
+    "functions": { "port": 5001 },
+    "hosting": { "port": 5000 },
+    "ui": { "enabled": true },
+    "singleProjectMode": true
+  }
 }

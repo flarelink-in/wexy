@@ -49,23 +49,28 @@ const errors = c => c.findings.filter(f => f.severity === 'error').map(f => [f.c
 /** A labelled fixture policy: P v0 with one limit moved, for a B / B+1 pair. */
 const fixture = (label, change) => ({ ...POLICY_V1, label: `fixture: ${label}`, ...change });
 
-test('EA-C1 the nine-adapter world checks: no error; its four warnings, each with its offender and path', async () => {
-    const c = await checkGraph(await resolved(world()), POLICY_V1);
+test('EA-C1 the nine-adapter world checks: no error; its two warnings, each with its offender and path; a retention is disclosed', async () => {
+    const x = await resolved(world());
+    const c = await checkGraph(x, POLICY_V1);
     assert.equal(c.ok, true);
     assert.equal(c.truncated, false);
+    // On null-graph 1.2.1 the world leaves nothing behind (EA5.0): no lifecycle warning, the output's two alone.
     assert.deepEqual(summary(c), [
-        ['lifecycle', 'warning', 'look#debugStorage', '/nodes/9'],
-        ['lifecycle', 'warning', 'move#stage', '/nodes/2'],
         ['output', 'warning', 'look#create', '/nodes/9'],
         ['output', 'warning', 'look#create', '/nodes/9'],
     ]);
     assert.deepEqual(c.findings.map(f => f.message), [
-        'the engine\'s batch manager (the post debug view\'s batch) keeps look#debugStorage, look#debugView after the world\'s dispose, until engine.destroy(): null-graph 1.2.0 has no call that releases them',
-        'engine.computeStages keeps move#stage after the world\'s dispose, until engine.destroy(): null-graph 1.2.0 has no call that releases it',
         'look has no Tonemap: the scene\'s linear HDR (rgba16float) reaches the 8-bit screen unconverted, clipped above 1; add Tonemap',
         'look runs FilmGrain, Vignette; the engine\'s order is Vignette, FilmGrain (Tonemap the pivot: HDR work before it, display-referred after)',
     ]);
     assert.ok(c.findings.every(f => f.code === 'EA_RESOLVE' && f.node !== null));
+    // A hold an engine cannot release is still disclosed, once a holder, and never refused (1.2.0's were the stage and the
+    // post debug view): a synthetic X.
+    const held = structuredClone(x);
+    for (const id of ['move#stage', 'look#debugView']) Object.assign(held.objects.find(o => o.id === id), { releasedBy: null, retained: { by: 'the engine', until: 'engine.destroy()' } });
+    const disclosed = await checkGraph(held, POLICY_V1);
+    assert.deepEqual([disclosed.ok, summary(disclosed)[0]], [true, ['lifecycle', 'warning', 'look#debugView', '/nodes/9']]);
+    assert.equal(disclosed.findings[0].message, 'the engine keeps look#debugView, move#stage after the world\'s dispose, until engine.destroy(): the engine has no call that releases them');
 });
 
 test('EA-C2 each limit of P: B passes and B+1 refuses, for one buffer, all bytes, a dispatch\'s workgroups and its invocations', async () => {
@@ -179,8 +184,8 @@ test('EA-C7 output: a world that draws nothing refuses; a Tonemap in the engine\
     const nothing = await checkGraph(await resolved([node('field', 'ng.buffer.storage', { elements: 64, layout: 'f32', strideFloats: 4, pingPong: false, init: 'zero' }),
         node('step', 'ng.compute.stage', { module: 'm', entry: 's', workgroupSize: 64, invocations: 64, phase: 'frame' }, [from('writes', 'field', 'buffer')])]), POLICY_V1);
     assert.deepEqual(errors(nothing), [['output', null, 'a draw', null]]);
-    // Found after the compute stage's retention warning, the error still comes first.
-    assert.deepEqual(nothing.findings.map(f => f.severity), ['error', 'warning']);
+    // On 1.2.1 the compute stage is removed with the world: no retention warning beside the error.
+    assert.deepEqual(nothing.findings.map(f => f.severity), ['error']);
     const graded = world();
     graded[9].config = JSON.stringify({ effects: [{ effect: 'Tonemap', intensity: 1 }, { effect: 'Vignette', intensity: 0.5 }, { effect: 'FilmGrain', intensity: 0.3 }] });
     const c = await checkGraph(await resolved(graded), POLICY_V1);

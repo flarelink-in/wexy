@@ -9,7 +9,7 @@
 import { NullGraph } from 'null-graph';
 import { OrbitalCameraState, OrbitalEventProxy } from 'null-graph/cameras';
 import { containView, type CameraView } from './camera-path';
-import type { SceneRuntime } from './scene-runtime';
+import type { WorldRuntime } from './world';
 
 export interface FrameStats {
     fps: number;
@@ -46,8 +46,11 @@ const LADDER: Rung[] = [
 const OVER_BUDGET_MS = 22;
 /** At or under a 60 Hz vsync: there may be headroom, so probe a rung up now and then. */
 const AT_VSYNC_MS = 17.4;
-/** Live preview stays under ~2.3 MP however large the window: export is where 4K happens. */
-const MAX_LIVE_PIXELS = 2_300_000;
+/**
+ * Live preview stays under ~2.3 MP however large the window: export is where 4K happens. An agent world is admitted and
+ * probed for this envelope (EA5.3), so no live resize can grow it past what was checked.
+ */
+export const MAX_LIVE_PIXELS = 2_300_000;
 const MAX_STEPS_PER_FRAME = 4;
 
 export class Viewport {
@@ -56,7 +59,8 @@ export class Viewport {
     readonly gpu: GpuInfo;
     readonly orbit = new OrbitalCameraState({ target: [0, 0, 0], distance: 12, polarAngle: 1.25, minDistance: 1, maxDistance: 80 });
     fov = 45;
-    runtime: SceneRuntime | null = null;
+    /** The Head: whatever world runs on the stage, h1's or an agent's (WorldRuntime, EA5.0). */
+    runtime: WorldRuntime | null = null;
 
     mode: CameraMode = 'orbit';
     path: ((seconds: number) => CameraView) | null = null;
@@ -98,7 +102,7 @@ export class Viewport {
     /** Intervals since the guard last settled; decisions need a full window of them. */
     private window: number[] = [];
     /** The runtime the post targets were last sized for: a new runtime needs one resize. */
-    private runtimeSize: SceneRuntime | null = null;
+    private runtimeSize: WorldRuntime | null = null;
     private readonly stats: FrameStats = { fps: 0, frameMs: 0, scale: 1, quality: 1, width: 0, height: 0 };
 
     static async create(canvas: HTMLCanvasElement): Promise<Viewport> {
@@ -187,34 +191,36 @@ export class Viewport {
         };
     }
 
-    /** Swap the running scene. The caller owns the old runtime's teardown. */
-    setRuntime(runtime: SceneRuntime | null): void {
-        this.runtime = runtime;
-        this.accumulator = 0;
+    /**
+     * Swap the running world: the switch EA5's commit() makes. Everything that can fail runs first, on the new world and
+     * on locals: its quality floor, the ladder, the rung, its dial set. Only then do the assignments run, which cannot
+     * fail, so a throw leaves the Head as it was (executor-design.md §9). The caller owns the old runtime's teardown.
+     */
+    setRuntime(runtime: WorldRuntime | null): void {
         const floor = runtime?.qualityFloor ?? null;
-        this.ladder = floor === null
+        const ladder = floor === null
             ? LADDER.filter((r, i) => i === 0 || r.scale !== LADDER[i - 1].scale).map(r => ({ ...r, quality: 1 }))
             : LADDER.map(r => ({ ...r, quality: Math.max(floor, r.quality) }));
-        this.rung = this.previewRung(this.pinnedRung);
+        const rung = previewRung(ladder, this.pinnedRung);
+        const step = ladder[Math.min(rung, ladder.length - 1)];
+        if (runtime && floor !== null) runtime.quality = step.quality;
+        // The switch: assignments only. The first frames after a build still wait on pipeline creation; judge after.
+        this.runtime = runtime;
+        this.accumulator = 0;
+        this.ladder = ladder;
+        this.rung = rung;
         this.failedRung = -1;
-        // The first frames after a build still wait on pipeline creation; judge the scene after.
-        this.applyRung(performance.now(), 2500);
+        this.stats.quality = floor !== null ? step.quality : 1;
+        this.stats.scale = step.scale;
+        this.settle(performance.now(), 2500);
     }
 
     /** Pin the preview to a rung of the cost ladder now, or hand it back to the guard (null). */
     pin(rung: number | null): void {
         this.pinnedRung = rung;
-        this.rung = this.previewRung(rung);
+        this.rung = previewRung(this.ladder, rung);
         this.failedRung = -1;
         this.applyRung(performance.now(), 700);
-    }
-
-    /** Presets use the full ladder; worlds without a quality knob collapse its duplicate scales. */
-    private previewRung(rung: number | null): number {
-        if (rung === null) return 0;
-        const index = Math.min(Math.max(rung, 0), LADDER.length - 1);
-        if (this.ladder.length === LADDER.length) return index;
-        return this.ladder.findIndex(r => r.scale === LADDER[index].scale);
     }
 
     setView(v: CameraView): void {
@@ -258,7 +264,10 @@ export class Viewport {
         this.resizeObserver.disconnect();
     }
 
-    private tick = (now: number) => {
+    private tick = (now: number) => this.frame(now);
+
+    /** One animation frame: the guard's sample, the size, the fixed-step clock, the camera, the draw. */
+    private frame(now: number): void {
         this.raf = requestAnimationFrame(this.tick);
         if (this.exporting) return;
         const wall = this.lastNow ? Math.min((now - this.lastNow) / 1000, 0.25) : 1 / 60;
@@ -268,7 +277,7 @@ export class Viewport {
 
         const rt = this.runtime;
         if (!rt) return;
-        const dt = rt.spec.particles.dt;
+        const dt = rt.dt;
         if (!this.simPaused) {
             // Fixed-step clock: a 144 Hz display steps less than once per frame, a stall at most
             // MAX_STEPS_PER_FRAME times, so the simulation keeps real-time speed on any refresh rate.
@@ -282,11 +291,22 @@ export class Viewport {
             if (steps === MAX_STEPS_PER_FRAME) this.accumulator = 0;
         }
         if (this.playing) this.playhead = (this.playhead + wall) % this.duration;
-        const view = this.currentView();
-        rt.view(this.frameAspect ? containView(view, this.frameAspect, this.canvas.width / this.canvas.height) : view, rt.simTime);
+        this.writeCamera();
         this.engine.render(rt.draw());
         this.onFrame?.(this.stats);
-    };
+    }
+
+    /**
+     * The Head's camera, written as its next frame writes it. EA5.3's preparation calls it right after a candidate's
+     * offscreen frame, in the same synchronous section: the engine's camera uniform, which every post pass binds, holds
+     * the Head's view again before anything of the Head's runs.
+     */
+    writeCamera(): void {
+        const rt = this.runtime;
+        if (!rt) return;
+        const view = this.currentView();
+        rt.view(this.frameAspect ? containView(view, this.frameAspect, this.canvas.width / this.canvas.height) : view, rt.simTime);
+    }
 
     private sample(ms: number, now: number): void {
         this.intervals.push(ms);
@@ -300,7 +320,7 @@ export class Viewport {
         if (this.window.length < 30 && !(this.window.length >= 6 && spent >= 500)) return;
 
         const target = this.pinnedRung === null ? this.decideRung(median(this.window), now)
-            : this.previewRung(this.pinnedRung);
+            : previewRung(this.ladder, this.pinnedRung);
         this.window.length = 0;
         if (target === this.rung) return;
         if (target > this.rung) {
@@ -328,6 +348,11 @@ export class Viewport {
         if (this.runtime && this.runtime.qualityFloor !== null) this.runtime.quality = r.quality;
         this.stats.quality = this.runtime && this.runtime.qualityFloor !== null ? r.quality : 1;
         this.stats.scale = r.scale;
+        this.settle(now, settleMs);
+    }
+
+    /** A rung or a world just changed: no guard decision until it settles, and the size follows. Assignments only. */
+    private settle(now: number, settleMs: number): void {
         this.lastRungChange = now;
         this.settleUntil = now + settleMs;
         this.window.length = 0;
@@ -371,6 +396,14 @@ export class Viewport {
         this.stats.height = height;
         return changed;
     }
+}
+
+/** Presets use the full ladder; worlds without a quality knob collapse its duplicate scales. */
+function previewRung(ladder: readonly Rung[], rung: number | null): number {
+    if (rung === null) return 0;
+    const index = Math.min(Math.max(rung, 0), LADDER.length - 1);
+    if (ladder.length === LADDER.length) return index;
+    return ladder.findIndex(r => r.scale === LADDER[index].scale);
 }
 
 function median(values: number[]): number {

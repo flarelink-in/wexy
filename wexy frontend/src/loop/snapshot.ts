@@ -36,6 +36,11 @@ export interface SealedCandidate {
     revision: number;
     /** id(C): SHA-256 of canonical `{graph, modules: [[m, interfaceHash, codeHash], …]}`, sorted by m. */
     id: string;
+    /**
+     * W's nodes, as the seal resolved them into X (X's hash covers them, through its programHash). X keeps no node's
+     * config, so EA5.3's probe projects W, never X, into its smaller variants.
+     */
+    program: unknown;
     x: Graph;
     checked: Checked;
     interfaces: ModuleInterface[];
@@ -120,7 +125,7 @@ export async function sealCandidate(input: SealInput, context: SealContext = {})
     }
     const id = await candidateId(x.hash, bodies.map(b => [b.module, b.interfaceHash, b.codeHash] as const));
     const snapshot = deepFreeze(structuredClone({
-        attempt: input.attempt, revision: input.revision, id, x, checked, interfaces, bodies,
+        attempt: input.attempt, revision: input.revision, id, program: input.program, x, checked, interfaces, bodies,
     }) as SealedCandidate);
     SEALED.add(snapshot);
     return { ok: true, snapshot };

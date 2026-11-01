@@ -1,0 +1,328 @@
+{
+  "format": "wexy-eligibility.v1",
+  "note": "Which adapters may execute, where, and within what (executor-design.md §7, Q88). Written from EA-G1's results by dev/eligibility-merge.mjs, never by hand from memory: each entry names its run.",
+  "entries": [
+    {
+      "adapter": "ng.buffer.storage",
+      "adapterVersion": 1,
+      "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+      "executorProfile": "ea5-exec.v1",
+      "environment": "ea5-env.v2|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome/156",
+      "evidence": "EA-G1 2026-11-01 on AMD Radeon(TM) Graphics, HeadlessChrome/156.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16; dev/out/ea-g1/2026-11-01T18-28-01/amd.json",
+      "coverage": {
+        "max": {
+          "bytes": 2688000
+        },
+        "values": {
+          "layout": [
+            "instance14"
+          ],
+          "content": [
+            "zero"
+          ],
+          "pingPong": [
+            "false"
+          ]
+        }
+      }
+    },
+    {
+      "adapter": "ng.geometry.primitive",
+      "adapterVersion": 1,
+      "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+      "executorProfile": "ea5-exec.v1",
+      "environment": "ea5-env.v2|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome/156",
+      "evidence": "EA-G1 2026-11-01 on AMD Radeon(TM) Graphics, HeadlessChrome/156.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16; dev/out/ea-g1/2026-11-01T18-28-01/amd.json",
+      "coverage": {
+        "max": {
+          "vertices": 325,
+          "indices": 1584
+        },
+        "values": {
+          "factory": [
+            "createCube",
+            "createPlane",
+            "createSphere"
+          ]
+        }
+      }
+    },
+    {
+      "adapter": "ng.material.stock",
+      "adapterVersion": 1,
+      "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+      "executorProfile": "ea5-exec.v1",
+      "environment": "ea5-env.v2|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome/156",
+      "evidence": "EA-G1 2026-11-01 on AMD Radeon(TM) Graphics, HeadlessChrome/156.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16; dev/out/ea-g1/2026-11-01T18-28-01/amd.json",
+      "coverage": {
+        "max": {},
+        "values": {
+          "class": [
+            "BasicMaterial",
+            "EmissiveMaterial",
+            "LambertMaterial"
+          ]
+        }
+      }
+    },
+    {
+      "adapter": "ng.light.rig",
+      "adapterVersion": 1,
+      "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+      "executorProfile": "ea5-exec.v1",
+      "environment": "ea5-env.v2|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome/156",
+      "evidence": "EA-G1 2026-11-01 on AMD Radeon(TM) Graphics, HeadlessChrome/156.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16; dev/out/ea-g1/2026-11-01T18-28-01/amd.json",
+      "coverage": {
+        "max": {
+          "lights": 2
+        },
+        "values": {}
+      }
+    },
+    {
+      "adapter": "ng.render.mesh_batch",
+      "adapterVersion": 1,
+      "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+      "executorProfile": "ea5-exec.v1",
+      "environment": "ea5-env.v2|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome/156",
+      "evidence": "EA-G1 2026-11-01 on AMD Radeon(TM) Graphics, HeadlessChrome/156.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16; dev/out/ea-g1/2026-11-01T18-28-01/amd.json",
+      "coverage": {
+        "max": {
+          "instances": 48000,
+          "vertexInvocations": 17280000
+        },
+        "values": {
+          "material": [
+            "basic",
+            "emissive",
+            "lambert"
+          ],
+          "lights": [
+            "false",
+            "true"
+          ]
+        }
+      }
+    },
+    {
+      "adapter": "ng.post.chain",
+      "adapterVersion": 1,
+      "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+      "executorProfile": "ea5-exec.v1",
+      "environment": "ea5-env.v2|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome/156",
+      "evidence": "EA-G1 2026-11-01 on AMD Radeon(TM) Graphics, HeadlessChrome/156.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16; dev/out/ea-g1/2026-11-01T18-28-01/amd.json",
+      "coverage": {
+        "max": {
+          "effects": 5,
+          "pixels": 2359296
+        },
+        "values": {
+          "effect": [
+            "Bloom",
+            "ColorGrade",
+            "FilmGrain",
+            "Tonemap",
+            "Vignette"
+          ]
+        }
+      }
+    },
+    {
+      "adapter": "ng.compute.stage",
+      "adapterVersion": 1,
+      "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+      "executorProfile": "ea5-exec.v1",
+      "environment": "ea5-env.v2|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome/156",
+      "evidence": "EA-G1 2026-11-01 on AMD Radeon(TM) Graphics, HeadlessChrome/156.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16; dev/out/ea-g1/2026-11-01T18-28-01/amd.json",
+      "coverage": {
+        "max": {
+          "invocations": 48000,
+          "workgroups": 750,
+          "workgroupSize": 64
+        },
+        "values": {
+          "phase": [
+            "fixedStep",
+            "frame",
+            "init"
+          ]
+        }
+      }
+    },
+    {
+      "adapter": "ng.render.fullscreen",
+      "adapterVersion": 1,
+      "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+      "executorProfile": "ea5-exec.v1",
+      "environment": "ea5-env.v2|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome/156",
+      "evidence": "EA-G1 2026-11-01 on AMD Radeon(TM) Graphics, HeadlessChrome/156.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16; dev/out/ea-g1/2026-11-01T18-28-01/amd.json",
+      "coverage": {
+        "max": {
+          "pixels": 2359296
+        },
+        "values": {}
+      }
+    },
+    {
+      "adapter": "ng.buffer.storage",
+      "adapterVersion": 1,
+      "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+      "executorProfile": "ea5-exec.v1",
+      "environment": "ea5-env.v2|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome/156",
+      "evidence": "EA-G1 2026-11-01 on NVIDIA GeForce GTX 1650, HeadlessChrome/156.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16; dev/out/ea-g1/2026-11-01T18-29-13/nvidia.json",
+      "coverage": {
+        "max": {
+          "bytes": 2688000
+        },
+        "values": {
+          "layout": [
+            "instance14"
+          ],
+          "content": [
+            "zero"
+          ],
+          "pingPong": [
+            "false"
+          ]
+        }
+      }
+    },
+    {
+      "adapter": "ng.geometry.primitive",
+      "adapterVersion": 1,
+      "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+      "executorProfile": "ea5-exec.v1",
+      "environment": "ea5-env.v2|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome/156",
+      "evidence": "EA-G1 2026-11-01 on NVIDIA GeForce GTX 1650, HeadlessChrome/156.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16; dev/out/ea-g1/2026-11-01T18-29-13/nvidia.json",
+      "coverage": {
+        "max": {
+          "vertices": 325,
+          "indices": 1584
+        },
+        "values": {
+          "factory": [
+            "createCube",
+            "createPlane",
+            "createSphere"
+          ]
+        }
+      }
+    },
+    {
+      "adapter": "ng.material.stock",
+      "adapterVersion": 1,
+      "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+      "executorProfile": "ea5-exec.v1",
+      "environment": "ea5-env.v2|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome/156",
+      "evidence": "EA-G1 2026-11-01 on NVIDIA GeForce GTX 1650, HeadlessChrome/156.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16; dev/out/ea-g1/2026-11-01T18-29-13/nvidia.json",
+      "coverage": {
+        "max": {},
+        "values": {
+          "class": [
+            "BasicMaterial",
+            "EmissiveMaterial",
+            "LambertMaterial"
+          ]
+        }
+      }
+    },
+    {
+      "adapter": "ng.light.rig",
+      "adapterVersion": 1,
+      "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+      "executorProfile": "ea5-exec.v1",
+      "environment": "ea5-env.v2|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome/156",
+      "evidence": "EA-G1 2026-11-01 on NVIDIA GeForce GTX 1650, HeadlessChrome/156.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16; dev/out/ea-g1/2026-11-01T18-29-13/nvidia.json",
+      "coverage": {
+        "max": {
+          "lights": 2
+        },
+        "values": {}
+      }
+    },
+    {
+      "adapter": "ng.render.mesh_batch",
+      "adapterVersion": 1,
+      "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+      "executorProfile": "ea5-exec.v1",
+      "environment": "ea5-env.v2|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome/156",
+      "evidence": "EA-G1 2026-11-01 on NVIDIA GeForce GTX 1650, HeadlessChrome/156.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16; dev/out/ea-g1/2026-11-01T18-29-13/nvidia.json",
+      "coverage": {
+        "max": {
+          "instances": 48000,
+          "vertexInvocations": 17280000
+        },
+        "values": {
+          "material": [
+            "basic",
+            "emissive",
+            "lambert"
+          ],
+          "lights": [
+            "false",
+            "true"
+          ]
+        }
+      }
+    },
+    {
+      "adapter": "ng.post.chain",
+      "adapterVersion": 1,
+      "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+      "executorProfile": "ea5-exec.v1",
+      "environment": "ea5-env.v2|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome/156",
+      "evidence": "EA-G1 2026-11-01 on NVIDIA GeForce GTX 1650, HeadlessChrome/156.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16; dev/out/ea-g1/2026-11-01T18-29-13/nvidia.json",
+      "coverage": {
+        "max": {
+          "effects": 5,
+          "pixels": 2359296
+        },
+        "values": {
+          "effect": [
+            "Bloom",
+            "ColorGrade",
+            "FilmGrain",
+            "Tonemap",
+            "Vignette"
+          ]
+        }
+      }
+    },
+    {
+      "adapter": "ng.compute.stage",
+      "adapterVersion": 1,
+      "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+      "executorProfile": "ea5-exec.v1",
+      "environment": "ea5-env.v2|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome/156",
+      "evidence": "EA-G1 2026-11-01 on NVIDIA GeForce GTX 1650, HeadlessChrome/156.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16; dev/out/ea-g1/2026-11-01T18-29-13/nvidia.json",
+      "coverage": {
+        "max": {
+          "invocations": 48000,
+          "workgroups": 750,
+          "workgroupSize": 64
+        },
+        "values": {
+          "phase": [
+            "fixedStep",
+            "frame",
+            "init"
+          ]
+        }
+      }
+    },
+    {
+      "adapter": "ng.render.fullscreen",
+      "adapterVersion": 1,
+      "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+      "executorProfile": "ea5-exec.v1",
+      "environment": "ea5-env.v2|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome/156",
+      "evidence": "EA-G1 2026-11-01 on NVIDIA GeForce GTX 1650, HeadlessChrome/156.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16; dev/out/ea-g1/2026-11-01T18-29-13/nvidia.json",
+      "coverage": {
+        "max": {
+          "pixels": 2359296
+        },
+        "values": {}
+      }
+    }
+  ]
+}

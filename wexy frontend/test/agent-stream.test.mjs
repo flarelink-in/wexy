@@ -107,7 +107,7 @@ test('EA-S2 the recorded failures are the backend\'s own errors, after everythin
     await readAgentStream(res(wire('error-budget.sse')), e => seen.push(e), { bundleHash: ENGINE_BUNDLE_HASH }).catch(() => {});
     assert.deepEqual(seen.map(e => e.type), ['meta', 'call', 'usage', 'tools']);
     // No usage came for the first call, so its reservation stands as its cost, and its tokens are unknown.
-    assert.deepEqual(seen[2].usage, { n: 1, generationId: 'gen-1', in: null, out: null, reasoning: null, cached: null, costMicroUsd: 154_734 });
+    assert.deepEqual(seen[2].usage, { n: 1, generationId: 'gen-1', in: null, out: null, reasoning: null, cached: null, costMicroUsd: 156_034 });
 
     await refuses(wire('error-upstream.sse'), 'upstream', /missed the action schema after a repair/);
 });
@@ -242,7 +242,7 @@ test('EA-S10 a turn quoting another engine bundle is refused at its meta and can
     const seen = [];
     const error = await readAgentStream(new Response(b), e => seen.push(e), { bundleHash: 'f'.repeat(64) }).catch(e => e);
     assert.ok(error instanceof AgentVersionError && error instanceof ForgeError, String(error));
-    assert.match(error.message, /^EA_VERSION_MISMATCH bundle 4d372b7a7b61, runtime ffffffffffff: /);
+    assert.match(error.message, /^EA_VERSION_MISMATCH bundle d923cc218830, runtime ffffffffffff: /);
     assert.deepEqual([error.identity, error.server], ['bundle', ENGINE_BUNDLE_HASH]);
     assert.deepEqual(seen, []);
     assert.equal(b.state.cancelled, true);
@@ -437,13 +437,16 @@ test('EA-S18 a cancel from inside a callback stops the turn, though its other ev
 test('EA-S19 a turn of another action contract or adapter manifest is refused at its meta, a v1 server\'s among them: nothing of it is handed on', async () => {
     const hand = events(wire('handed-off.sse'));
     const editMeta = (change) => sse(hand.map(([e, d], i) => [e, i === 0 ? change(JSON.parse(d)) : d]));
-    // EA2's recorded hand-off (test/fixtures/agent-wire-v1): a server before EA3.6 names no contract, and speaks v1.
-    const v1 = readFileSync(new URL('./fixtures/agent-wire-v1/handed-off.sse', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    // EA2's recorded hand-off (test/fixtures/agent-wire-v1): a server before EA3.6 names no contract, and speaks v1. The
+    // archive quotes the engine bundle of its day; it is read here as quoting this build's, so what refuses it is its
+    // contract, not the bundle (which EA-S10 refuses on its own).
+    const v1 = readFileSync(new URL('./fixtures/agent-wire-v1/handed-off.sse', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+        .replace(/"bundleHash":"[0-9a-f]{64}"/, `"bundleHash":"${ENGINE_BUNDLE_HASH}"`);
     const cases = [
         [v1, 'actionSchema', 'none', /^EA_VERSION_MISMATCH actionSchema none, runtime agent-action\.v2: .*speaks agent-action\.v1/],
         [editMeta(m => ({ ...m, actionSchema: 'agent-action.v3' })), 'actionSchema', 'agent-action.v3', /^EA_VERSION_MISMATCH actionSchema agent-action\.v3, runtime agent-action\.v2: /],
-        [editMeta(m => ({ ...m, manifestHash: 'f'.repeat(64) })), 'manifest', 'f'.repeat(64), /^EA_VERSION_MISMATCH manifest ffffffffffff, runtime aacc5959c0f6: /],
-        [editMeta(({ manifestHash, ...m }) => m), 'manifest', 'none', /^EA_VERSION_MISMATCH manifest none, runtime aacc5959c0f6: /],
+        [editMeta(m => ({ ...m, manifestHash: 'f'.repeat(64) })), 'manifest', 'f'.repeat(64), /^EA_VERSION_MISMATCH manifest ffffffffffff, runtime 3c7775588fb8: /],
+        [editMeta(({ manifestHash, ...m }) => m), 'manifest', 'none', /^EA_VERSION_MISMATCH manifest none, runtime 3c7775588fb8: /],
     ];
     for (const [text, identity, server, pattern] of cases) {
         const b = body([text], { keepOpen: true });

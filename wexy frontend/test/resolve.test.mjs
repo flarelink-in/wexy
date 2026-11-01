@@ -13,6 +13,8 @@ import { NO_CONTENT, SizeOverflow, product } from '../src/contract/adapters/cont
 import { POLICY_V1 } from '../src/contract/adapters/graph.ts';
 import { SHIPPED_GATES, SHIPPED_SUPPORT } from '../src/contract/adapters/index.ts';
 import { ENGINE } from '../src/contract/engine/index.ts';
+import { checkGraph } from '../src/contract/adapters/checks.ts';
+import { deriveInterfaces } from '../src/contract/adapters/interfaces.ts';
 import { TIER_1, cleanupFor, resolveProgram } from '../src/contract/adapters/resolve.ts';
 
 const node = (id, adapterId, config, inputs = []) => ({ id, adapterId, adapterVersion: 1, config: JSON.stringify(config), inputs });
@@ -87,8 +89,8 @@ test('EA-X1 X is canonical and deterministic: the same program gives the same by
     assert.equal(a.executable, false);
     assert.ok(Object.isFrozen(a) && Object.isFrozen(a.resources[0]) && Object.isFrozen(a.schedule.frame) && Object.isFrozen(a.operations[0].args));
     assert.deepEqual(a.identity, {
-        graph: 'ea-x.v1', resolver: 'ea3.2-resolver.2', engine: 'null-graph@1.2.0', bundleHash: ENGINE.bundle.bundleHash, supportStatusHash: a.identity.supportStatusHash,
-        manifest: 'ea-adapters.v1', manifestHash: 'aacc5959c0f66277befb062ee140fa2b0dbae14d7a9fe0796ca032403b7293a3',
+        graph: 'ea-x.v1', resolver: 'ea3.2-resolver.3', engine: 'null-graph@1.2.1', bundleHash: ENGINE.bundle.bundleHash, supportStatusHash: a.identity.supportStatusHash,
+        manifest: 'ea-adapters.v1', manifestHash: '3c7775588fb816ce8ccd3660e16d8ae6bfa9526f83174ecf666f8c66ab4c4c77',
         gatesHash: await canonicalHash([]), programHash: a.identity.programHash, policyHash: await canonicalHash(POLICY_V1),
     });
 
@@ -141,8 +143,8 @@ test('EA-X2 the nine adapters resolve to one X: its schedules, bytes, estimate, 
         fixedStep: ['@host#updateSim', 'move#dispatch'],
         frame: ['@host#updateCamera', 'look#upload', 'blocks#copy', '@host#clear', 'sky#draw', 'blocks#draw', 'water#draw', 'look#passes'],
         resize: ['@host#resize', 'look#resize'],
-        dispose: ['water#clear', 'blocks#clear', 'sky#clear', 'look#clearBatches', 'look#destroy', 'sun#destroy', 'stone#destroy', 'cube#destroy', 'move#drop',
-            'field#destroy', 'instances#destroy', '@host#destroySim', '@host#forgetPasses'],
+        dispose: ['water#clear', 'blocks#clear', 'sky#clear', 'look#destroy', 'sun#destroy', 'stone#destroy', 'cube#destroy', 'move#drop',
+            'field#destroy', 'instances#destroy', '@host#destroySim', '@host#removePass'],
     });
     assert.deepEqual(x.fixedSteps, { min: 0, max: 4 });
     // Every allocation, with its owner: the engine's batch storage beside the buffer copied into it, the pool's targets.
@@ -155,22 +157,26 @@ test('EA-X2 the nine adapters resolve to one X: its schedules, bytes, estimate, 
         ['look#sceneColor', 'extra', 1920 * 1080 * 8, 1], ['look#sceneDepth', 'extra', 1920 * 1080 * 4, 1], ['sky#storage', 'engine', 16, 1],
         ['stone#uniform', 'extra', 32, 1], ['sun#lights', 'extra', 128, 1], ['water#storage', 'engine', 16, 1],
     ]);
-    // Every engine object, with what releases it, or what keeps it after the world's dispose and until when.
-    const held = { by: 'the engine\'s batch manager (the post debug view\'s batch)', until: 'engine.destroy()' };
+    // Every engine object, with what releases it: on null-graph 1.2.1 nothing is kept after the world's dispose (EA5.0).
+    // PostChain's destroy releases its passes, its batches and its debug view's; the stage and the main pass are removed.
     assert.deepEqual(x.objects.map(o => [o.id, o.kind, o.count, o.createdBy, o.releasedBy, o.retained]), [
-        ['@host#mainPass', 'pass', 1, '@host#pass', '@host#forgetPasses', null], ['blocks#batch', 'batch', 1, 'blocks#create', 'blocks#clear', null],
+        ['@host#mainPass', 'pass', 1, '@host#pass', '@host#removePass', null], ['blocks#batch', 'batch', 1, 'blocks#create', 'blocks#clear', null],
         ['cube#geometry', 'geometry', 1, 'cube#create', 'cube#destroy', null], ['look#chain', 'postChain', 1, 'look#create', 'look#destroy', null],
-        ['look#debugView', 'postDebugView', 1, 'look#create', '@host#forgetPasses', held], ['look#postBatches', 'postBatches', 2, 'look#create', 'look#clearBatches', null],
-        ['look#postPasses', 'postPasses', 2, 'look#create', '@host#forgetPasses', null],
-        ['move#stage', 'computeStage', 1, 'move#create', 'move#drop', { by: 'engine.computeStages', until: 'engine.destroy()' }],
+        ['look#debugView', 'postDebugView', 1, 'look#create', 'look#destroy', null], ['look#postBatches', 'postBatches', 2, 'look#create', 'look#destroy', null],
+        ['look#postPasses', 'postPasses', 2, 'look#create', 'look#destroy', null],
+        ['move#stage', 'computeStage', 1, 'move#create', 'move#drop', null],
         ['sky#batch', 'batch', 1, 'sky#create', 'sky#clear', null], ['stone#material', 'material', 1, 'stone#create', 'stone#destroy', null],
         ['sun#lightSystem', 'lightSystem', 1, 'sun#create', 'sun#destroy', null], ['water#batch', 'batch', 1, 'water#create', 'water#clear', null],
     ]);
-    assert.deepEqual(res(x, 'look#debugStorage').retained, held);
+    assert.deepEqual([res(x, 'look#debugStorage').releasedBy, res(x, 'look#debugStorage').retained], ['look#destroy', null]);
+    assert.ok([...x.resources, ...x.objects].every(r => r.retained === null), 'no retention on 1.2.1');
+    assert.deepEqual([op(x, 'move#drop').call, op(x, '@host#removePass').call, op(x, '@host#removePass').args, op(x, 'look#destroy').call],
+        ['engine.removeComputeStage', 'engine.removePass', { pass: '@host#pass' }, 'post.destroy']);
+    assert.ok(!x.operations.some(o => ['engine.clearPasses', 'host.dropComputeStage', 'post.clearBatches'].includes(o.call)), 'no 1.2.0 release call is left');
     assert.deepEqual(x.estimate, {
         bytes: 49_906_744, maxAllocationBytes: 16_588_800, viewportBytes: 49_766_400, resizePeakBytes: 49_906_744,
         invocationsPerFrame: 64 * 4, workgroupsPerFrame: 4, vertexInvocationsPerFrame: 36 * 64 + 36 + 3, invocationsInit: 0,
-        copyBytesPerFrame: 3584, uploadBytesPerFrame: 432 + 512 + 16 * 4, uploadBytesInit: 3584 + 840 + 32 + 128, operations: 39,
+        copyBytesPerFrame: 3584, uploadBytesPerFrame: 432 + 512 + 16 * 4, uploadBytesInit: 3584 + 840 + 32 + 128, operations: 38,
     });
     assert.deepEqual(x.output, { color: '@host#screen', producer: 'look#passes', format: 'canvas', colorSpace: 'srgb', conversion: 'none', depth: 'look#sceneDepth' });
     assert.deepEqual(x.modules.map(m => [m.module, m.stage, m.entry, m.node, m.operation, m.path]), [
@@ -281,11 +287,11 @@ test('EA-X7 dependencies order a phase before program order does: writers before
     assert.deepEqual(l.schedule.frame.filter(id => /#draw$/.test(id)), ['sky#draw', 'blocks#draw', 'water#draw']);
     const made = l.schedule.init.filter(id => ['sky#create', 'blocks#create', 'water#create'].includes(id));
     assert.deepEqual(made, ['sky#create', 'blocks#create', 'water#create']);
-    // Disposal is construction backwards; the host's release of what the engine lists for every world comes last.
+    // Disposal is construction backwards; the host's own releases come last, its main pass removed after its batches.
     const creates = l.schedule.init.filter(id => id.endsWith('#create')).map(id => id.split('#')[0]);
     const disposed = [...new Set(l.schedule.dispose.filter(id => !id.startsWith('@host#')).map(id => id.split('#')[0]))];
     assert.deepEqual(disposed, creates.filter(n => disposed.includes(n)).reverse());
-    assert.equal(l.schedule.dispose.at(-1), '@host#forgetPasses');
+    assert.equal(l.schedule.dispose.at(-1), '@host#removePass');
 
     // Two computes each reading what the other writes, in one phase, order nothing: refused, both named.
     const loop = [
@@ -317,9 +323,9 @@ test('EA-X8 each refusal of the resolver, at its exact path; a refused producer 
     const twice = world();
     twice[2].inputs.push(from('writes', 'instances', 'buffer'));
     await refused(twice, 'EA_RESOLVE', '/nodes/2/inputs/2');
-    const [ops] = await refused(world(), 'EA_RESOLVE', '/nodes', { ...POLICY_V1, maxOperations: 38 });
-    assert.match(ops.message, /39 operations, over P's 38/);
-    assert.equal((await resolveProgram(world(), { ...POLICY_V1, maxOperations: 39 }, undefined, TIER_2)).ok, true, 'B passes where B+1 refuses');
+    const [ops] = await refused(world(), 'EA_RESOLVE', '/nodes', { ...POLICY_V1, maxOperations: 37 });
+    assert.match(ops.message, /38 operations, over P's 37/);
+    assert.equal((await resolveProgram(world(), { ...POLICY_V1, maxOperations: 38 }, undefined, TIER_2)).ok, true, 'B passes where B+1 refuses');
     const v1 = world();
     v1[3] = { id: 'cube', symbol: 'geometry:Primitives', member: 'createCube', purpose: 'x', args: [], inputs: [] };
     await refused(v1, 'EA_CONTRACT_V1', '/nodes/3');
@@ -405,7 +411,7 @@ test('EA-X12 every allocation and engine object a world makes has a release or a
         const releases = new Set([...x.resources, ...x.objects].map(r => r.releasedBy).filter(Boolean));
         assert.deepEqual(x.schedule.dispose.filter(id => !releases.has(id)), [], `${label}: a dispose operation that releases nothing`);
         // The minimal compute world the review reproduced: its stage and pass now have their releases.
-        if (program.length === 2) assert.deepEqual(x.schedule.dispose, ['step#drop', 'field#destroy', '@host#forgetPasses']);
+        if (program.length === 2) assert.deepEqual(x.schedule.dispose, ['step#drop', 'field#destroy', '@host#removePass']);
         // A partial init: after each create, what has been made is released, in dispose order; all of it, at the end.
         const creates = x.schedule.init.filter(id => op(x, id).kind === 'create');
         for (let k = 0; k <= creates.length; k++) {
@@ -454,4 +460,81 @@ test('EA-X16 Q80: Tier 1 refuses an upload at the node check; a lifted gate with
     const x = await resolved(world());
     assert.deepEqual(op(x, 'instances#upload').args.data, { source: 'test', id: 'instances.seed', sha256: createHash('sha256').update('instances:3584').digest('hex') });
     assert.deepEqual(op(x, 'instances#upload').work.bytes, 3584);
+});
+
+test('EA-D7 Q76(b): an eligible buffer is its batch\'s own storage, made by the batch\'s create, cleared once; every other case copies', async () => {
+    // The live worlds' shape: instances declared zero, exactly maxInstances of them at the stock stride, one mesh batch,
+    // written by an init stage and by a frame stage, which bind the batch's storage.
+    const adoptable = (over = {}) => [
+        node('cube', 'ng.geometry.primitive', { shape: 'cube', size: 1, segments: 3 }),
+        node('stone', 'ng.material.stock', { kind: 'lambert', baseColor: [0.6, 0.55, 0.5, 1] }),
+        node('blocks', 'ng.buffer.storage', { elements: 64, layout: 'instance14', strideFloats: 14, pingPong: false, init: 'zero', ...over }),
+        node('place', 'ng.compute.stage', { module: 'place', entry: 'put', workgroupSize: 64, invocations: 64, phase: 'init' }, [from('writes', 'blocks', 'buffer')]),
+        node('sway', 'ng.compute.stage', { module: 'sway', entry: 'drift', workgroupSize: 64, invocations: 64, phase: 'frame' },
+            [from('reads', 'blocks', 'buffer'), from('writes', 'blocks', 'buffer')]),
+        node('terrain', 'ng.render.mesh_batch', { maxInstances: 64 }, [from('geometry', 'cube', 'geometry'), from('material', 'stone', 'material'), from('instances', 'blocks', 'buffer')]),
+    ];
+    const x = await resolved(adoptable(), undefined, undefined, TIER_1);
+    // One allocation, the batch's, realized under the buffer's own id: engine-owned, made by the batch, cleared once.
+    const r = res(x, 'blocks#buffer');
+    assert.deepEqual([r.owner, r.bytes, r.allocations, r.content, r.createdBy, r.releasedBy, r.retained], ['engine', 64 * 56, 1, 'zero', 'terrain#create', 'terrain#clear', null]);
+    assert.equal(res(x, 'terrain#storage'), undefined, 'no storage of the batch beside it');
+    for (const id of ['blocks#create', 'blocks#destroy', 'terrain#copy']) assert.equal(op(x, id), undefined, `${id}: no create, destroy or copy`);
+    assert.ok(!x.operations.some(o => o.call === 'buffer.destroy' || o.call === 'encoder.copyBufferToBuffer'), 'released only through clearBatch, never copied');
+    const create = op(x, 'terrain#create');
+    assert.deepEqual([create.args.adopts, create.accesses], ['blocks#buffer', [{ resource: 'blocks#buffer', mode: 'write', version: null, coverage: 'whole' }]]);
+    assert.ok(op(x, 'terrain#draw').accesses.some(a => a.resource === 'blocks#buffer' && a.mode === 'read'));
+    // The batch's create comes before every stage that binds its storage; disposal undoes it: the stages dropped first.
+    const init = x.schedule.init;
+    for (const stage of ['place', 'sway']) {
+        assert.ok(op(x, `${stage}#create`).after.includes('terrain#create'), `${stage} waits for the storage it binds`);
+        assert.ok(init.indexOf('terrain#create') < init.indexOf(`${stage}#create`), `${stage}#create after terrain#create`);
+        assert.ok(x.schedule.dispose.indexOf(`${stage}#drop`) < x.schedule.dispose.indexOf('terrain#clear'), `${stage}#drop before terrain#clear`);
+    }
+    assert.ok(init.indexOf('terrain#create') < init.indexOf('place#dispatch'), 'the init stage writes storage that exists');
+    assert.deepEqual(x.schedule.frame.filter(id => ['sway#dispatch', 'terrain#draw'].includes(id)), ['sway#dispatch', 'terrain#draw'], 'the frame stage before the draw');
+    // X checks, and a partial init is undone, each release once, the storage by its batch's clear alone.
+    const checked = await checkGraph(x, POLICY_V1);
+    assert.deepEqual(checked.findings.filter(f => f.severity === 'error'), []);
+    const creates = init.filter(id => op(x, id).kind === 'create');
+    for (let k = 0; k <= creates.length; k++) {
+        const made = new Set(creates.slice(0, k));
+        const cleanup = cleanupFor(x, made);
+        assert.equal(new Set(cleanup).size, cleanup.length, `after ${k} creates: each release once`);
+        assert.equal(cleanup.includes('terrain#clear'), made.has('terrain#create'), `after ${k} creates: the storage released when, and only when, its batch was made`);
+    }
+
+    // The bodies see the same buffer either way: each stage's interface is the copy's, byte for byte.
+    const copied = [...adoptable(), node('rubble', 'ng.render.mesh_batch', { maxInstances: 64 },
+        [from('geometry', 'cube', 'geometry'), from('material', 'stone', 'material'), from('instances', 'blocks', 'buffer')])];
+    const c = await resolved(copied, undefined, undefined, TIER_1);
+    assert.equal(res(c, 'blocks#buffer').owner, 'host', 'a second batch keeps the copy');
+    const [ia, ic] = [await deriveInterfaces(x), await deriveInterfaces(c)];
+    assert.deepEqual(ia.interfaces.map(i => [i.module, i.interfaceHash]), ic.interfaces.map(i => [i.module, i.interfaceHash]));
+    // And no copy each frame, where the copies run each frame because the frame stage writes the buffer.
+    assert.deepEqual([x.estimate.copyBytesPerFrame, c.estimate.copyBytesPerFrame], [0, 2 * 64 * 56]);
+
+    // Every other case keeps the copy: a ping-pong pair, an upload seed, fewer elements than the batch holds, a
+    // fullscreen that reads it.
+    const keeps = async (label, program, sources = TIER_1) => {
+        const k = await resolved(program, undefined, undefined, sources);
+        assert.deepEqual([res(k, 'blocks#buffer').owner, !!op(k, 'terrain#copy'), op(k, 'terrain#create').args.adopts], ['host', true, undefined], label);
+    };
+    await keeps('a pair', adoptable({ pingPong: true }).filter(n => n.id !== 'place'));
+    await keeps('an upload seed', adoptable({ init: 'upload' }), TIER_2);
+    await keeps('fewer elements than the batch holds', adoptable({ elements: 40 }));
+    await keeps('a fullscreen reads it', [...adoptable(), node('sky', 'ng.render.fullscreen', { module: 'sky', fragmentEntry: 'dusk' }, [from('reads', 'blocks', 'buffer')])]);
+
+    // A custom batch adopts the same way, and its engine group binds the storage it adopted.
+    const custom = [
+        node('cube', 'ng.geometry.primitive', { shape: 'cube', size: 1, segments: 3 }),
+        node('motes', 'ng.buffer.storage', { elements: 32, layout: 'f32', strideFloats: 4, pingPong: false, init: 'zero' }),
+        node('spawn', 'ng.compute.stage', { module: 'spawn', entry: 'seed', workgroupSize: 32, invocations: 32, phase: 'init' }, [from('writes', 'motes', 'buffer')]),
+        node('glow', 'ng.render.custom_batch', { module: 'glow', vertexEntry: 'wave', fragmentEntry: 'shade', maxInstances: 32 },
+            [from('geometry', 'cube', 'geometry'), from('instances', 'motes', 'buffer')]),
+    ];
+    const g = await resolved(custom, undefined, undefined, TIER_1);
+    assert.deepEqual([res(g, 'motes#buffer').createdBy, res(g, 'motes#buffer').releasedBy, op(g, 'glow#create').args.adopts], ['glow#create', 'glow#clear', 'motes#buffer']);
+    const gi = await deriveInterfaces(g);
+    assert.equal(gi.interfaces.find(i => i.module === 'glow').bindings.find(b => b.name === 'ecs').resource, 'motes#buffer');
 });

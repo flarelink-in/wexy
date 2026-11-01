@@ -960,6 +960,19 @@ export interface CompileMessage {
     type: 'error' | 'warning' | 'info';
 }
 
+/** A verdict's fields as compileBody places them; the compiler that makes the verdict adds whose it is. */
+export type VerdictFields = Omit<CompiledBody, 'producedBy'>;
+
+/** One compile and the one verdict it may make (EA5.1's provenance, the EA5.1 review). */
+export interface BoundCompile {
+    messages: readonly CompileMessage[];
+    /**
+     * Makes this compile's verdict, once: the object the compiler itself returns, frozen, which its admission accepts only
+     * when the fields say what the device said about exactly this compile's source. A second call throws.
+     */
+    verdict(fields: DeepReadonly<VerdictFields>): DeepReadonly<CompiledBody>;
+}
+
 /** L3's seam: a scripted fake in the tests, the device's own compiler in EA5.1 (src/exec/device-compiler.ts). */
 export interface ModuleCompiler {
     /** Whose verdict it is: a fake's proves nothing about a device (I6). */
@@ -968,11 +981,11 @@ export interface ModuleCompiler {
     readonly gpu?: string;
     compile(source: string, label: string): Promise<readonly CompileMessage[]>;
     /**
-     * Told of the verdict compileBody made from this compiler's compile of `source` (EA5.1). A device compiler registers
-     * it, bound to its device and generation, so its admission can tell its own verdict from a copy (executor-design.md
-     * §6). It never throws; one it does not register proves nothing.
+     * The same compile, whose verdict the compiler makes itself (`verdict`, once), so that an admission can tell its own
+     * verdict object from a copy or from one made in another generation (executor-design.md §6). A device compiler has
+     * it; a fake need not, and its verdicts prove nothing either way. There is no way to register a verdict made elsewhere.
      */
-    attest?(verdict: DeepReadonly<CompiledBody>, source: string): Promise<void> | void;
+    compileBound?(source: string, label: string): Promise<BoundCompile>;
 }
 
 export interface CompiledBody {
@@ -1001,7 +1014,9 @@ export async function compileBody(iface: Interface, checked: DeepReadonly<Checke
     }
     if (await sha256Hex(checked.body) !== checked.codeHash) throw new Error(`compileBody: ${checked.module}'s body is not the text its codeHash names`);
     const assembled = assembleModule(iface, checked.body);
-    const messages = await compiler.compile(assembled.source, `${iface.module}#${checked.codeHash.slice(0, 12)}`);
+    const label = `${iface.module}#${checked.codeHash.slice(0, 12)}`;
+    const bound = compiler.compileBound ? await compiler.compileBound(assembled.source, label) : null;
+    const messages = bound ? bound.messages : await compiler.compile(assembled.source, label);
     const placed: Pick<CompiledBody, 'body' | 'host' | 'unplaced'> = { body: [], host: [], unplaced: [] };
     for (const m of messages) {
         if (m.type === 'info') continue;
@@ -1017,20 +1032,21 @@ export async function compileBody(iface: Interface, checked: DeepReadonly<Checke
             placed.host.push({ rung: 'L3', line: null, code: 'host-source', severity, message: `${message} (the host's ${where}, line ${line} of the module)` });
         }
     }
-    const verdict = deepFreeze({
+    const fields: VerdictFields = {
         ok: ![...placed.body, ...placed.host, ...placed.unplaced].some(f => f.severity === 'error'),
-        producedBy: compiler.producedBy,
         module: iface.module,
         interfaceHash: iface.interfaceHash,
         codeHash: checked.codeHash,
         ...placed,
-    });
-    // The verdict as made, for the compiler's own record: an attestation that fails leaves it unregistered, which an
-    // admission refuses (the safe direction), never a body's fault.
-    try {
-        await compiler.attest?.(verdict, assembled.source);
-    } catch { /* unregistered: proves nothing */ }
-    return verdict;
+    };
+    if (bound) {
+        // The compiler makes the verdict object itself, from the compile it reports. One it fails to make is made here,
+        // unregistered, so an admission refuses it (the safe direction), never a body's fault.
+        try {
+            return bound.verdict(fields);
+        } catch { /* falls through to an unregistered verdict */ }
+    }
+    return deepFreeze({ ...fields, producedBy: compiler.producedBy });
 }
 
 /**

@@ -1,10 +1,13 @@
 // The nine Tier-1 adapters' resolve functions (engine-adapters-design.md §5, EA3.2): trusted host code beside the
 // descriptor data, never copied as data (Q74). Each turns one checked node, the outputs wired into it and P into a
 // contribution: the resources it allocates, with owner and bytes; the operations it adds, with phase, accesses and the
-// host call EA5 makes; the outputs it hands on; the modules it needs. Every number is null-graph 1.2.0's as
+// host call EA5 makes; the outputs it hands on; the modules it needs. Every number is null-graph 1.2.1's as
 // installed, and test/resolve.test.mjs pins each against the engine itself through a recording fake device (no GPU):
 // Primitives' counts, the materials' uniforms, LightSystem's buffer, PostChain's pool. The host's own part (the main
-// pass, the camera, the depth target) is here too, since every draw writes it.
+// pass, the camera, the depth target) is here too, since every draw writes it. Since EA5.0 every release is 1.2.1's
+// (Q86 (a)): a compute stage and the main pass are removed from the engine one by one, and PostChain's destroy()
+// releases the batches and passes it registered, so a replaced world leaves nothing behind. A batch's instances adopt
+// its own storage where eligible (Q76(b), resolve.ts's `adoptions`), and are copied into it otherwise.
 
 import type { BufferLayout, CheckedNode, ResolveCode } from './index';
 import type { ObjectKind, OperationKind, Phase, Retention, StaticPolicy, XAccess, XModuleRequest, XObject, XOperation, XResource, XWork } from './graph';
@@ -61,6 +64,8 @@ export interface Context {
     frame: Frame;
     policy: StaticPolicy;
     content: ContentSource;
+    /** Q76(b): each adopted buffer node, by the batch whose own storage it is (resolve.ts's `adoptions`). */
+    adoption: ReadonlyMap<string, string>;
 }
 
 export interface Contribution {
@@ -110,9 +115,6 @@ function operation(node: string, local: string, phase: Phase, kind: OperationKin
     return { id: xid(node, local), node, phase, kind, call, args, accesses, after, ties: [], required: true, work: { ...NO_WORK, ...work } };
 }
 
-/** null-graph 1.2.0 lists every compute stage and pass it makes, and only its own destroy() forgets them (§4). */
-const UNTIL_ENGINE_DESTROY = 'engine.destroy()';
-
 function object(node: string, local: string, kind: ObjectKind, releasedBy: string | null, retained: Retention | null = null, count = 1): XObject {
     return { id: xid(node, local), node, kind, count, createdBy: xid(node, node === HOST ? 'pass' : 'create'), releasedBy, retained };
 }
@@ -144,6 +146,19 @@ function storageBuffer(ctx: Context): Contribution | Refusal {
     const c = ctx.node.config as { elements: number; layout: BufferLayout; strideFloats: number; pingPong: boolean; init: 'zero' | 'upload' };
     const id = ctx.node.id;
     const bytes = product(c.elements, c.strideFloats, 4);
+    const out = empty();
+    out.outputs.buffer = { kind: 'storage_buffer', resource: xid(id, 'buffer'), layout: c.layout, strideFloats: c.strideFloats, elements: c.elements, pingPong: c.pingPong };
+    const adopter = ctx.adoption.get(id);
+    if (adopter !== undefined) {
+        // Q76(b): realized as its batch's own storage. createBatch allocates it, zero-filled as this buffer is declared,
+        // its stages bind it as h1 binds `particles.storageBuffer`, and clearBatch alone releases it: no create and no
+        // destroy of its own, one allocation and no copy.
+        out.resources.push(resource(id, 'buffer', {
+            kind: 'buffer', owner: 'engine', bytes, usage: ['storage', 'copy_dst', 'copy_src'], layout: c.layout, strideFloats: c.strideFloats, elements: c.elements,
+            content: 'zero', createdBy: xid(adopter, 'create'), releasedBy: xid(adopter, 'clear'),
+        }));
+        return out;
+    }
     const allocations = c.pingPong ? 2 : 1;
     // Q80: `upload` reaches here only once a gate is lifted, and refuses still without content. Tier 1 has neither.
     const seed = c.init === 'upload' ? ctx.content.contentFor(id, bytes) : null;
@@ -154,7 +169,6 @@ function storageBuffer(ctx: Context): Contribution | Refusal {
         kind: 'buffer', owner: 'host', bytes, allocations, pingPong: c.pingPong, usage: ['storage', 'copy_src', 'copy_dst'],
         layout: c.layout, strideFloats: c.strideFloats, elements: c.elements, content: c.init === 'upload' ? 'upload' : 'zero', releasedBy: xid(id, 'destroy'),
     });
-    const out = empty();
     out.resources.push(buffer);
     out.operations.push(operation(id, 'create', 'init', 'create', 'device.createBuffer', { bytes, allocations, usage: buffer.usage }, [write(buffer.id)]));
     if (seed) {
@@ -165,7 +179,6 @@ function storageBuffer(ctx: Context): Contribution | Refusal {
         out.sources[xid(id, 'upload')] = [`${ctx.path}/config/init`];
     }
     out.operations.push(operation(id, 'destroy', 'dispose', 'destroy', 'buffer.destroy', {}, []));
-    out.outputs.buffer = { kind: 'storage_buffer', resource: buffer.id, layout: c.layout, strideFloats: c.strideFloats, elements: c.elements, pingPong: c.pingPong };
     out.sources[buffer.id] = [`${ctx.path}/config`];
     return out;
 }
@@ -225,11 +238,10 @@ function computeStage(ctx: Context): Contribution | Refusal {
             [{ resource: b.resource, mode: 'readwrite', version: null, coverage: 'whole' }], {}, [xid(id, 'dispatch')]));
         out.sources[xid(id, `swap${k}`)] = [w.path];
     });
-    // NullGraph.createComputeStage lists the stage in its computeStages, and 1.2.0 has no call that takes one out: the
-    // world drops it from its sequences and its own hold, and the engine keeps it, pipeline and bind groups, until its
-    // destroy(). Disclosed, not hidden (the EA3.2 review).
-    out.operations.push(operation(id, 'drop', 'dispose', 'destroy', 'host.dropComputeStage', {}, []));
-    out.objects.push(object(id, 'stage', 'computeStage', xid(id, 'drop'), { by: 'engine.computeStages', until: UNTIL_ENGINE_DESTROY }));
+    // NullGraph.createComputeStage lists the stage in its computeStages; 1.2.1's removeComputeStage takes it out, so its
+    // pipeline and bind groups go with the world (1.2.0 kept them until engine.destroy(), disclosed then).
+    out.operations.push(operation(id, 'drop', 'dispose', 'destroy', 'engine.removeComputeStage', {}, []));
+    out.objects.push(object(id, 'stage', 'computeStage', xid(id, 'drop')));
     // A stage that follows this one waits for its whole work: the dispatch and each swap after it.
     out.outputs.done = { kind: 'stage', operations: out.operations.filter(o => o.phase === c.phase).map(o => o.id), phase: c.phase };
     out.modules.push({ module: c.module, stage: 'compute', entry: c.entry, node: id, operation: xid(id, 'dispatch'), path: `${ctx.path}/config/module` });
@@ -367,9 +379,9 @@ function lightRig(ctx: Context): Contribution {
 // ---------------------------------------------------------------------------------------------------------------
 // The batches. NullGraph.createBatch always allocates the batch's own instance storage, maxInstances × strideFloats
 // × 4 bytes (STORAGE | COPY_DST | COPY_SRC), and binds it at group 0 binding 1 beside the camera; clearBatch releases
-// it. So a buffer wired to `instances` is copied into that storage, each frame when anything writes it after init,
-// else once at init (the resolver settles which). That is the safe direction for memory: zero-copy reuse of the
-// batch's storage, as h1 does it, can only lower the estimate (EA5, Q76).
+// it. A buffer wired to `instances` is that storage when the resolver adopts it (Q76(b): `args.adopts` names it, and
+// the buffer has no allocation of its own); otherwise it is copied into it, each frame when anything writes it after
+// init, else once at init (the resolver settles which).
 
 function instanceCopy(ctx: Context, storage: string, from: Produced & { kind: 'storage_buffer' }, maxInstances: number): XOperation {
     const bytes = product(from.elements, from.strideFloats, 4);
@@ -377,9 +389,15 @@ function instanceCopy(ctx: Context, storage: string, from: Produced & { kind: 's
         [readBuffer(from), write(storage, from.elements === maxInstances ? 'whole' : 'prefix')], { bytes });
 }
 
-function batchCreate(ctx: Context, args: Record<string, unknown>, storage: XResource): XOperation {
-    return operation(ctx.node.id, 'create', 'init', 'create', 'engine.createBatch', { pass: xid(HOST, 'pass'), ...args }, [write(storage.id)], {},
+/** The batch's create, which allocates its storage: its own `<batch>#storage`, or the buffer it adopts. */
+function batchCreate(ctx: Context, args: Record<string, unknown>, storage: string): XOperation {
+    return operation(ctx.node.id, 'create', 'init', 'create', 'engine.createBatch', { pass: xid(HOST, 'pass'), ...args }, [write(storage)], {},
         [xid(HOST, 'pass')]);
+}
+
+/** Its instance buffer, when this batch adopts it as its own storage (Q76(b)); null when it copies, or has none wired. */
+function adoptedBy(ctx: Context, instances: Wired | undefined): (Produced & { kind: 'storage_buffer' }) | null {
+    return instances && ctx.adoption.get(instances.nodeId) === ctx.node.id ? instances.from as Produced & { kind: 'storage_buffer' } : null;
 }
 
 function meshBatch(ctx: Context): Contribution | Refusal {
@@ -396,26 +414,36 @@ function meshBatch(ctx: Context): Contribution | Refusal {
     const g = geometry.from as Produced & { kind: 'geometry' };
     const m = material.from as Produced & { kind: 'material' };
     const l = lights ? (lights.from as Produced & { kind: 'lights' }) : null;
-    const storage = resource(id, 'storage', {
-        kind: 'buffer', owner: 'engine', bytes: product(c.maxInstances, 14, 4), usage: ['storage', 'copy_dst', 'copy_src'],
-        layout: 'instance14', strideFloats: 14, elements: c.maxInstances, content: 'zero', releasedBy: xid(id, 'clear'),
-    });
+    const adopted = adoptedBy(ctx, instances);
     const out = empty();
-    out.resources.push(storage);
+    let storage: string;
+    if (adopted) {
+        storage = adopted.resource;
+        out.sources[storage] = [`${ctx.path}/config/maxInstances`, instances.path];
+    } else {
+        const own = resource(id, 'storage', {
+            kind: 'buffer', owner: 'engine', bytes: product(c.maxInstances, 14, 4), usage: ['storage', 'copy_dst', 'copy_src'],
+            layout: 'instance14', strideFloats: 14, elements: c.maxInstances, content: 'zero', releasedBy: xid(id, 'clear'),
+        });
+        out.resources.push(own);
+        storage = own.id;
+        out.sources[storage] = [`${ctx.path}/config/maxInstances`];
+    }
     out.objects.push(object(id, 'batch', 'batch', xid(id, 'clear')));
     out.operations.push(batchCreate(ctx, {
         strideFloats: 14, maxInstances: c.maxInstances, shader: { kind: 'stock', material: m.material, lights: l !== null },
         vertexLayout: 'StandardLayout', target: ctx.frame.colorFormat, depth: { write: true, compare: 'less' },
-        material: material.nodeId, geometry: geometry.nodeId, lights: lights?.nodeId ?? null,
+        material: material.nodeId, geometry: geometry.nodeId, lights: lights?.nodeId ?? null, ...(adopted ? { adopts: storage } : {}),
     }, storage));
-    out.operations.push(instanceCopy(ctx, storage.id, buffer, c.maxInstances));
+    if (!adopted) {
+        out.operations.push(instanceCopy(ctx, storage, buffer, c.maxInstances));
+        out.sources[xid(id, 'copy')] = [instances.path];
+    }
     out.operations.push(operation(id, 'draw', 'frame', 'draw', 'pass.drawBatch', { indexed: true, indexCount: g.indexCount, indexFormat: g.indexFormat, instances: buffer.elements },
-        [read(storage.id), read(g.vertices), read(g.indices), read(m.uniform), ...(l ? [read(l.buffer)] : []), read(xid(HOST, 'camera')),
+        [read(storage), read(g.vertices), read(g.indices), read(m.uniform), ...(l ? [read(l.buffer)] : []), read(xid(HOST, 'camera')),
             write(ctx.frame.color, 'unknown'), write(ctx.frame.depth, 'unknown')],
         { vertices: g.indexCount, instances: buffer.elements }));
     out.operations.push(operation(id, 'clear', 'dispose', 'destroy', 'engine.clearBatch', {}, []));
-    out.sources[storage.id] = [`${ctx.path}/config/maxInstances`];
-    out.sources[xid(id, 'copy')] = [instances.path];
     return out;
 }
 
@@ -433,33 +461,43 @@ function customBatch(ctx: Context): Contribution | Refusal {
     const stride = buffer ? buffer.strideFloats : 4;
     const g = geometry ? (geometry.from as Produced & { kind: 'geometry' }) : null;
     const l = lights ? (lights.from as Produced & { kind: 'lights' }) : null;
-    const storage = resource(id, 'storage', {
-        kind: 'buffer', owner: 'engine', bytes: product(c.maxInstances, stride, 4), usage: ['storage', 'copy_dst', 'copy_src'],
-        layout: buffer ? buffer.layout : 'f32', strideFloats: stride, elements: c.maxInstances, content: 'zero', releasedBy: xid(id, 'clear'),
-    });
+    const adopted = adoptedBy(ctx, instances);
     const drawn = buffer ? buffer.elements : c.maxInstances;
     const out = empty();
-    out.resources.push(storage);
+    let storage: string;
+    if (adopted) {
+        storage = adopted.resource;
+        out.sources[storage] = [`${ctx.path}/config/maxInstances`, instances.path];
+    } else {
+        const own = resource(id, 'storage', {
+            kind: 'buffer', owner: 'engine', bytes: product(c.maxInstances, stride, 4), usage: ['storage', 'copy_dst', 'copy_src'],
+            layout: buffer ? buffer.layout : 'f32', strideFloats: stride, elements: c.maxInstances, content: 'zero', releasedBy: xid(id, 'clear'),
+        });
+        out.resources.push(own);
+        storage = own.id;
+        out.sources[storage] = [`${ctx.path}/config/maxInstances`];
+    }
     out.objects.push(object(id, 'batch', 'batch', xid(id, 'clear')));
     out.operations.push(batchCreate(ctx, {
         strideFloats: stride, maxInstances: c.maxInstances,
         shader: { kind: 'module', module: c.module, vertexEntry: c.vertexEntry, fragmentEntry: c.fragmentEntry, engineEntries: ['vs_main', 'fs_main'], lights: l !== null },
         vertexLayout: g ? 'StandardLayout' : null, target: ctx.frame.colorFormat, depth: { write: true, compare: 'less' },
-        geometry: geometry?.nodeId ?? null, lights: lights?.nodeId ?? null,
+        geometry: geometry?.nodeId ?? null, lights: lights?.nodeId ?? null, ...(adopted ? { adopts: storage } : {}),
     }, storage));
-    if (buffer) out.operations.push(instanceCopy(ctx, storage.id, buffer, c.maxInstances));
+    if (buffer && !adopted) {
+        out.operations.push(instanceCopy(ctx, storage, buffer, c.maxInstances));
+        out.sources[xid(id, 'copy')] = [instances.path];
+    }
     // No geometry: RenderPipeline's draw(3, instances) path, a vertex stage that makes its own positions.
     const vertices = g ? g.indexCount : 3;
     out.operations.push(operation(id, 'draw', 'frame', 'draw', 'pass.drawBatch',
         g ? { indexed: true, indexCount: g.indexCount, indexFormat: g.indexFormat, instances: drawn } : { indexed: false, vertexCount: 3, instances: drawn },
-        [read(storage.id), ...(g ? [read(g.vertices), read(g.indices)] : []), ...(l ? [read(l.buffer)] : []), read(xid(HOST, 'camera')),
+        [read(storage), ...(g ? [read(g.vertices), read(g.indices)] : []), ...(l ? [read(l.buffer)] : []), read(xid(HOST, 'camera')),
             write(ctx.frame.color, 'unknown'), write(ctx.frame.depth, 'unknown')],
         { vertices, instances: drawn }));
     out.operations.push(operation(id, 'clear', 'dispose', 'destroy', 'engine.clearBatch', {}, []));
     out.modules.push({ module: c.module, stage: 'vertex', entry: c.vertexEntry, node: id, operation: xid(id, 'draw'), path: `${ctx.path}/config/vertexEntry` });
     out.modules.push({ module: c.module, stage: 'fragment', entry: c.fragmentEntry, node: id, operation: xid(id, 'draw'), path: `${ctx.path}/config/fragmentEntry` });
-    out.sources[storage.id] = [`${ctx.path}/config/maxInstances`];
-    if (buffer) out.sources[xid(id, 'copy')] = [instances.path];
     return out;
 }
 
@@ -478,7 +516,7 @@ function fullscreen(ctx: Context): Contribution {
         strideFloats: 4, maxInstances: 1,
         shader: { kind: 'fullscreen', module: c.module, fragmentEntry: c.fragmentEntry, engineEntries: ['vs_main', 'fs_main'], vertex: 'host' },
         vertexLayout: null, target: ctx.frame.colorFormat, depth: { write: false, compare: 'always' }, reads: reads.map(w => w.nodeId),
-    }, storage));
+    }, storage.id));
     // A backdrop: drawn before the pass's other draws, since it compares depth `always` and would cover them after.
     out.operations.push(operation(id, 'draw', 'frame', 'backdrop', 'pass.drawBatch', { indexed: false, vertexCount: 3, instances: 1 },
         [read(storage.id), read(xid(HOST, 'camera')), ...reads.map(w => readBuffer(w.from as Produced & { kind: 'storage_buffer' })), write(ctx.frame.color, 'unknown')],
@@ -551,8 +589,6 @@ function postChain(ctx: Context): Contribution {
     const id = ctx.node.id;
     const { width, height } = ctx.policy.viewport;
     const destroy = xid(id, 'destroy');
-    const clearBatches = xid(id, 'clearBatches');
-    const forgetPasses = xid(HOST, 'forgetPasses');
     const out = empty();
     const target = (local: string, w: number, h: number, format: string, allocations = 1) => resource(id, local, {
         kind: 'texture', owner: 'extra', bytes: product(w, h, TEXEL_BYTES[format]), allocations, usage: ['render_attachment', 'texture_binding'],
@@ -577,18 +613,15 @@ function postChain(ctx: Context): Contribution {
     const arenaBytes = product(c.effects.length, PARAM_SLICE_BYTES);
     const params = resource(id, 'params', { kind: 'buffer', owner: 'extra', bytes: arenaBytes, usage: ['uniform', 'copy_dst'], content: 'upload', releasedBy: destroy });
     // PostChain registers a pass and a batch with the engine for each pass it compiles, and one more of each for its debug
-    // view; its destroy() releases its pool and arena and none of those (the EA3.2 review's finding, read in post.js). The
-    // host clears each compiled pass's batch through getPassSequence() before destroy() empties it; the debug view's batch
-    // is reachable through nothing public, so its storage stays with the engine until engine.destroy(), disclosed. The
-    // passes the engine lists go with the host's clearPasses().
+    // view. Since 1.2.1 its destroy() releases them all (releaseEngineNodes: each batch through clearBatch, each pass
+    // through removePass, the debug view's included) with its pool and arena; 1.2.0 kept them (the EA3.2 review's finding).
     const passes = c.effects.reduce((n, e) => n + effectPasses(e.effect, width, height), 0);
-    const debugHeld = { by: 'the engine\'s batch manager (the post debug view\'s batch)', until: UNTIL_ENGINE_DESTROY };
     const batch = { kind: 'buffer' as const, owner: 'engine' as const, bytes: POST_BATCH_BYTES, usage: ['storage', 'copy_dst', 'copy_src'], layout: 'f32' as const, strideFloats: 8, elements: 1, content: 'zero' as const };
-    const batches = resource(id, 'batchStorage', { ...batch, allocations: passes, releasedBy: clearBatches });
-    const debug = resource(id, 'debugStorage', { ...batch, retained: debugHeld });
+    const batches = resource(id, 'batchStorage', { ...batch, allocations: passes, releasedBy: destroy });
+    const debug = resource(id, 'debugStorage', { ...batch, releasedBy: destroy });
     out.resources.push(params, batches, debug);
-    out.objects.push(object(id, 'chain', 'postChain', destroy), object(id, 'postPasses', 'postPasses', forgetPasses, null, passes),
-        object(id, 'postBatches', 'postBatches', clearBatches, null, passes), object(id, 'debugView', 'postDebugView', forgetPasses, debugHeld));
+    out.objects.push(object(id, 'chain', 'postChain', destroy), object(id, 'postPasses', 'postPasses', destroy, null, passes),
+        object(id, 'postBatches', 'postBatches', destroy, null, passes), object(id, 'debugView', 'postDebugView', destroy));
     out.operations.push(operation(id, 'create', 'init', 'create', 'post.PostChain',
         { format: 'rgba16float', gbuffer: { depth: 'depth24plus' }, outputToScreen: true, effects: c.effects.map(e => ({ effect: e.effect, intensity: e.intensity })), passes },
         out.resources.map(r => write(r.id))));
@@ -598,8 +631,7 @@ function postChain(ctx: Context): Contribution {
         [read(xid(id, 'sceneColor')), read(xid(id, 'sceneDepth')), read(params.id), ...internal.map(r => ({ resource: r, mode: 'readwrite' as const, version: null, coverage: 'whole' as const })),
             write(xid(HOST, 'screen'))]));
     out.operations.push(operation(id, 'resize', 'resize', 'resize', 'post.resize', {}, pool.map(r => write(r)), {}, [xid(HOST, 'resize')]));
-    out.operations.push(operation(id, 'clearBatches', 'dispose', 'destroy', 'post.clearBatches', { passes }, []));
-    out.operations.push(operation(id, 'destroy', 'dispose', 'destroy', 'post.destroy', {}, [], {}, [clearBatches]));
+    out.operations.push(operation(id, 'destroy', 'dispose', 'destroy', 'post.destroy', { passes }, []));
     out.outputs.color = { kind: 'color', resource: xid(HOST, 'screen') };
     out.sources[params.id] = [`${ctx.path}/config/effects`];
     out.sources[batches.id] = [`${ctx.path}/config/effects`];
@@ -652,12 +684,11 @@ export function hostPart(frame: Frame, policy: StaticPolicy, stockMaterials: boo
             [write(sim.id)], { bytes: SIM_BYTES }));
         out.operations.push(operation(HOST, 'destroySim', 'dispose', 'destroy', 'buffer.destroy', {}, []));
     }
-    // The engine lists every pass it makes (createPass), and clearPasses() is the one call that forgets them, all of them
-    // at once. That is safe only while every world renders an explicit sequence, which never reads the list; h1 does the
-    // same in SceneRuntime.destroy. A partial init runs it too.
-    out.operations.push(operation(HOST, 'forgetPasses', 'dispose', 'destroy', 'engine.clearPasses',
-        { precondition: 'every world on the engine renders an explicit sequence; render() without one would then draw nothing' }, []));
-    out.objects.push(object(HOST, 'mainPass', 'pass', xid(HOST, 'forgetPasses')));
+    // The engine lists every pass it makes (createPass); 1.2.1's removePass forgets this world's main pass alone, after
+    // its batches are cleared (they are each node's own dispose, which runs before the host's), so no other world's pass
+    // is touched (1.2.0 had only clearPasses, which forgets every pass). A partial init runs it too.
+    out.operations.push(operation(HOST, 'removePass', 'dispose', 'destroy', 'engine.removePass', { pass: xid(HOST, 'pass') }, []));
+    out.objects.push(object(HOST, 'mainPass', 'pass', xid(HOST, 'removePass')));
     return out;
 }
 

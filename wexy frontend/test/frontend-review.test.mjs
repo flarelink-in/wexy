@@ -96,3 +96,86 @@ test('UI4 closing export while measuring discards late results without rebuildin
     assert.equal(resumes, 1);
     assert.equal(dialog.calibrating, false);
 });
+
+test('UI5 EA5.0: the stage runs any WorldRuntime by its own dt; a swap that throws before it switches leaves the Head as it was', () => {
+    globalThis.requestAnimationFrame = () => 1;
+    const vp = viewport();
+    const drawn = [];
+    Object.assign(vp, {
+        ladder: [], accumulator: 0, exporting: false, intervals: [], settleUntil: 0, frameAspect: null, mode: 'orbit', playing: false, simPaused: false,
+        fov: 45, orbit: { target: [0, 0, 0], distance: 10, azimuthAngle: 0, polarAngle: 1 }, canvas: { width: 64, height: 36 },
+        engine: { render: sequence => drawn.push(sequence) },
+    });
+    // A world with no spec at all, only the interface: stepped by its own dt, 1/120.
+    const steps = [];
+    const world = {
+        dt: 1 / 120, simTime: 0, qualityFloor: null, quality: 1,
+        step() { steps.push(this.simTime); this.simTime += this.dt; }, view() {}, draw: () => ['frame'], resize() {}, destroy() {},
+    };
+    vp.setRuntime(world);
+    assert.equal(vp.runtime, world);
+    vp.sizeDirty = false;
+    vp.frame(1000);
+    vp.frame(1030);
+    assert.equal(steps.length, 5, 'the first frame (1/60 s) two 1/120 steps, the next (30 ms) three, by its own dt');
+    assert.deepEqual(drawn, [['frame'], ['frame']]);
+
+    // A world whose quality dial throws: the swap stops before it switches, and nothing of the stage changes.
+    const head = { ladder: vp.ladder, rung: vp.rung, stats: { ...vp.stats } };
+    vp.accumulator = 0.004;
+    const refusing = { ...world, qualityFloor: 0.4, get quality() { return 1; }, set quality(q) { throw new Error(`no dial at ${q}`); } };
+    assert.throws(() => vp.setRuntime(refusing), /no dial at 1/);
+    assert.deepEqual([vp.runtime, vp.ladder, vp.rung, vp.stats, vp.accumulator], [world, head.ladder, head.rung, head.stats, 0.004]);
+    // One with a dial: set before the switch, from the ladder its floor makes.
+    const dialled = { ...world, qualityFloor: 0.4, quality: 0 };
+    vp.setRuntime(dialled);
+    assert.deepEqual([vp.runtime, dialled.quality, vp.stats.quality, vp.accumulator], [dialled, 1, 1, 0]);
+});
+
+test('UI6 the EA5 review (H1): two worlds on one engine; the old one destroyed, the new one keeps its passes, batches and stage, and draws', async () => {
+    const { NullGraph } = await import('null-graph');
+    const { SceneRuntime } = await import('../src/runtime/scene-runtime.ts');
+    const engine = new NullGraph();
+    // CPU only, as EA-X13: no init and no device; the managers stubbed, the engine's own bookkeeping under test.
+    const freed = [];
+    engine.batchManager = {
+        createComputeStage: config => ({ name: config.name }),
+        createBatch: (pass, config) => ({ label: config.label, storageBuffer: { label: config.label } }),
+        clearBatch: (pass, batch) => { freed.push(batch.label); },
+    };
+    const rendered = [];
+    engine.renderPipeline = { render: sequence => { rendered.push(sequence); } };
+    // A world as SceneRuntime holds one: its pass, its batch, its stage, a post chain of one pass and one batch (whose
+    // destroy releases both, as null-graph 1.2.1's does), and its two buffers.
+    const world = name => {
+        const pass = engine.createPass({ name: `${name}/scene`, isMainScreenPass: false });
+        const particles = engine.createBatch(pass, { label: `${name}/particles` });
+        const chainPass = engine.createPass({ name: `${name}/post`, isMainScreenPass: false });
+        const chainBatch = engine.createBatch(chainPass, { label: `${name}/post` });
+        const evolve = engine.createComputeStage({ name: `${name}/evolve`, shaderCode: '', dispatchCount: [1, 1, 1] });
+        const destroyed = [];
+        const rt = Object.assign(Object.create(SceneRuntime.prototype), {
+            engine, pass, batches: [particles], evolve, evolveSequence: [evolve], drawSequence: [pass, chainPass], destroyed: false, paramsDirty: false,
+            post: { chain: { upload() {}, destroy() { engine.clearBatch(chainPass, chainBatch); engine.removePass(chainPass); } } },
+            simBuffer: { destroy: () => destroyed.push('sim') }, paramsBuffer: { destroy: () => destroyed.push('params') },
+        });
+        return { rt, pass, chainPass, particles, chainBatch, evolve, destroyed };
+    };
+    const old = world('h1');
+    const installed = world('agent');
+    // The studio installs the new world, then destroys the old one (main.ts): the old one's own goes, and nothing else.
+    old.rt.destroy();
+    assert.deepEqual(engine.passes, [installed.pass, installed.chainPass], 'only the old world\'s passes are forgotten');
+    assert.deepEqual(engine.batches, [installed.particles, installed.chainBatch], 'only its batches');
+    assert.deepEqual(engine.computeStages, [installed.evolve], 'and its stage, which is removed now');
+    assert.deepEqual(freed.sort(), ['h1/particles', 'h1/post']);
+    assert.deepEqual([old.destroyed, installed.destroyed], [['sim', 'params'], []]);
+    // The installed world still draws, by its own sequence and by the engine's list.
+    engine.render(installed.rt.draw());
+    engine.render();
+    assert.deepEqual(rendered, [[installed.pass, installed.chainPass], [installed.pass, installed.chainPass]]);
+    // A second destroy does nothing; once the installed world goes too, the engine holds nothing of either.
+    old.rt.destroy();
+    installed.rt.destroy();
+    assert.deepEqual([engine.passes, engine.batches, engine.computeStages], [[], [], []]);
+});

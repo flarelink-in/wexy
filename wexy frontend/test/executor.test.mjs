@@ -288,7 +288,7 @@ test('EA-E4 a turn superseded, or the device lost, during a step: the late step 
         assert.equal(out.why, why);
         assert.deepEqual(out.ran, x.schedule.init.slice(0, k));
         assert.deepEqual(out.released, cleanupFor(x, new Set(x.schedule.init.slice(0, k).filter(id => creates(x).includes(id)))));
-        assert.ok(out.released.includes('look#destroy') && out.released.includes('look#clearBatches'), 'the chain made in the late step is released');
+        assert.ok(out.released.includes('look#destroy'), 'the chain made in the late step is released: its destroy frees its batches and passes too (1.2.1)');
         assert.deepEqual([exec.calls.commit, exec.state.head], [0, 'old']);
     }
 });

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Wexy EA-G1</title>
+    <style>
+        body { margin: 0; background: #0b0b0c; color: #c8c8c8; font: 12px/1.5 ui-monospace, monospace; }
+        /* A little over every envelope the stage computes at the viewport's live cap (2.3 MP, whatever the aspect), so the
+           pixels a run covers are pixels it rendered; the runner's --small asks for 1280×720, which covers that alone. */
+        canvas { display: block; width: 2048px; height: 1152px; }
+        body.small canvas { width: 1280px; height: 720px; }
+        pre { position: fixed; top: 0; left: 0; margin: 8px; max-height: 45vh; max-width: 90vw; overflow: auto; background: #0b0b0ccc; }
+    </style>
+</head>
+<body>
+    <canvas id="gpu-canvas"></canvas>
+    <pre id="log">EA-G1: waiting for the runner (dev/ea-g1.mjs).</pre>
+    <script type="module" src="./ea-g1.ts"></script>
+</body>
+</html>

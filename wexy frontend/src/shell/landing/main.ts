@@ -12,10 +12,9 @@ import { kerrBlackHole } from '../../forge-client/archetypes/kerr-black-hole';
 import { cameraPath, firstView } from '../../runtime/camera-path';
 import { SceneRuntime } from '../../runtime/scene-runtime';
 import { Viewport } from '../../runtime/viewport';
-import { icon, logo, wordmark, type IconName } from '../../shared/icons';
+import { icon, logo, type IconName } from '../../shared/icons';
 import type { SceneSpec } from '../../contract/spec';
 
-for (const el of document.querySelectorAll<HTMLElement>('[data-logo]')) el.innerHTML = wordmark(Number(el.dataset.logo) || 24);
 for (const el of document.querySelectorAll<HTMLElement>('[data-mark]')) el.outerHTML = logo(Number(el.dataset.mark) || 26).replace('class="logo"', `class="logo ${el.className}"`);
 for (const el of document.querySelectorAll<HTMLElement>('[data-icon]')) el.outerHTML = icon(el.dataset.icon as IconName, 15);
 

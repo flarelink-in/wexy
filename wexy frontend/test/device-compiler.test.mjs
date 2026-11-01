@@ -98,7 +98,8 @@ const msg = (type, lineNum, message) => ({ type, lineNum, linePos: 1, offset: 0,
  * source, the call order logged with the stack's depth, and a loss the test triggers.
  */
 function fakeDevice(script = {}) {
-    const { info = () => [], invalid = () => null, createThrows = null, infoRejects = null, popRejects = null, during = async () => {} } = script;
+    const { info = () => [], invalid = () => null, createThrows = null, infoRejects = null, infoThrowsNow = null, popRejects = null, pushThrows = null,
+        during = async () => {} } = script;
     const stack = [];
     const uncaptured = [];
     const log = [];
@@ -106,7 +107,11 @@ function fakeDevice(script = {}) {
     const lost = new Promise(resolve => { lose = resolve; });
     const device = {
         lost,
-        pushErrorScope(filter) { log.push(`push ${filter}`); stack.push({ filter, errors: [] }); },
+        pushErrorScope(filter) {
+            log.push(`push ${filter}`);
+            if (pushThrows) throw new Error(pushThrows);
+            stack.push({ filter, errors: [] });
+        },
         popErrorScope() {
             log.push('pop');
             const scope = stack.pop();
@@ -123,6 +128,8 @@ function fakeDevice(script = {}) {
                 if (scope) scope.errors.push({ message: error });
                 else uncaptured.push(error);
             }
+            // An implementation may throw from the call itself, before any promise exists (the EA5.1 review).
+            if (infoThrowsNow) return { getCompilationInfo() { log.push(`info at depth ${stack.length}`); throw new TypeError(infoThrowsNow); } };
             return {
                 async getCompilationInfo() {
                     log.push(`info at depth ${stack.length}`);
@@ -135,6 +142,9 @@ function fakeDevice(script = {}) {
     };
     return { device, stack, uncaptured, log, lose: (message = 'the GPU process went away') => lose({ reason: 'unknown', message }) };
 }
+
+/** A verdict's fields, without whose it is: what a compile's `verdict()` takes. */
+const fieldsOf = ({ producedBy, ...fields }) => fields;
 
 /** Each sealed body compiled through compileBody with `compiler`, in the snapshot's order. */
 async function compileAll(snap, compiler, bodies = {}) {
@@ -201,6 +211,17 @@ test('EA-D4 L3 on the device: every message placed, never a pass when the module
     assert.deepEqual([noInfo.verdict.ok, noInfo.verdict.unplaced.map(f => f.message)], [false, ['L3 could not judge this module on this device: its compilation info failed: the info went missing']]);
     const noScope = await run({ popRejects: 'the scope went missing' });
     assert.deepEqual([noScope.verdict.ok, noScope.verdict.unplaced.map(f => f.message)], [false, ['L3 could not judge this module on this device: its validation scope failed: the scope went missing']]);
+    // The EA5.1 review: a scope that cannot be opened (the module is then not made at all, so nothing escapes), and an
+    // info call that throws before any promise exists (after the scope was popped). Both are findings, never a rejection.
+    const unopened = await run({ pushThrows: 'no scopes left' });
+    assert.deepEqual([unopened.verdict.ok, unopened.verdict.unplaced.map(f => f.message), unopened.d.log, unopened.d.stack.length],
+        [false, ['L3 could not judge this module on this device: its validation scope could not be opened: no scopes left'], ['push validation'], 0]);
+    const infoNow = await run({ infoThrowsNow: 'info is not a function here' });
+    assert.deepEqual([infoNow.verdict.ok, infoNow.verdict.unplaced.map(f => f.message), infoNow.d.log.slice(1), infoNow.d.stack.length],
+        [false, ['L3 could not judge this module on this device: its compilation info failed: info is not a function here'], [`create ${label} at depth 1`, 'pop', 'info at depth 0'], 0]);
+    // And a host whose own generation callback throws: still a finding, still no rejection.
+    const hostless = createDeviceCompiler(fakeDevice().device, { generation: () => { throw new Error('no generation'); } });
+    assert.deepEqual((await hostless.compile('x', 'x')).map(m => m.message), ['L3 could not judge this module on this device: the compiler failed: no generation']);
 
     // The device lost before the compile: nothing is made. Lost while it compiles: what it said is void.
     const gone = fakeDevice();
@@ -266,16 +287,23 @@ test('EA-D8 only this device\'s own verdicts, on exactly the sealed bodies, in i
         assert.deepEqual([r.ok, constructions], [false, 1], label);
         assert.match(r.reason, says, label);
     }
-    // The provenance check itself, below the seam's own: a verdict registered for another module's source (attest called
-    // by hand, as compileBody never would), a relabelled one, a missing or an extra one.
+    // The provenance check itself, below the seam's own. There is no call that registers a verdict made elsewhere (the EA5.1
+    // review's two reproductions): a copy handed along with a fresh compile of the very same source stays unregistered,
+    // since that compile makes its own object, once; and a verdict claiming another module than the source its compile
+    // judged is refused for the module it claims.
+    const NOT_MINE_TEXT = 'the compile verdict for motion is not one this device\'s compiler made: a copy, a fake\'s or another device\'s proves nothing';
+    assert.equal(compiler.attest, undefined, 'no public registration of a verdict');
+    const motionSource = assembleModule(snap.interfaces.find(i => i.module === 'motion'), snap.bodies[0].body).source;
     const skySource = assembleModule(snap.interfaces.find(i => i.module === 'sky'), snap.bodies[1].body).source;
-    const misbound = Object.freeze({ ...verdicts[0] });
-    await compiler.attest(misbound, skySource);
-    assert.equal(compiler.provenance(snap, [misbound, verdicts[1], verdicts[2]]), 'the compile verdict for motion judged another module than this candidate\'s');
-    const stranger = Object.freeze({ ...verdicts[0] });
-    await compiler.attest(stranger, `${assembleModule(snap.interfaces[0], snap.bodies[0].body).source}\n// a source this device never compiled`);
-    assert.equal(compiler.provenance(snap, [stranger, verdicts[1], verdicts[2]]),
-        'the compile verdict for motion is not one this device\'s compiler made: a copy, a fake\'s or another device\'s proves nothing');
+    const copy = Object.freeze(structuredClone(verdicts[0]));
+    const again = await compiler.compileBound(motionSource, 'motion#again');
+    const minted = again.verdict(fieldsOf(verdicts[0]));
+    assert.notEqual(minted, copy);
+    assert.equal(compiler.provenance(snap, [copy, verdicts[1], verdicts[2]]), NOT_MINE_TEXT, 'the copy stays unregistered');
+    assert.equal(compiler.provenance(snap, [minted, verdicts[1], verdicts[2]]), null, 'what a real compile makes is the device\'s own');
+    assert.throws(() => again.verdict(fieldsOf(verdicts[0])), /made its verdict already/, 'one verdict a compile');
+    const claiming = (await compiler.compileBound(skySource, 'sky#claims-motion')).verdict(fieldsOf(verdicts[0]));
+    assert.equal(compiler.provenance(snap, [claiming, verdicts[1], verdicts[2]]), 'the compile verdict for motion judged another module than this candidate\'s');
     const otherBody = await compileAll(snap, compiler, { motion: OTHER_MOTION });
     assert.equal(compiler.provenance(snap, [otherBody[0], verdicts[1], verdicts[2]]), 'the compile verdict for motion judged another module than this candidate\'s');
     assert.equal(compiler.provenance(snap, [Object.freeze({ ...otherBody[0], codeHash: snap.bodies[0].codeHash }), verdicts[1], verdicts[2]]),
@@ -284,18 +312,18 @@ test('EA-D8 only this device\'s own verdicts, on exactly the sealed bodies, in i
     assert.equal(compiler.provenance(snap, [verdicts[0], ...verdicts]), 'module motion has 2 compile verdicts');
     const ghost = Object.freeze({ ...verdicts[0], module: 'ghost' });
     assert.equal(compiler.provenance(snap, [...verdicts, ghost]), 'module ghost is not one of this candidate\'s');
-    // A body the device refuses: its verdict is the device's own, and still never admits. One that says otherwise about
-    // that very module source is not registered, even handed to the compiler's own attest.
+    // A body the device refuses: its verdict is the device's own, and still never admits. Fields that say otherwise about
+    // that very compile make a verdict that is never registered.
     const failing = createDeviceCompiler(fakeDevice({ info: c => (c.includes('* 0.1;') ? [msg('error', 1, 'host slip')] : []) }).device);
     const refused = await compileAll(snap, failing);
     assert.deepEqual(refused.map(v => v.ok), [false, true, true]);
     assert.equal(failing.provenance(snap, refused), 'motion does not compile on this device');
-    const forged = Object.freeze({ ...refused[0], ok: true, host: [] });
-    await failing.attest(forged, assembleModule(snap.interfaces.find(i => i.module === 'motion'), snap.bodies[0].body).source);
-    assert.equal(failing.provenance(snap, [forged, refused[1], refused[2]]),
-        'the compile verdict for motion is not one this device\'s compiler made: a copy, a fake\'s or another device\'s proves nothing');
+    const forged = (await failing.compileBound(motionSource, 'motion#forged')).verdict({ ...fieldsOf(refused[0]), ok: true, host: [] });
+    assert.equal(failing.provenance(snap, [forged, refused[1], refused[2]]), NOT_MINE_TEXT);
 
-    // The device's generation moves (a loss, a replacement): every verdict from before proves nothing.
+    // The device's generation moves (a loss, a replacement): every verdict from before proves nothing, and stays so
+    // whatever is compiled since (the review's second reproduction); a compile from before makes an unregistered verdict.
+    const pending = await compiler.compileBound(motionSource, 'motion#pending');
     generation = 1;
     const stale = await admit(verdicts);
     assert.deepEqual([stale.ok, constructions], [false, 1]);
@@ -303,6 +331,9 @@ test('EA-D8 only this device\'s own verdicts, on exactly the sealed bodies, in i
     const fresh = await compileAll(snap, compiler);
     assert.equal((await admit(fresh)).ok, true, 'compiled again in generation 1, it admits');
     assert.equal(constructions, 2);
+    assert.equal(compiler.provenance(snap, verdicts), 'the compile verdict for motion is from device generation 0, and the device is at 1: compile it again',
+        'the old objects stay in their generation, however often their source is compiled since');
+    assert.equal(compiler.provenance(snap, [pending.verdict(fieldsOf(verdicts[0])), fresh[1], fresh[2]]), NOT_MINE_TEXT, 'a compile from before the move');
 
     // A lost device voids every verdict it made, and compiles nothing more.
     a.lose('the GPU was reset');

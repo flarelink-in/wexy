@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { checkAnswer, declaresMember, moduleNames, nameCount, parseAction, readReport, REPORT_BEGIN, REPORT_END } from '../dev/paper-lib.mjs';
 import { inspectSymbol } from '../src/contract/engine/index.ts';
 
-/** A small plan that names only what null-graph 1.2.0 exports. */
+/** A small plan that names only what null-graph 1.2.1 exports. */
 const plan = () => ({
     kind: 'propose_design_and_program', context: null, modules: null, revision: null, question: null, finish: null,
     design: {
@@ -42,7 +42,7 @@ test('EA-P2 an invented name, a name in the wrong family, a bare name and a miss
     p.design.techniques[0].symbols.push('materials:Materials', 'core:PostChain', 'LambertMaterial', 'shapes:Cube');
     p.program.objects.push({ id: 'mesh', symbol: 'core:NullGraph', member: 'createMeshBatch', purpose: 'x', config: '{}', inputs: [] });
     const messages = checkAnswer(p).map(f => f.message).join(' | ');
-    assert.match(messages, /materials:Materials is not an export of null-graph 1\.2\.0/);
+    assert.match(messages, /materials:Materials is not an export of null-graph 1\.2\.1/);
     assert.match(messages, /core:PostChain is not an export .*\(PostChain is in post, not core\)/);
     assert.match(messages, /LambertMaterial is not an export .*\(write it as materials:LambertMaterial\)/);
     assert.match(messages, /shapes:Cube is not an export .*\(null-graph has no family shapes\)/);

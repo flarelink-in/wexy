@@ -2,6 +2,10 @@
 node_modules/
 dist/
 dist-dev/
+hosting-dev/
+hosting-prod/
+functions/hosting/
+.firebase/
 *.tsbuildinfo
 
 # Logs and local run output (screenshots, films, reports)

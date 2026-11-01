@@ -13,6 +13,7 @@ import { eyeOf, firstView, type CameraView } from './camera-path';
 import { buildPostChain, type PostHandles } from './post';
 import { clampParticleCount, PARTICLE_STRIDE, seedParticles } from './spawn';
 import { bindingUse, hookHeader, paramsBytes, SIM_BYTES, stripComments } from '../contract/wgsl';
+import type { WorldRuntime } from './world';
 
 type SequenceNode = ComputeStageNode | RenderPassNode;
 
@@ -65,7 +66,7 @@ const PREMULTIPLIED: GPUBlendState = {
     alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
 };
 
-export class SceneRuntime {
+export class SceneRuntime implements WorldRuntime {
     readonly spec: SceneSpec;
     readonly count: number;
     readonly post: PostHandles;
@@ -80,6 +81,8 @@ export class SceneRuntime {
     private readonly pass: RenderPassNode;
     private readonly batches: RenderBatch[] = [];
     private readonly particles: RenderBatch;
+    /** The world's one compute stage: removed from the engine with the world. */
+    private readonly evolve: ComputeStageNode;
     private readonly evolveSequence: SequenceNode[];
     private readonly simBuffer: GPUBuffer;
     private readonly paramsBuffer: GPUBuffer;
@@ -208,6 +211,7 @@ export class SceneRuntime {
         if (use.sim) entries.push({ binding: 1, resource: { buffer: this.simBuffer } });
         if (use.params) entries.push({ binding: 2, resource: { buffer: this.paramsBuffer } });
         engine.setComputePassBindGroup(evolve, entries);
+        this.evolve = evolve;
         this.evolveSequence = [evolve];
 
         this.camera = new Camera(firstView(spec.camera.keyframes).fov, this.aspect, 0.1, 200);
@@ -221,6 +225,19 @@ export class SceneRuntime {
     /** The particles' storage buffer: count × 32 bytes, (pos, phase, b) per particle. Read by the sanity rung. */
     get particleBuffer(): GPUBuffer {
         return this.particles.storageBuffer;
+    }
+
+    /**
+     * What this world holds on the device, for the stage's ledger beside an agent world's Run (EA5.3, I7): its particles,
+     * its uniforms, and its post chain's targets as null-graph's pool reports them. From the sizes, not a VRAM measurement.
+     */
+    get deviceBytes(): number {
+        return this.count * PARTICLE_STRIDE * 4 + this.paramsBuffer.size + this.simBuffer.size + this.post.chain.memoryReport().bytes;
+    }
+
+    /** The spec's fixed step (WorldRuntime): snapped to 1/60/k by rung L0, so a film holds whole steps. */
+    get dt(): number {
+        return this.spec.particles.dt;
     }
 
     /** The lowest preview quality the hook allows, or null when it has no quality knob. */
@@ -330,16 +347,19 @@ export class SceneRuntime {
     }
 
     /**
-     * Free the GPU memory explicitly. engine.clearPasses() only forgets the passes; clearBatch()
-     * is what destroys a batch's storage buffer, and a studio rebuilds scenes on every prompt.
+     * Free what this world made, and only that: a studio rebuilds worlds on every prompt, and since EA5 the world just
+     * installed (an agent world among them) shares the engine while this one goes (the EA5 review's H1). clearBatch()
+     * frees each batch's storage and drops it from the engine's list; the post chain's destroy() releases its own batches
+     * and passes (null-graph 1.2.1); this world's pass and evolve stage are removed by name. clearPasses() and
+     * clearBatches() would forget every world's, and the stage was never removed before 1.2.1.
      */
     destroy(): void {
         if (this.destroyed) return;
         this.destroyed = true;
         for (const batch of this.batches) this.engine.clearBatch(this.pass, batch);
         this.post.chain.destroy();
-        this.engine.clearPasses();
-        this.engine.clearBatches();
+        this.engine.removePass(this.pass);
+        this.engine.removeComputeStage(this.evolve);
         this.simBuffer.destroy();
         this.paramsBuffer.destroy();
     }

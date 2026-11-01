@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 
 // Two pages for now: the home page and the studio; `world.html` (share links) arrives with FE6. All
-// static, so the build is served by Firebase Hosting with no server runtime (`firebase.json`). The
+// static client pages. prepare-hosting.mjs pairs the public landing template with a metadata Function; the
 // dev pages under dev/ (film gates, smoke test) are served by the dev server only and never built.
 export default defineConfig({
     build: {

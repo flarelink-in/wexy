@@ -137,7 +137,7 @@ class PaperProbeTest {
             // One system message for every request, byte for byte, so the prompt cache can serve it.
             system = system == null ? prompt.system() : system;
             assertThat(prompt.system()).isEqualTo(system);
-            assertThat(prompt.system()).contains(bundle.familyIndex().strip()).contains("null-graph 1.2.0").contains(bundle.bundleHash())
+            assertThat(prompt.system()).contains(bundle.familyIndex().strip()).contains("null-graph 1.2.1").contains(bundle.bundleHash())
                     .contains("<document id=\"agent/guide\" sha256=\"" + bundle.doc("agent/guide").sha256() + "\"")
                     .contains("<document id=\"api/materials\"").doesNotContain("{{").doesNotContain("<!-- wexy prompt");
             assertThat(prompt.user()).endsWith("\"" + request.text() + "\"");
@@ -156,7 +156,7 @@ class PaperProbeTest {
         PaperReport report = probe("real-looking-key").run();
 
         assertThat(report.exitCode()).isZero();
-        assertThat(report.bundle().engineVersion()).isEqualTo("1.2.0");
+        assertThat(report.bundle().engineVersion()).isEqualTo("1.2.1");
         assertThat(report.template()).isEqualTo("paper.v1, paper-requests.v1, Wexy agent action, paper test v1");
         assertThat(report.answers()).hasSize(3).allSatisfy(a -> {
             assertThat(a.kind()).isEqualTo("propose_design_and_program");

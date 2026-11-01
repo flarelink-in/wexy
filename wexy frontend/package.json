@@ -11,8 +11,8 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "build:dev": "tsc --noEmit && vite build --outDir dist-dev",
+    "build": "tsc --noEmit && vite build && node scripts/prepare-hosting.mjs prod",
+    "build:dev": "tsc --noEmit && vite build --outDir dist-dev && node scripts/prepare-hosting.mjs dev",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "node --import ./test/register.mjs --test \"test/**/*.test.mjs\"",

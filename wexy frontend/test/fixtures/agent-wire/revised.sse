@@ -1,5 +1,5 @@
 event:meta
-data:{"turnId":"turn-1","model":"muse-spark-1.3","source":"live","promptVersion":"agent.v4","bundleHash":"4d372b7a7b6116005602e70b7d26a2f434efd557712947d67ff4043a56bb4725","actionSchema":"agent-action.v2","manifestHash":"aacc5959c0f66277befb062ee140fa2b0dbae14d7a9fe0796ca032403b7293a3"}
+data:{"turnId":"turn-1","model":"muse-spark-1.3","source":"live","promptVersion":"agent.v4","bundleHash":"d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646","actionSchema":"agent-action.v2","manifestHash":"3c7775588fb816ce8ccd3660e16d8ae6bfa9526f83174ecf666f8c66ab4c4c77"}
 
 event:call
 data:{"n":1,"purpose":"revise"}

@@ -24,9 +24,10 @@ export const GRAPH_VERSION = 'ea-x.v1';
 /**
  * Bump whenever this file or contribute.ts changes what X says, even if the descriptors' bytes do not (§6). 2: Q80's
  * gates in X's identity and an upload's seed named by its content source; Q81's per-step clock, its buffer and its
- * write before each fixed step, counted in the frame's uploads.
+ * write before each fixed step, counted in the frame's uploads. 3 (EA5.0): Q76(b)'s adoption, and null-graph 1.2.1's
+ * releases (removeComputeStage, removePass, PostChain's destroy releasing its batches and passes) with no retention.
  */
-export const RESOLVER_VERSION = 'ea3.2-resolver.2';
+export const RESOLVER_VERSION = 'ea3.2-resolver.3';
 
 /**
  * What a world may be seeded from, and which of the manifest's variant gates hold (Q80). Tier 1 is every gate and no
@@ -122,6 +123,7 @@ function build(nodes: CheckedNode[], policy: StaticPolicy, support: ReadonlyMap<
 
     // Each node by its adapter's code, after everything it is wired to. A node whose producer refused is skipped, not
     // refused again: one cause, one diagnostic.
+    const adoption = adoptions(nodes);
     const produced = new Map<string, Record<string, Produced>>();
     const parts: Contribution[] = [];
     const refused = new Set<string>();
@@ -136,7 +138,7 @@ function build(nodes: CheckedNode[], policy: StaticPolicy, support: ReadonlyMap<
         let part: Contribution | Refusal;
         try {
             part = impl
-                ? impl({ node, path: pathOf(node.id), inputs, frame, policy, content })
+                ? impl({ node, path: pathOf(node.id), inputs, frame, policy, content, adoption })
                 : { refused: true, code: 'EA_CAPABILITY_UNSUPPORTED', path: `${pathOf(node.id)}/adapterId`, message: `${node.adapter.id} has a descriptor but no implementation` };
         } catch (e) {
             if (!(e instanceof SizeOverflow)) throw e;
@@ -164,12 +166,20 @@ function build(nodes: CheckedNode[], policy: StaticPolicy, support: ReadonlyMap<
         return { ok: false, diagnostics };
     }
     // Construction follows the wiring, explicitly: a node is made after everything it is wired to, and EA5's cleanup of
-    // a partial init reads these edges backwards (§7, §9).
+    // a partial init reads these edges backwards (§7, §9). An adopted buffer is made by its batch's create (Q76(b)): its
+    // batch has nothing to wait for, and every other node wired to it waits for that create, so a stage that binds the
+    // batch's storage is made after it and, disposal undoing construction, dropped before its clear.
     const creates = new Map(operations.filter(o => o.kind === 'create').map(o => [o.node, o]));
     for (const n of nodes) {
         const made = creates.get(n.id);
-        if (!made) throw new Error(`EA3: ${n.adapter.id} contributed no create`);
-        for (const w of n.inputs) if (!made.after.includes(xid(w.nodeId, 'create'))) made.after.push(xid(w.nodeId, 'create'));
+        if (!made) {
+            if (adoption.has(n.id)) continue;
+            throw new Error(`EA3: ${n.adapter.id} contributed no create`);
+        }
+        for (const w of n.inputs) {
+            const maker = adoption.get(w.nodeId) ?? w.nodeId;
+            if (maker !== n.id && !made.after.includes(xid(maker, 'create'))) made.after.push(xid(maker, 'create'));
+        }
     }
     // NullGraph draws a pass's batches in the order they were created (RenderPass.addBatch): backdrops first, then program
     // order. That order is a dependency, of the creates and of the draws both, after the pass's clear.
@@ -269,6 +279,34 @@ function compareKeys(a: (string | number)[], b: (string | number)[]): number {
         return a[i] < b[i] ? -1 : 1;
     }
     return 0;
+}
+
+const BATCHES: ReadonlySet<string> = new Set(['ng.render.mesh_batch', 'ng.render.custom_batch']);
+
+/**
+ * Q76(b), decided 2026-11-01: the buffers realized as a batch's own storage, each by its batch. Adopted: an ordinary
+ * buffer (declared zero, not a ping-pong pair) wired to exactly one batch's `instances`, holding exactly that batch's
+ * `maxInstances` elements at its storage's stride, and otherwise wired only to compute stages, which bind the batch's
+ * storage as h1 binds its particles'. Anything else keeps the copy, so the program sees the same buffer either way: a
+ * second batch, a pair, an upload seed, fewer elements (`arrayLength` would grow), another stride, or a fullscreen that
+ * reads it (a backdrop is made before the batches it draws under, so it could not bind storage made after it).
+ */
+export function adoptions(nodes: readonly CheckedNode[]): Map<string, string> {
+    const adopted = new Map<string, string>();
+    for (const b of nodes) {
+        if (b.adapter.id !== 'ng.buffer.storage') continue;
+        const c = b.config as { elements: number; strideFloats: number; pingPong: boolean; init: string };
+        if (c.pingPong || c.init !== 'zero') continue;
+        const wired = nodes.flatMap(n => n.inputs.filter(w => w.nodeId === b.id).map(w => ({ node: n, port: w.port })));
+        // One batch's instances, and every other consumer a compute stage: a second batch or a fullscreen keeps the copy.
+        const instances = wired.find(w => w.port === 'instances' && BATCHES.has(w.node.adapter.id));
+        if (!instances || wired.some(w => w !== instances && w.node.adapter.id !== 'ng.compute.stage')) continue;
+        const batch = instances.node;
+        const stride = batch.adapter.id === 'ng.render.mesh_batch' ? 14 : c.strideFloats;
+        if (c.elements !== (batch.config as { maxInstances: number }).maxInstances || c.strideFloats !== stride) continue;
+        adopted.set(b.id, batch.id);
+    }
+    return adopted;
 }
 
 /** Producers before consumers (Kahn), the earliest in the program first among nodes free to go; or a cycle. */

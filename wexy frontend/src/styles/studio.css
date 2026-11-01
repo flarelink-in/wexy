@@ -180,6 +180,11 @@
 .cand-budget { font: 11px/1.45 var(--mono); color: var(--text-3-strong); }
 .cand-l3 { font: 11px/1.45 var(--mono); color: var(--text-3-strong); }
 .cand-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* EA5.3: what the last "Run on this GPU" came to, in the developer's words and numbers. */
+.cand-run { margin: 0; font: 11px/1.5 var(--mono); color: var(--text-3-strong); overflow-wrap: anywhere; }
+.cand-run.is-installed { color: var(--ok); }
+.cand-run.is-refused, .cand-run.is-stopped { color: var(--warn); }
+.cand-run.is-failed { color: var(--err); }
 .cand-modules, .cand-turns, .cand-jobs, .cand-evidence-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .cand-modules:empty, .cand-turns:empty, .cand-jobs:empty { display: none; }
 .cand-module { padding: 7px 9px; border: 1px solid var(--line); border-radius: var(--radius-xs); background: var(--bg-2); font-size: 12px; }

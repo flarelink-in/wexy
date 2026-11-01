@@ -34,7 +34,7 @@ export const ABI_VERSION = 'ea-abi.v2';
  */
 export const EA_SIM_STRUCT = 'struct EaSim {\n    dt: f32,\n    time: f32,\n    step: u32,\n    _pad: u32,\n}';
 
-/** null-graph 1.2.0's `CommonChunks`, byte for byte (EA-X15 pins them against the engine). */
+/** null-graph's `CommonChunks` (1.2.0's, unchanged in 1.2.1), byte for byte (EA-X15 pins them against the engine). */
 export const ENGINE_CHUNKS: Readonly<Record<'CameraStruct' | 'EngineBindings' | 'VertexOut', string>> = {
     CameraStruct: '\n        struct Camera {\n            viewProj: mat4x4<f32>,\n            view: mat4x4<f32>,\n            proj: mat4x4<f32>,\n            invViewProj: mat4x4<f32>,\n            invView: mat4x4<f32>,\n            invProj: mat4x4<f32>,\n\n            eyePos: vec3<f32>,\n            simTime: f32,\n\n            zNear: f32,\n            zFar: f32,\n            fovRads: f32,\n            aspect: f32,\n            _padEnd: vec4<f32>\n        };\n    ',
     EngineBindings: '\n        @group(0) @binding(0) var<uniform> camera: Camera;\n        @group(0) @binding(1) var<storage, read> ecs: array<f32>;\n    ',
@@ -283,11 +283,14 @@ export async function deriveInterfaces(x: Graph, chunks: Readonly<Record<keyof t
     return diagnostics.length ? { ok: false, graph: x.hash, diagnostics } : { ok: true, graph: x.hash, interfaces: interfaces.sort((a, b) => (a.module < b.module ? -1 : 1)) };
 }
 
-/** createBatch's own group 0: the camera at 0 and the batch's instance storage at 1, bound by the engine. */
+/**
+ * createBatch's own group 0: the camera at 0 and the batch's instance storage at 1, bound by the engine. The storage is
+ * what the batch's create allocates: its own, or the buffer it adopts (Q76(b)).
+ */
 function engineGroup(create: Op): InterfaceBinding[] {
     return [
         { group: 0, binding: 0, name: 'camera', declaration: '@group(0) @binding(0) var<uniform> camera: Camera;', resource: '@host#camera', access: 'uniform', version: null, boundBy: 'engine' },
-        { group: 0, binding: 1, name: 'ecs', declaration: '@group(0) @binding(1) var<storage, read> ecs: array<f32>;', resource: `${create.node}#storage`, access: 'read', version: null, boundBy: 'engine' },
+        { group: 0, binding: 1, name: 'ecs', declaration: '@group(0) @binding(1) var<storage, read> ecs: array<f32>;', resource: create.accesses[0].resource, access: 'read', version: null, boundBy: 'engine' },
     ];
 }
 

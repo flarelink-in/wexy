@@ -74,7 +74,7 @@ test('EA-T1 each recorded ending has its phase, and only a hand-off is a success
     const deadline = await createAgentSession(replaying('exhausted-deadline'), () => {}, clock().now).start(REQUEST);
     assert.deepEqual([deadline.unreported, deadline.costMicroUsd], [1, 0], 'one call reported nothing: its cost is unknown, and counted so');
     const budget = await createAgentSession(replaying('error-budget'), () => {}, clock().now).start(REQUEST);
-    assert.deepEqual([budget.code, budget.reason, budget.costMicroUsd], ['budget', 'in the stream: Live creation has reached its spending limit for now.', 154_734]);
+    assert.deepEqual([budget.code, budget.reason, budget.costMicroUsd], ['budget', 'in the stream: Live creation has reached its spending limit for now.', 156_034]);
 });
 
 test('EA-T2 a new turn supersedes the running one: it is cancelled, and nothing it says or resolves to is heard', async () => {

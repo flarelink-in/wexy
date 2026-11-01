@@ -52,10 +52,15 @@ export class DirectorPanel {
     }
 
     clear(): void {
+        this.note('Controls for your world appear here: things like spin, wind and glow. Move one and the world changes instantly.');
+    }
+
+    /** No controls, and why: the empty state's words, or an agent world's, which has none yet (Q85). */
+    note(text: string): void {
         this.readouts = [];
         this.body.replaceChildren(h('div', { class: 'inspector-empty' },
             h('span', { html: icon('sliders', 22) }),
-            h('p', null, 'Controls for your world appear here: things like spin, wind and glow. Move one and the world changes instantly.'),
+            h('p', null, text),
         ));
     }
 

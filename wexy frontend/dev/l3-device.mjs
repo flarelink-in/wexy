@@ -89,7 +89,8 @@ try {
     const problems = [];
     for (const w of result.worlds) {
         if (!w.sealed) { problems.push(`${w.name}: not sealed (${w.reason})`); continue; }
-        if (!w.sameId) problems.push(`${w.name}: sealed to another id(C) than its bundle's`);
+        // Sealed means every body met the interface it was written for; under the same X, id(C) must be the bundle's too.
+        if (w.sameX && !w.sameId) problems.push(`${w.name}: sealed to another id(C) than its bundle's under the same X`);
         for (const m of w.modules) if (!m.ok || m.producedBy !== 'device') problems.push(`${w.name}/${m.module}: ${m.ok ? 'not the device\'s verdict' : 'refused by the device'}`);
         if (w.provenance !== null) problems.push(`${w.name}: provenance refuses: ${w.provenance}`);
     }
@@ -98,7 +99,7 @@ try {
     if (errors.length) problems.push(`${errors.length} console error(s)`);
     writeFileSync(join(OUT, `${gpu}.json`), JSON.stringify({ ...result, bundles: paths, console: consoleLines, problems }, null, 1));
     for (const w of result.worlds) {
-        console.log(`${w.name}: ${w.sealed ? `id(C) ${w.candidate.slice(0, 12)}… ${w.sameId ? 'as its bundle' : 'NOT its bundle'}` : `not sealed: ${w.reason}`}`);
+        console.log(`${w.name}: ${w.sealed ? `id(C) ${w.candidate.slice(0, 12)}… ${w.sameId ? 'as its bundle' : w.sameX ? 'NOT its bundle' : 'new: X moved since the bundle, every interface as written for'}` : `not sealed: ${w.reason}`}`);
         for (const m of w.modules ?? []) console.log(`  ${m.module} (${m.kind}, ${m.lines} lines): ${m.ok ? 'compiles' : 'refused'} · ${m.producedBy} · ${m.ms} ms${m.findings.length ? ` · ${m.findings.map(f => `${f.severity} ${f.line ?? '-'}: ${f.message}`).join(' | ')}` : ''}`);
         if (w.sealed) console.log(`  provenance: ${w.provenance ?? 'holds'}`);
     }

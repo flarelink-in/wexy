@@ -15,7 +15,7 @@ import { ENGINE } from '../src/contract/engine/index.ts';
  * 10-30: the compute stage's after input and done output (Q77); before, 7af95545….
  * 10-31: the variant gates' table, `upload` gated (Q80); before, 1de4e9b8….
  */
-const MANIFEST_HASH = 'aacc5959c0f66277befb062ee140fa2b0dbae14d7a9fe0796ca032403b7293a3';
+const MANIFEST_HASH = '3c7775588fb816ce8ccd3660e16d8ae6bfa9526f83174ecf666f8c66ab4c4c77';
 
 const node = (id, adapterId, config, inputs = [], adapterVersion = 1) => ({ id, adapterId, adapterVersion, config: JSON.stringify(config), inputs });
 const from = (port, nodeId, output) => ({ port, nodeId, output });

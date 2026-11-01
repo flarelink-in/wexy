@@ -29,8 +29,11 @@ import { RUNG_NAMES, runLoop, type LoopEvent, type LoopOutcome, type VerifyFailu
 import { COPY } from '../../loop/copy';
 import { completeOutcome } from '../../loop/outcome';
 import { SceneRuntime } from '../../runtime/scene-runtime';
-import { Viewport, type CameraMode } from '../../runtime/viewport';
-import type { ModuleCompiler } from '../../contract/adapters/bodies';
+import { MAX_LIVE_PIXELS, Viewport, type CameraMode } from '../../runtime/viewport';
+import type { WorldRuntime } from '../../runtime/world';
+import type { CompiledBody, ModuleCompiler } from '../../contract/adapters/bodies';
+import type { DeepReadonly } from '../../contract/engine/frozen';
+import type { SealedCandidate } from '../../loop/snapshot';
 import { assembleModule } from '../../contract/host';
 import { hookHeader } from '../../contract/wgsl';
 import { $, download, h, isTyping } from '../../shared/dom';
@@ -66,6 +69,29 @@ const STARTERS: Array<{ id: string; label: string; prompt: string }> = [
 ];
 type Tab = 'director' | 'spec' | 'wgsl';
 const lineCount = (s: string) => (s ? s.split('\n').length : 0);
+
+// The stage's Run (EA5.3), loaded only behind ?agent=1: its types, by name, so nothing of it is imported here.
+type AgentStage = import('../../exec/stage').Stage;
+type AgentReport = import('../../exec/stage').PrepareReport;
+type AgentReservation = import('../../exec/gate').Reservation;
+type RunSummary = import('./candidate-view').RunSummary;
+type Sealed = DeepReadonly<SealedCandidate>;
+
+/** A Run's numbers in one line for Developer view: the probe's predictions, the reservation, the first frame's look. */
+function runNumbers(report: AgentReport | null): string {
+    const p = report?.probe;
+    if (!report || !p) return '';
+    const ms = (v: number | undefined) => (v === undefined || Number.isNaN(v) ? 'not measured' : `${v.toFixed(1)} ms`);
+    const parts = [`probe: init ${ms(p.initMs)}, step ${ms(p.computeMsPerFrame)}, frame ${ms(p.drawMsPerFrame)}`];
+    if (p.maxSubmissionMs !== undefined) parts.push(`worst submission ${ms(p.maxSubmissionMs)} of ${p.budgetMs ?? 250} ms`);
+    if (p.steadyFrameMs !== undefined) parts.push(`steady frame ${ms(p.steadyFrameMs)}`);
+    parts.push(`reserved ${(report.reservation.total / 1e6).toFixed(0)} MB`);
+    if (report.sanity && report.firstFrame) {
+        parts.push(`first frame ${report.firstFrame.width}×${report.firstFrame.height}: visibility ${report.sanity.visibility}, ${report.sanity.sampled} floats sampled`);
+    }
+    parts.push(...(p.warnings ?? []));
+    return parts.join(' · ');
+}
 
 /** A call's line in the technical log. A mock call made no request, so it has no model or tokens to show. */
 function callMeta(g: GenerationInfo): string {
@@ -116,7 +142,15 @@ class Studio {
     private deviceCompiler: ModuleCompiler | null = null;
     /** The device's generation: it moves on a device loss, and evidence from before proves nothing (EA5). */
     private deviceGeneration = 0;
-    private candidatePanel: { refresh(): void } | null = null;
+    private candidatePanel: { refresh(): void; readonly epoch: number } | null = null;
+    /** ?agent=1 only, once the viewport and its device compiler exist: the stage's Run (EA5.3). */
+    private stage: AgentStage | null = null;
+    /** The stage's chunk's retire, loaded with it: an old world's teardown after a switch (§9). */
+    private retire: ((old: { destroy(): void } | null, held: AgentReservation | null) => string | null) | null = null;
+    /** An agent world on the stage (EA5.3): its runtime, what it holds in the stage's ledger, its id(C). */
+    private agentWorld: { runtime: WorldRuntime; held: AgentReservation; candidate: string } | null = null;
+    /** What an h1 Head holds in the stage's ledger (I7), so a Run reserves beside it. */
+    private headReservation: AgentReservation | null = null;
 
     // Components and the elements they live in.
     private readonly trace = new TracePanel();
@@ -208,6 +242,8 @@ class Studio {
         vp.onOrbitTakeover = () => this.setMode('orbit', false);
         vp.onDeviceLost = msg => {
             this.deviceGeneration++;
+            // Every compile verdict and GPU go is void now (§9): a Run under way stops at its next check.
+            this.stage?.goes.clear();
             this.showMessage(`Your graphics card stopped responding (${msg}). Reload the page to carry on.`, 'error');
         };
         if (agent) void this.mountDeviceCompiler(vp);
@@ -239,7 +275,10 @@ class Studio {
         const panel = new AgentPanel(client, () => ({
             prompt: this.prompt.value, style: this.style.value as Style | 'auto', seconds: this.duration,
         }), {
-            candidate: api && client ? { modules: createModuleClient(api), revise: createReviser(client), compiler: () => this.deviceCompiler } : undefined,
+            candidate: api && client ? {
+                modules: createModuleClient(api), revise: createReviser(client), compiler: () => this.deviceCompiler,
+                run: { blocked: () => this.runBlocked(), go: (snapshot, compiled) => this.runCandidate(snapshot, compiled) },
+            } : undefined,
         });
         this.candidatePanel = panel.candidate;
         panel.el.classList.add('dev-only');
@@ -251,9 +290,97 @@ class Studio {
      * it compiles passed L1 and L2 first, and compiling runs nothing on the GPU. Its code loads only then.
      */
     private async mountDeviceCompiler(vp: Viewport): Promise<void> {
-        const { createDeviceCompiler } = await import('../../exec/device-compiler');
-        this.deviceCompiler = createDeviceCompiler(vp.engine.device, { generation: () => this.deviceGeneration, gpu: vp.gpuLabel });
+        const [{ createDeviceCompiler }, stages, { createHeadlessPort, createNullGraphPort }, { limitsOf }, { adapterIdentity, environmentOf }] = await Promise.all([
+            import('../../exec/device-compiler'), import('../../exec/stage'), import('../../exec/null-graph-port'), import('../../exec/gate'), import('../../exec/eligibility'),
+        ]);
+        const compiler = createDeviceCompiler(vp.engine.device, { generation: () => this.deviceGeneration, gpu: vp.gpuLabel });
+        this.deviceCompiler = compiler;
+        // The stage's Run (EA5.3): the viewport's engine, its device's limits, this device compiler's verdicts, the go from
+        // Developer view, a reservation in one ledger with the Head's, and the switch: the viewport's setRuntime alone.
+        this.retire = stages.retire;
+        this.stage = stages.createStage({
+            port: createNullGraphPort(vp.engine),
+            headless: (width, height) => createHeadlessPort(vp.engine.device, width, height),
+            limits: limitsOf(vp.engine.device),
+            compiler: () => compiler,
+            present: { turn: () => this.candidatePanel?.epoch ?? 0, device: () => this.deviceGeneration },
+            // The exact model, from the device's own adapter info: a browser that hides it keeps every candidate static-only.
+            environment: environmentOf(adapterIdentity(vp.engine.device.adapterInfo), navigator.userAgent),
+            gpu: vp.gpuLabel,
+            size: () => ({ width: vp.canvas.width, height: vp.canvas.height }),
+            maxPixels: MAX_LIVE_PIXELS,
+            view: () => vp.currentView(),
+            restoreHeadCamera: () => vp.writeCamera(),
+            // The Head holds while the probe times a submission, so its frames never land in the numbers (EA-E, 11-01).
+            quiet: () => vp.pause(),
+            commit: runtime => vp.setRuntime(runtime),
+            now: () => performance.now(),
+            onRefusal: message => this.trace.add('The agent world paused', 'gate').error(message),
+        });
+        if (this.runtime) this.headReservation = this.stage.ledger.record(`head: ${this.spec?.title ?? 'h1'}`, this.runtime.deviceBytes);
         this.candidatePanel?.refresh();
+    }
+
+    /** Why Run cannot be pressed now; null when it can. */
+    private runBlocked(): string | null {
+        if (!this.viewport) return 'Run needs WebGPU, which this browser does not offer.';
+        if (!this.stage) return 'The stage is starting: its device compiler loads first.';
+        if (this.stage.busy) return 'A Run is under way.';
+        if (this.busy) return 'A world is being made: Run once it is done.';
+        return null;
+    }
+
+    /** The developer's GPU go for this candidate, and its Run on the stage (Q89); an install sets the agent world's state. */
+    private async runCandidate(snapshot: Sealed, compiled: readonly DeepReadonly<CompiledBody>[]): Promise<RunSummary> {
+        const stage = this.stage;
+        if (!stage) return { status: 'refused', reason: 'no stage here', numbers: '' };
+        stage.press(snapshot);
+        const step = this.trace.add('Run on this GPU', 'gate');
+        const r = await stage.run(snapshot, compiled);
+        const numbers = runNumbers(r.report);
+        if (r.status === 'installed') {
+            this.installAgent(r.runtime, r.held, snapshot);
+            step.ok(numbers, `id(C) ${snapshot.id.slice(0, 12)}…`);
+            return { status: 'installed', reason: null, numbers };
+        }
+        step.error(r.reason, numbers);
+        return { status: r.status, reason: r.reason, numbers };
+    }
+
+    /**
+     * An agent world on the stage (EA5.3; executor-design.md §5). The switch was the stage's commit (the viewport's
+     * setRuntime); this is the studio's own, after it. The old world is retired (its releases attempted, its reservation
+     * returned; a failure is said and changes nothing installed), h1's state is detached, and what an agent world has
+     * not got yet is off: keyframes and the camera path (W has none), the Director (Q85), films and photos (EA5.5).
+     */
+    private installAgent(runtime: WorldRuntime, held: AgentReservation, snapshot: Sealed): void {
+        const vp = this.viewport!;
+        const retired: Array<[{ destroy(): void } | null, AgentReservation | null]> = [
+            [this.runtime, this.headReservation], [this.agentWorld?.runtime ?? null, this.agentWorld?.held ?? null],
+        ];
+        this.runtime = null;
+        this.spec = null;
+        this.draftIsLive = false;
+        this.selectedKey = -1;
+        this.headReservation = null;
+        this.agentWorld = { runtime, held, candidate: snapshot.id };
+        for (const [world, reservation] of retired) {
+            const error = this.retire?.(world, reservation) ?? null;
+            if (error) this.trace.add('The old world\'s cleanup', 'gate').error(error);
+        }
+        this.setMode('orbit', true);
+        vp.path = null;
+        this.timeline.setKeyframes([]);
+        this.director.note('This world was built from an agent program: its controls are not here yet.');
+        this.exportBtn.disabled = true;
+        this.snapBtn.disabled = true;
+        this.captureBar.hidden = true;
+        this.empty.hidden = true;
+        this.hud.root.hidden = false;
+        this.hud.title.textContent = `Agent world ${snapshot.id.slice(0, 12)}…`;
+        this.hud.source.hidden = true;
+        this.hud.count.textContent = `${snapshot.x.nodes.length} nodes · ${snapshot.interfaces.length} modules`;
+        this.swapBtn.disabled = this.busy || !this.draftSpec;
     }
 
     /**
@@ -689,6 +816,15 @@ class Studio {
         vp.setRuntime(runtime);
         // Destroy after the swap: the old world kept rendering while the new one was checked and built (L8).
         old?.destroy();
+        // An agent world on the stage goes the same way, after the switch (EA5.3); its reservation with it.
+        if (this.agentWorld) {
+            const error = this.retire?.(this.agentWorld.runtime, this.agentWorld.held) ?? null;
+            if (error) this.trace.add('The old world\'s cleanup', 'gate').error(error);
+            this.agentWorld = null;
+        }
+        // The new Head, counted in the stage's ledger (I7), so a Run reserves beside it.
+        this.headReservation?.release();
+        this.headReservation = this.stage?.ledger.record(`head: ${spec.title}`, runtime.deviceBytes) ?? null;
         if (!keepCamera) {
             vp.setView(firstView(spec.camera.keyframes));
             vp.playhead = 0;

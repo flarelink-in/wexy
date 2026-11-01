@@ -162,7 +162,7 @@ export const ADAPTER_MANIFEST_TEXT = manifestText.replace(/\r\n/g, '\n');
  * sha256 of ADAPTER_MANIFEST_TEXT, pinned as the backend's AdapterManifest.HASH pins it, so a turn's meta is held to it
  * with no hashing at run time (EA3.6). EA-A1 recomputes it: a manifest changed without its pin fails there.
  */
-export const ADAPTER_MANIFEST_HASH = 'aacc5959c0f66277befb062ee140fa2b0dbae14d7a9fe0796ca032403b7293a3';
+export const ADAPTER_MANIFEST_HASH = '3c7775588fb816ce8ccd3660e16d8ae6bfa9526f83174ecf666f8c66ab4c4c77';
 export const ADAPTERS = deepFreeze(JSON.parse(ADAPTER_MANIFEST_TEXT) as AdapterManifest);
 checkManifest(ADAPTERS);
 /** The manifest's own gates: what the node check holds a program to unless a test lifts one, as Tier 2 will (Q80). */

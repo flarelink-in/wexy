@@ -41,7 +41,7 @@ export interface Checked {
 export const MAX_FINDINGS = 64;
 
 /**
- * null-graph 1.2.0's canonical effect order (`post:EFFECT_ORDER`, pinned against the engine by EA-X14): Tonemap is the
+ * null-graph's canonical effect order (1.2.0's, unchanged in 1.2.1) (`post:EFFECT_ORDER`, pinned against the engine by EA-X14): Tonemap is the
  * pivot, HDR work before it and display-referred work after it.
  */
 export const EFFECT_ORDER: readonly string[] = ['SSAO', 'AutoExposure', 'Bokeh', 'Bloom', 'Halation', 'GodRays', 'LensFlare', 'ColorGrade', 'Tonemap',
@@ -176,10 +176,11 @@ export async function checkGraph(x: Graph, policy: StaticPolicy): Promise<Checke
             held.set(key, { ...r.retained, ids: [...(held.get(key)?.ids ?? []), r.id] });
         }
     }
-    // A retention is disclosed, once a holder: the world cannot release it with null-graph 1.2.0, and is not refused for it.
+    // A retention is disclosed, once a holder: the world cannot release it with the installed engine, and is not refused
+    // for it. On null-graph 1.2.1 the adapters leave none (EA5.0); 1.2.0 kept a compute stage and the post debug view.
     for (const { by, until, ids } of held.values()) {
         add('lifecycle', 'warning', 'dispose', ids[0], null, null,
-            `${by} keeps ${ids.join(', ')} after the world's dispose, until ${until}: null-graph 1.2.0 has no call that releases ${ids.length > 1 ? 'them' : 'it'}`);
+            `${by} keeps ${ids.join(', ')} after the world's dispose, until ${until}: the engine has no call that releases ${ids.length > 1 ? 'them' : 'it'}`);
     }
     const releasesOf = (node: string) => x.schedule.dispose.filter(id => ops.get(id)!.node === node).map(id => disposal.get(id)!);
     for (const made of x.operations.filter(o => o.kind === 'create' && o.node !== HOST)) {

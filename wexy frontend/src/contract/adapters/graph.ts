@@ -110,7 +110,10 @@ export interface XResource {
     retained: Retention | null;
 }
 
-/** A hold the world cannot release with null-graph 1.2.0: disclosed, never left for a reader to find. */
+/**
+ * A hold the world cannot release with the installed engine: disclosed, never left for a reader to find. None on
+ * null-graph 1.2.1 (EA5.0); on 1.2.0 a compute stage and the post debug view's batch were kept until engine.destroy().
+ */
 export interface Retention {
     by: string;
     until: string;

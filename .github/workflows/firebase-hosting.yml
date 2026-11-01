@@ -1,0 +1,169 @@
+name: Firebase Hosting
+
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - 'wexy frontend/**'
+      - '.github/workflows/firebase-hosting.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Hosting environment (production requires the main branch)
+        type: choice
+        required: true
+        default: dev
+        options: [dev, prod]
+
+permissions:
+  contents: read
+
+# Both sites share a Functions codebase. Never cancel a deployment mid-release.
+concurrency:
+  group: wexy-firebase-hosting
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref == 'refs/heads/main' && 'prod' || 'dev') }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: wexy frontend
+    env:
+      FIREBASE_PROJECT_ID: wexy-bf8f8
+      HOSTING_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref == 'refs/heads/main' && 'prod' || 'dev') }}
+      FIREBASE_CLI_VERSION: '15.11.0'
+      GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/wexy-deploy-service-account.json
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Guard production branch
+        run: |
+          if [[ "$HOSTING_TARGET" == prod && "$GITHUB_REF" != refs/heads/main ]]; then
+            echo '::error::Production can only deploy from main.'
+            exit 1
+          fi
+
+      - name: Use frontend Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.12.0'
+          cache: npm
+          cache-dependency-path: wexy frontend/package-lock.json
+
+      # Separate steps deliberately prevent empty prod secrets falling back to dev.
+      - name: Configure dev browser environment
+        if: env.HOSTING_TARGET == 'dev'
+        env:
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: |
+          [[ -n "$ENV_FILE" ]] || { echo '::error::ENV_FILE is missing.'; exit 1; }
+          umask 077
+          printf '%s\n' "$ENV_FILE" > .env.local
+
+      - name: Configure prod browser environment
+        if: env.HOSTING_TARGET == 'prod'
+        env:
+          ENV_FILE: ${{ secrets.ENV_FILE_PROD }}
+        run: |
+          [[ -n "$ENV_FILE" ]] || { echo '::error::ENV_FILE_PROD is missing.'; exit 1; }
+          umask 077
+          printf '%s\n' "$ENV_FILE" > .env.local
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Validate hosted browser configuration
+        run: |
+          node --input-type=module <<'NODE'
+          import { loadEnv } from 'vite';
+          const env = loadEnv('production', process.cwd(), 'VITE_');
+          for (const name of ['VITE_API_ORIGIN', 'VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_AUTH_DOMAIN', 'VITE_FIREBASE_PROJECT_ID', 'VITE_FIREBASE_APP_ID', 'VITE_APPCHECK_SITE_KEY']) {
+            if (!env[name]?.trim()) throw new Error(`Missing hosted browser setting: ${name}`);
+          }
+          const origin = new URL(env.VITE_API_ORIGIN);
+          if (origin.protocol !== 'https:' || origin.origin !== env.VITE_API_ORIGIN) {
+            throw new Error('VITE_API_ORIGIN must be an HTTPS origin without a trailing slash or path');
+          }
+          if (env.VITE_FIREBASE_PROJECT_ID !== process.env.FIREBASE_PROJECT_ID) {
+            throw new Error('Browser Firebase project does not match the deployment project');
+          }
+          NODE
+
+      - name: Run frontend tests and contrast checks
+        run: |
+          npm test
+          npm run contrast
+
+      - name: Build matching Hosting and Functions artifacts
+        run: |
+          if [[ "$HOSTING_TARGET" == dev ]]; then
+            npm run build:dev
+          else
+            npm run build
+          fi
+
+      - name: Use Functions Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: wexy frontend/functions/package-lock.json
+
+      - name: Install and check Functions
+        run: |
+          npm ci --prefix functions
+          npm --prefix functions run check
+
+      - name: Install pinned Firebase CLI and create CI target mappings
+        run: |
+          npm install --global "firebase-tools@$FIREBASE_CLI_VERSION"
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          writeFileSync('.firebaserc', JSON.stringify({
+            projects: { default: 'wexy-bf8f8' },
+            targets: { 'wexy-bf8f8': { hosting: { dev: ['wexy-dev'], prod: ['wexy-bf8f8'] } } }
+          }, null, 2));
+          NODE
+
+      - name: Configure dev deployment credentials
+        if: env.HOSTING_TARGET == 'dev'
+        env:
+          CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+        run: |
+          [[ -n "$CREDENTIALS" ]] || { echo '::error::GOOGLE_APPLICATION_CREDENTIALS is missing.'; exit 1; }
+          umask 077
+          printf '%s' "$CREDENTIALS" > "$GOOGLE_APPLICATION_CREDENTIALS"
+
+      - name: Configure prod deployment credentials
+        if: env.HOSTING_TARGET == 'prod'
+        env:
+          CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_PROD }}
+        run: |
+          [[ -n "$CREDENTIALS" ]] || { echo '::error::GOOGLE_APPLICATION_CREDENTIALS_PROD is missing.'; exit 1; }
+          umask 077
+          printf '%s' "$CREDENTIALS" > "$GOOGLE_APPLICATION_CREDENTIALS"
+
+      # pinTag includes ONLY the associated renderer; do not deploy all functions.
+      - name: Deploy selected Hosting target and pinned renderer
+        run: firebase deploy --only "hosting:$HOSTING_TARGET" --project "$FIREBASE_PROJECT_ID" --non-interactive
+
+      - name: Publish dev links
+        if: success() && env.HOSTING_TARGET == 'dev'
+        run: |
+          {
+            echo '### Dev deployment'
+            echo '- Landing: https://wexy-dev.web.app/'
+            echo '- Studio: https://wexy-dev.web.app/studio'
+            echo '- Agent view: https://wexy-dev.web.app/studio?agent=1&dev=1'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove local credentials and browser environment
+        if: always()
+        run: rm -f "$GOOGLE_APPLICATION_CREDENTIALS" .env.local .firebaserc

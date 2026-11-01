@@ -2,21 +2,21 @@
  "version": "ea-b1",
  "engine": {
   "name": "null-graph",
-  "version": "1.2.0",
-  "packageHash": "af2b8d4b4a017cb3d73065457a0abc9c87954ae220907b567ade7103c49bd0b5"
+  "version": "1.2.1",
+  "packageHash": "6e3513632017a286e01340869daa5f76c6729616777831ab587ede042812e41f"
  },
  "docs": {
-  "source": "null-graph@8c1a2f9",
+  "source": "null-graph@8c1a2f9+worktree",
   "count": 36,
-  "hash": "0a54f3ae3cb8eab5b7d3d5ef228cbea3c8426ef93d5796ef04357dbe4fd7afd0"
+  "hash": "7051f1bb4e710d44644adc4144431ede98dc54efed73bf78110c27005cb89bf6"
  },
  "capabilities": {
   "families": 18,
-  "symbols": 874,
-  "hash": "859be6fbc3c52701f7e1859e9099f4fe8a9fa53e7d8e25637a7afbffc88c3360"
+  "symbols": 876,
+  "hash": "6c0b96110dbc953e0c720ea7f28a5a667899645b916d57992a6b515c3cfbfb8c"
  },
  "support": {
-  "hash": "2d708e65c03c2eba0af5f7607d51e4c5acc148ead78112157570d2a58e51abc9"
+  "hash": "3802c5f8b912005b2b57f3ca8a5da720cbdd19fe5c830a6303fe9ac489b2548f"
  },
- "bundleHash": "4d372b7a7b6116005602e70b7d26a2f434efd557712947d67ff4043a56bb4725"
+ "bundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646"
 }

@@ -1,5 +1,5 @@
 // EA-X3 to X5, headless (EA3.2; engine-adapters-design.md §7 "Memory and ownership"): the resolver's sizes are the
-// engine's. Each is pinned against null-graph 1.2.0 as installed, by running the engine's own CPU code: Primitives
+// engine's. Each is pinned against null-graph 1.2.1 as installed, by running the engine's own CPU code: Primitives
 // builds every shape on the CPU, and the materials, LightSystem and PostChain are constructed against a recording fake
 // device that hands back inert objects and writes down every createBuffer and createTexture. No GPU, no browser, no
 // adapter; the resolver itself never imports the engine. This file sets GPU usage globals for the engine's code, so it
@@ -17,11 +17,11 @@ globalThis.GPUShaderStage ??= { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 };
 
 /**
  * A device that records allocations and answers everything else with an inert object; and an engine that records the
- * passes and batches registered with it, and the batches cleared.
+ * passes and batches registered with it, the batches cleared and the passes removed.
  */
 function recordingEngine(width, height) {
     const log = [];
-    const registered = { passes: [], batches: [], cleared: 0 };
+    const registered = { passes: [], batches: [], cleared: 0, removed: [] };
     const inert = label => new Proxy(function () {}, {
         get: (_t, p) => (p === 'then' ? undefined : p === Symbol.toPrimitive ? () => 0 : p === Symbol.iterator ? function* () {} : p === 'length' ? 0 : inert(`${label}.${String(p)}`)),
         apply: () => inert(`${label}()`),
@@ -39,6 +39,7 @@ function recordingEngine(width, height) {
         createPass: config => { const pass = { name: config.name, isMainScreenPass: config.isMainScreenPass, batches: [] }; registered.passes.push(pass); return pass; },
         createBatch: (pass, config) => { const batch = { pass: pass.name, bytes: config.maxInstances * config.strideFloats * 4 }; pass.batches.push(batch); registered.batches.push(batch); return batch; },
         clearBatch: () => { registered.cleared++; },
+        removePass: pass => { registered.removed.push(pass); return true; },
     }, { get: (t, p) => (p in t ? t[p] : inert(`engine.${String(p)}`)) });
     return { engine, log, registered };
 }
@@ -138,19 +139,22 @@ test('EA-X5 the post chain\'s pool and arena are PostChain\'s, for every built-i
             assert.ok(registered.batches.every(b => b.bytes === POST_BATCH_BYTES), `${label}: each batch's storage`);
             const storage = own.find(x => x.id === 'look#batchStorage');
             assert.deepEqual([storage.bytes, storage.allocations], [POST_BATCH_BYTES, objects.postBatches]);
-            // The host reaches every compiled pass's batch through getPassSequence(), and only before destroy() empties it;
-            // destroy() itself clears none, which is why X schedules the host's clearBatches first.
             const sequence = [...chain.getPassSequence()];
             assert.equal(sequence.length, objects.postPasses, `${label}: the sequence is the compiled passes`);
-            assert.ok(sequence.every(p => p.batches.length === 1) && !sequence.some(p => p.name === 'Post/DebugView'), `${label}: one batch each; the debug view unreachable`);
+            assert.ok(sequence.every(p => p.batches.length === 1) && !sequence.some(p => p.name === 'Post/DebugView'), `${label}: one batch each`);
+            // 1.2.1: destroy() clears each batch the chain registered, the debug view's included, and removes each of its
+            // passes (releaseEngineNodes), so X's post.destroy releases them all; 1.2.0 cleared none and kept the passes.
             chain.destroy();
-            assert.equal(registered.cleared, 0, `${label}: PostChain.destroy() clears no batch`);
+            assert.equal(registered.cleared, objects.postBatches + 1, `${label}: PostChain.destroy() clears every batch it made`);
+            assert.equal(new Set(registered.removed).size, registered.passes.length, `${label}: and removes every pass it made, once`);
+            assert.ok(registered.removed.every(p => registered.passes.includes(p)), `${label}: its own passes only`);
+            for (const id of ['look#batchStorage', 'look#debugStorage']) assert.equal(own.find(x => x.id === id).releasedBy, 'look#destroy', `${label}: ${id}`);
             assert.throws(() => chain.getPassSequence(), /before setChain/);
         }
     }
 });
 
-test('EA-X13 what NullGraph keeps after a world lets go, so X declares it: passes, compute stages, and the calls that release them', async () => {
+test('EA-X13 what NullGraph keeps after a world lets go, and the 1.2.1 calls that release one pass or one compute stage', async () => {
     const { NullGraph } = await import('null-graph');
     const engine = new NullGraph();
     // CPU only: no init, no device. The stage factory is stubbed; the bookkeeping under test is the engine's own.
@@ -165,12 +169,19 @@ test('EA-X13 what NullGraph keeps after a world lets go, so X declares it: passe
     engine.render([stage, main]);
     engine.render();
     assert.deepEqual(rendered, [[stage, main], engine.passes]);
-    // clearPasses() forgets every pass at once and no compute stage; nothing forgets one stage or one pass.
+    // 1.2.1: removePass forgets the one pass it names, and removeComputeStage the one stage (X's @host#removePass and
+    // <stage>#drop); each says whether the engine held it. clearPasses() still forgets every pass, and X never calls it.
+    const other = engine.passes[1];
+    assert.deepEqual([engine.removePass(other), engine.removePass(other)], [true, false]);
+    assert.deepEqual(engine.passes, [main], 'only the named pass is forgotten: another world\'s stays');
+    assert.deepEqual([engine.removeComputeStage(stage), engine.removeComputeStage(stage), engine.computeStages.length], [true, false, 0]);
+    engine.render();
+    assert.deepEqual(rendered.at(-1), [main], 'render() without a sequence stops drawing a removed pass');
     engine.clearPasses();
-    assert.deepEqual([engine.passes.length, engine.computeStages.length], [0, 1]);
+    assert.deepEqual([engine.passes.length, engine.computeStages.length], [0, 0]);
     const releasing = Object.getOwnPropertyNames(NullGraph.prototype).filter(n => /remove|release|forget|drop|clear|destroy|dispose/i.test(n)).sort();
-    assert.deepEqual(releasing, ['clearBatch', 'clearBatches', 'clearPasses', 'destroy'],
-        'null-graph grew a release call: X\'s retentions (compute stages, the post debug view) may now be releasable');
+    assert.deepEqual(releasing, ['clearBatch', 'clearBatches', 'clearPasses', 'destroy', 'removeComputeStage', 'removePass'],
+        'null-graph changed its release calls: X\'s releases must follow them');
 });
 
 test('EA-X14 the checks\' effect order is the engine\'s: EFFECT_ORDER itself, and orderChain\'s sort on every chain tried', async () => {

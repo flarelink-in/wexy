@@ -1,0 +1,191 @@
+{
+ "note": "A live candidate of 2026-11-01 (dev/out/agent-live/live-2026-11-01T09-48-14/foggy-dusk.candidate.json): its program and its static-verified bodies, as the model wrote them; EA5.2's executor tests run its X over a fake engine.",
+ "request": {
+  "prompt": "rolling hills under thick fog at dusk, the last light fading behind them",
+  "style": "auto",
+  "seconds": 15
+ },
+ "program": {
+  "nodes": [
+   {
+    "adapterId": "ng.buffer.storage",
+    "adapterVersion": 1,
+    "config": "{\"elements\":256,\"layout\":\"instance14\",\"strideFloats\":14,\"pingPong\":false,\"init\":\"zero\"}",
+    "id": "hills",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.buffer.storage",
+    "adapterVersion": 1,
+    "config": "{\"elements\":24,\"layout\":\"instance14\",\"strideFloats\":14,\"pingPong\":false,\"init\":\"zero\"}",
+    "id": "fog",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.geometry.primitive",
+    "adapterVersion": 1,
+    "config": "{\"shape\":\"sphere\",\"size\":12,\"segments\":24}",
+    "id": "hillgeo",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.geometry.primitive",
+    "adapterVersion": 1,
+    "config": "{\"shape\":\"plane\",\"size\":30,\"segments\":3}",
+    "id": "foggeo",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.material.stock",
+    "adapterVersion": 1,
+    "config": "{\"kind\":\"lambert\",\"baseColor\":[0.23,0.26,0.3,1]}",
+    "id": "hillmat",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.material.stock",
+    "adapterVersion": 1,
+    "config": "{\"kind\":\"basic\",\"baseColor\":[0.78,0.72,0.8,1]}",
+    "id": "fogmat",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.light.rig",
+    "adapterVersion": 1,
+    "config": "{\"ambient\":[0.32,0.27,0.38],\"directional\":{\"direction\":[0.25,-0.22,-0.94],\"color\":[1,0.55,0.35],\"intensity\":2.2},\"points\":[]}",
+    "id": "sun",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.render.mesh_batch",
+    "adapterVersion": 1,
+    "config": "{\"maxInstances\":256}",
+    "id": "hillsbatch",
+    "inputs": [
+     {
+      "nodeId": "hillgeo",
+      "output": "geometry",
+      "port": "geometry"
+     },
+     {
+      "nodeId": "hillmat",
+      "output": "material",
+      "port": "material"
+     },
+     {
+      "nodeId": "hills",
+      "output": "buffer",
+      "port": "instances"
+     },
+     {
+      "nodeId": "sun",
+      "output": "lights",
+      "port": "lights"
+     }
+    ]
+   },
+   {
+    "adapterId": "ng.render.mesh_batch",
+    "adapterVersion": 1,
+    "config": "{\"maxInstances\":24}",
+    "id": "fogbatch",
+    "inputs": [
+     {
+      "nodeId": "foggeo",
+      "output": "geometry",
+      "port": "geometry"
+     },
+     {
+      "nodeId": "fogmat",
+      "output": "material",
+      "port": "material"
+     },
+     {
+      "nodeId": "fog",
+      "output": "buffer",
+      "port": "instances"
+     }
+    ]
+   },
+   {
+    "adapterId": "ng.render.fullscreen",
+    "adapterVersion": 1,
+    "config": "{\"module\":\"dusk_sky\",\"fragmentEntry\":\"skyFrag\"}",
+    "id": "sky",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.post.chain",
+    "adapterVersion": 1,
+    "config": "{\"effects\":[{\"effect\":\"Bloom\",\"intensity\":0.7},{\"effect\":\"ColorGrade\",\"intensity\":0.6},{\"effect\":\"Tonemap\",\"intensity\":1},{\"effect\":\"Vignette\",\"intensity\":0.7},{\"effect\":\"FilmGrain\",\"intensity\":0.3}]}",
+    "id": "film",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.compute.stage",
+    "adapterVersion": 1,
+    "config": "{\"module\":\"hill_place\",\"entry\":\"placeHills\",\"workgroupSize\":64,\"invocations\":256,\"phase\":\"init\"}",
+    "id": "placehills",
+    "inputs": [
+     {
+      "nodeId": "hills",
+      "output": "buffer",
+      "port": "writes"
+     }
+    ]
+   },
+   {
+    "adapterId": "ng.compute.stage",
+    "adapterVersion": 1,
+    "config": "{\"module\":\"fog_place\",\"entry\":\"placeFog\",\"workgroupSize\":24,\"invocations\":24,\"phase\":\"init\"}",
+    "id": "placefog",
+    "inputs": [
+     {
+      "nodeId": "fog",
+      "output": "buffer",
+      "port": "writes"
+     }
+    ]
+   },
+   {
+    "adapterId": "ng.compute.stage",
+    "adapterVersion": 1,
+    "config": "{\"module\":\"fog_drift\",\"entry\":\"driftFog\",\"workgroupSize\":24,\"invocations\":24,\"phase\":\"frame\"}",
+    "id": "driftfog",
+    "inputs": [
+     {
+      "nodeId": "fog",
+      "output": "buffer",
+      "port": "writes"
+     }
+    ]
+   }
+  ]
+ },
+ "modules": [
+  {
+   "module": "dusk_sky",
+   "interfaceHash": "c27539ca9bad498a75f35fdd29c7cc5289e5e0be3b31961981add98335a9df3b",
+   "codeHash": "abaf44ed4d01f8eb2c9e9f98048fe34717a69bb5c2adbf85426d0c9f091cd436",
+   "body": "fn skyFrag(uv: vec2<f32>) -> vec4<f32> {\n    let tm = camera.simTime;\n    let fade = clamp(tm / 15.0, 0.0, 1.0);\n    let sPos = 1.0 - uv.y;\n    let horizon = 0.38;\n    let sunX = 0.5;\n    let sunS = 0.405;\n    let dx = (uv.x - sunX) * camera.aspect;\n    let dy = sPos - sunS;\n    let dist = length(vec2<f32>(dx, dy));\n    let e = clamp((sPos - horizon) / (1.0 - horizon), 0.0, 1.0);\n    let topA = vec3<f32>(0.19, 0.21, 0.42);\n    let topB = vec3<f32>(0.09, 0.11, 0.25);\n    let topC = topA + (topB - topA) * fade;\n    let midA = vec3<f32>(0.63, 0.38, 0.47);\n    let midB = vec3<f32>(0.36, 0.25, 0.41);\n    let midC = midA + (midB - midA) * fade;\n    let lowA = vec3<f32>(1.02, 0.50, 0.27);\n    let lowB = vec3<f32>(0.62, 0.30, 0.30);\n    let lowC = lowA + (lowB - lowA) * fade;\n    var col = lowC + (midC - lowC) * smoothstep(0.0, 0.38, e);\n    col = col + (topC - col) * smoothstep(0.30, 1.0, e);\n    let sunCore = exp(-dist * dist * 110.0) * 1.6;\n    let sunMid = exp(-dist * dist * 22.0) * 0.65;\n    let sunWide = exp(-dist * 7.0) * 0.28;\n    let glowAmt = sunCore + sunMid + sunWide;\n    let sunWarm = vec3<f32>(1.45, 0.72, 0.36);\n    let sunCool = vec3<f32>(0.85, 0.42, 0.34);\n    let sunC = sunWarm + (sunCool - sunWarm) * fade;\n    let sunDim = 1.0 - 0.55 * fade;\n    col = col + sunC * glowAmt * sunDim;\n    let horizBand = exp(-abs(sPos - horizon) * 12.0);\n    let fogA = vec3<f32>(0.74, 0.62, 0.68);\n    let fogB = vec3<f32>(0.46, 0.40, 0.50);\n    let fogC = fogA + (fogB - fogA) * fade;\n    let bandAmt = horizBand * 0.55 * smoothstep(0.9, 0.15, dist);\n    col = col + (fogC - col) * bandAmt;\n    let streak = exp(-abs(dy) * 22.0) * exp(-abs(dx) * 3.2);\n    col = col + vec3<f32>(0.95, 0.45, 0.28) * streak * 0.35 * sunDim;\n    let below = 1.0 - smoothstep(horizon - 0.02, horizon + 0.02, sPos);\n    let groundA = vec3<f32>(0.30, 0.26, 0.33);\n    let groundB = vec3<f32>(0.16, 0.15, 0.22);\n    let groundC = groundA + (groundB - groundA) * fade;\n    col = col + (groundC - col) * below * 0.85;\n    let dith = fract(sin(dot(uv, vec2<f32>(12.9898, 78.233))) * 43758.5453);\n    col = col + (dith - 0.5) * 0.028;\n    return vec4<f32>(col, 1.0);\n}\n"
+  },
+  {
+   "module": "fog_drift",
+   "interfaceHash": "5289781a787ce1310e2bdbc925e00d99e5dbe276ab64773963df50891210ac06",
+   "codeHash": "402e719da5ea8a73dca2cac51ce2a26317afb6f1449ec6d9f09284969dcfe9a3",
+   "body": "fn driftFog(index: u32) {\n    let tt = camera.simTime;\n    let rr = f32(index / 6u);\n    let cc = f32(index % 6u);\n    let fi = f32(index);\n    let h1 = fract(sin(fi * 12.9898) * 43758.5453);\n    let h2 = fract(sin(fi * 78.233 + 17.13) * 24634.4689);\n    let h3 = fract(sin(fi * 39.425 + 43.31) * 56445.2341);\n    let pha = fi * 2.399963 + h1 * 6.283185;\n    let spd = 0.55 + 0.45 * h2;\n    let span = 96.0;\n    let baseX = (cc - 2.5) * 14.0 + (rr - 1.5) * 6.0 + h3 * 6.0;\n    let rawX = baseX + tt * spd + pha * 1.5;\n    let wrapped = rawX - span * floor(rawX / span);\n    let px = -48.0 + wrapped;\n    let pz = -7.0 - rr * 13.5 - h1 * 8.0;\n    let py = 1.6 + rr * 1.35 + h2 * 2.4 + sin(tt * 0.16 + pha * 1.7) * 0.7 + sin(tt * 0.05 + pha) * 0.4;\n    let ang = (h1 - 0.5) * 0.5 + 0.06 * sin(tt * 0.1 + pha);\n    let sy = sin(ang * 0.5);\n    let cy = cos(ang * 0.5);\n    let sx = 17.0 + h2 * 11.0 + sin(tt * 0.12 + pha * 2.0) * 1.5;\n    let syy = 2.6 + h3 * 3.2 + sin(tt * 0.18 + pha) * 0.5;\n    let cr = 0.74 + 0.08 * h1;\n    let cg = 0.69 + 0.07 * h2;\n    let cb = 0.8 + 0.07 * h3;\n    let base = index * B_fog_STRIDE;\n    b_fog[base + 0u] = 0.0;\n    b_fog[base + 1u] = px;\n    b_fog[base + 2u] = py;\n    b_fog[base + 3u] = pz;\n    b_fog[base + 4u] = 0.0;\n    b_fog[base + 5u] = sy;\n    b_fog[base + 6u] = 0.0;\n    b_fog[base + 7u] = cy;\n    b_fog[base + 8u] = sx;\n    b_fog[base + 9u] = syy;\n    b_fog[base + 10u] = 1.0;\n    b_fog[base + 11u] = cr;\n    b_fog[base + 12u] = cg;\n    b_fog[base + 13u] = cb;\n}\n"
+  },
+  {
+   "module": "fog_place",
+   "interfaceHash": "10e5ef509bc1ce1e46622ef0956c6fc82e83dfe29b33add51ddd1474d8f2b8c8",
+   "codeHash": "445142ad717d6c60d405e298b08cdaaddf2f7ebde543654f0d57c1520746d6ff",
+   "body": "fn placeFog(index: u32) {\n    let base = index * B_fog_STRIDE;\n    let row = index / 6u;\n    let col = index % 6u;\n    let cf = f32(col);\n    let rf = f32(row);\n    let seed = f32(index) * 12.9898 + 78.233;\n    let j1 = fract(sin(seed) * 43758.5453) - 0.5;\n    let j2 = fract(sin(seed * 1.7 + 13.1) * 24634.6349) - 0.5;\n    var zBase = 2.0;\n    var yBase = 2.5;\n    if (row == 1u) {\n        zBase = -18.0;\n        yBase = 4.2;\n    }\n    if (row == 2u) {\n        zBase = -38.0;\n        yBase = 6.2;\n    }\n    if (row == 3u) {\n        zBase = -60.0;\n        yBase = 8.5;\n    }\n    let xPos = (cf - 2.5) * 15.0 + (rf - 1.5) * 5.0 + j1 * 7.0;\n    let zPos = zBase + j2 * 6.0;\n    let yPos = yBase + 0.7 * sin(cf * 1.3 + rf * 2.1) + j1 * 1.2;\n    let sx = 19.0 + rf * 2.5 + j2 * 4.0 + cf * 0.4;\n    let sy = 9.0 + rf * 1.8 + j1 * 3.0;\n    let warm = 1.0 - rf * 0.18;\n    let rC = 0.80 + 0.06 * warm + j1 * 0.04;\n    let gC = 0.75 + 0.03 * warm + j2 * 0.04;\n    let bC = 0.84 + j1 * 0.03;\n    b_fog[base + 0u] = 0.0;\n    b_fog[base + 1u] = xPos;\n    b_fog[base + 2u] = yPos;\n    b_fog[base + 3u] = zPos;\n    b_fog[base + 4u] = -0.70710678;\n    b_fog[base + 5u] = 0.0;\n    b_fog[base + 6u] = 0.0;\n    b_fog[base + 7u] = 0.70710678;\n    b_fog[base + 8u] = sx;\n    b_fog[base + 9u] = sy;\n    b_fog[base + 10u] = 1.0;\n    b_fog[base + 11u] = rC;\n    b_fog[base + 12u] = gC;\n    b_fog[base + 13u] = bC;\n}\n"
+  },
+  {
+   "module": "hill_place",
+   "interfaceHash": "26c0f2a4eef89e8f1625b99ba96845ad92f26649471279644395ff567b925b4a",
+   "codeHash": "da3c0a6bc72a321d50d08f26ad6f3500039ce924637c7d8488bf9170126f79bf",
+   "body": "fn hashOne(seed: u32) -> f32 {\n    return fract(sin(f32(seed) * 12.9898 + 78.233) * 43758.5453);\n}\nfn placeHills(index: u32) {\n    let row = index / 64u;\n    let col = index % 64u;\n    let r0 = hashOne(index * 3u + 11u);\n    let r1 = hashOne(index * 3u + 101u);\n    let r2 = hashOne(index * 3u + 501u);\n    var halfW = 75.0;\n    var zBase = 0.0;\n    var yBase = -7.0;\n    var sxBase = 14.0;\n    var syBase = 7.0;\n    var szBase = 14.0;\n    var cr = 0.11;\n    var cg = 0.17;\n    var cb = 0.16;\n    if (row == 1u) {\n        halfW = 100.0;\n        zBase = -45.0;\n        yBase = -8.0;\n        sxBase = 20.0;\n        syBase = 10.0;\n        szBase = 18.0;\n        cr = 0.16;\n        cg = 0.2;\n        cb = 0.24;\n    }\n    if (row == 2u) {\n        halfW = 140.0;\n        zBase = -95.0;\n        yBase = -9.0;\n        sxBase = 28.0;\n        syBase = 13.0;\n        szBase = 24.0;\n        cr = 0.24;\n        cg = 0.23;\n        cb = 0.32;\n    }\n    if (row == 3u) {\n        halfW = 190.0;\n        zBase = -160.0;\n        yBase = -11.0;\n        sxBase = 38.0;\n        syBase = 17.0;\n        szBase = 32.0;\n        cr = 0.32;\n        cg = 0.29;\n        cb = 0.4;\n    }\n    let nx = (f32(col) + 0.5) / 64.0 * 2.0 - 1.0;\n    let gap = exp(-nx * nx * 5.0);\n    var xPos = nx * halfW + (r0 - 0.5) * 10.0;\n    var zPos = zBase + (r1 - 0.5) * 14.0;\n    var yPos = yBase + sin(nx * 3.1 + f32(row) * 1.7) * 1.8 + (r2 - 0.5) * 2.2;\n    yPos = yPos - gap * (2.0 + f32(row) * 0.9);\n    var sx = sxBase * (0.8 + 0.55 * r0);\n    var sy = syBase * (0.8 + 0.45 * r1);\n    var sz = szBase * (0.9 + 0.35 * r2);\n    sy = sy * (1.0 - gap * 0.35);\n    xPos = xPos + gap * (r0 - 0.5) * 6.0;\n    let base = index * B_hills_STRIDE;\n    b_hills[base + 0u] = 0.0;\n    b_hills[base + 1u] = xPos;\n    b_hills[base + 2u] = yPos;\n    b_hills[base + 3u] = zPos;\n    b_hills[base + 4u] = 0.0;\n    b_hills[base + 5u] = 0.0;\n    b_hills[base + 6u] = 0.0;\n    b_hills[base + 7u] = 1.0;\n    b_hills[base + 8u] = sx;\n    b_hills[base + 9u] = sy;\n    b_hills[base + 10u] = sz;\n    b_hills[base + 11u] = cr;\n    b_hills[base + 12u] = cg;\n    b_hills[base + 13u] = cb;\n}\n"
+  }
+ ]
+}

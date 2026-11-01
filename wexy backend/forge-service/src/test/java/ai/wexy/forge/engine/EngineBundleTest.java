@@ -30,7 +30,7 @@ class EngineBundleTest {
         EngineBundle bundle = EngineBundle.load(json);
 
         assertThat(EngineBundle.problems(texts(), json)).isEmpty();
-        assertThat(bundle.engineVersion()).isEqualTo("1.2.0");
+        assertThat(bundle.engineVersion()).isEqualTo("1.2.1");
         assertThat(bundle.bundleHash()).matches("[0-9a-f]{64}");
         assertThat(bundle.docsSource()).startsWith("null-graph@");
         assertThat(bundle.familyIndex()).contains("## core · null-graph ·").contains("## post · null-graph/post ·");
