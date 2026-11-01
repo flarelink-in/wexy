@@ -1,7 +1,7 @@
 # forge-gateway in production: the VPS behind Cloudflare's tunnel (docs/deploy-design.md, 2026-10-28). What differs
 # from application.yaml's defaults: Redis by its compose name; the actuator on a port of its own, which the tunnel
 # never routes; the client address from Cloudflare's header, safe only because this port is never published and
-# every request arrives through cloudflared (§9); Firebase required; App Check on. Secrets arrive as environment
+# every request arrives through cloudflared (§9); Firebase required; App Check enforced. Secrets arrive as environment
 # variables from Infisical's prod environment through compose.prod.yaml. This file holds none, and is tracked.
 spring:
   data:
@@ -27,8 +27,12 @@ wexy:
     allowed-origins: ${WEXY_CORS_ALLOWED_ORIGINS}
   appcheck:
     enabled: true
-    # Monitor first (application.yaml): WEXY_APPCHECK_ENFORCE=true once the deployed studio attests near 100%.
-    enforce: ${WEXY_APPCHECK_ENFORCE:false}
+    # Enforced in production (the user, 2026-10-31; deploy design D3), failing closed when the value is unset:
+    # WEXY_APPCHECK_ENFORCE=false is the deliberate way back to monitor mode, whose log gives the attested ratio.
+    enforce: ${WEXY_APPCHECK_ENFORCE:true}
+    replay-protection:
+      # The single-use routes spend their limited-use token with Google; in force only together with enforce.
+      enforce: ${WEXY_APPCHECK_REPLAY_ENFORCE:true}
   shield:
     # Topology: the client, Cloudflare's edge, the tunnel, the cloudflared container, this port: one hop, and no
     # other way in (the port is bound to the host's loopback and the compose network). cloudflared forwards

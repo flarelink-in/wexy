@@ -97,9 +97,11 @@ async function loadFirebase(firebase: FirebaseWebConfig, config: PublicConfig): 
     if (config.appCheckSiteKey) {
         // reCAPTCHA cannot attest localhost, so a development build on a loopback page asks the SDK for a debug
         // token instead; the SDK logs it, to be registered under App Check > Apps > Manage debug tokens. A debug
-        // token passes attestation from anywhere, so a production build (dev false) or a real host never asks.
+        // token passes attestation from anywhere, so a production build (dev false) or a real host never asks. A
+        // token already set on the page is kept: a test harness gives a registered one at run time (never a build's).
         if (config.dev && isLoopback(location.hostname)) {
-            (globalThis as { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean }).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+            const page = globalThis as { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean | string };
+            if (typeof page.FIREBASE_APPCHECK_DEBUG_TOKEN !== 'string') page.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
         }
         try {
             appCheck = checkModule.initializeAppCheck(app, {

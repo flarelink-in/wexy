@@ -132,6 +132,24 @@ await page.ready;
 await page.send('Runtime.enable');
 await page.send('Page.enable');
 
+/** A registered App Check debug token (WEXY_APPCHECK_DEBUG_TOKEN, from the environment or .env.local); null when none. */
+function appCheckDebugToken() {
+    const name = 'WEXY_APPCHECK_DEBUG_TOKEN';
+    if (process.env[name]?.trim()) return process.env[name].trim();
+    const file = join(ROOT, '.env.local');
+    if (!existsSync(file)) return null;
+    const line = readFileSync(file, 'utf8').split(/\r?\n/).find(l => l.startsWith(`${name}=`));
+    return line?.slice(name.length + 1).trim() || null;
+}
+// A gateway that enforces App Check (D3) refuses what the studio cannot attest, and reCAPTCHA cannot attest localhost.
+// A registered debug token goes into the page before any of its scripts runs, and identity.ts keeps it. The SDK logs
+// only a token it makes, never one it is given, so the value reaches no console line, screenshot or report.
+const appCheckDebug = appCheckDebugToken();
+if (appCheckDebug) {
+    await page.send('Page.addScriptToEvaluateOnNewDocument', { source: `self.FIREBASE_APPCHECK_DEBUG_TOKEN = ${JSON.stringify(appCheckDebug)};` });
+}
+console.log(`drive-loop: App Check ${appCheckDebug ? 'by a registered debug token, given at run time (not shown)' : 'by what the studio can attest (no debug token given)'}`);
+
 const evaluate = async expression => {
     const r = await page.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
@@ -203,7 +221,7 @@ try {
             results.push({ name, idea, loopMs, built: b, calls, trace, hud, console: lines, errors: errorsOf(lines) });
             continue;
         }
-        step(`${name}: the plan streamed from the backend, with its model and tokens on the line`, modelOn(plan) && /\d+ in \/ \d+ out/.test(plan?.meta ?? ''), plan ? `${plan.state}: ${plan.detail} — ${plan.meta}` : 'no plan step');
+        step(`${name}: the plan streamed from the backend, with its model and tokens on the line`, modelOn(plan) && /\d[\d,]* in \/ \d[\d,]* out/.test(plan?.meta ?? ''), plan ? `${plan.state}: ${plan.detail} — ${plan.meta}` : 'no plan step');
         step(`${name}: every function streamed from the backend (${writes.map(w => w.title.slice(6)).join(', ') || 'none'})`, writes.length >= 2 && writes.every(modelOn), writes.map(w => `${w.title}: ${w.state} — ${w.meta}`));
         const lastVerify = verifies.at(-1);
         step(`${name}: the ladder passed on this GPU (${verifies.length} attempt${verifies.length === 1 ? '' : 's'})`, ended && lastVerify?.state === 'ok', lastVerify ? `${lastVerify.detail} — ${lastVerify.meta}` : 'no verify step');

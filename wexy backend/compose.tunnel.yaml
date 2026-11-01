@@ -8,9 +8,11 @@
 # profile or not, and the token would stop compose.prod.yaml before the tunnel exists.
 services:
   cloudflared:
-    # Token mode, as FlareLink's: which hostname maps to which service is set in the Zero Trust dashboard
-    # (api.wexy.ai -> http://forge-gateway:8400), so a change of hostname needs no redeploy. Unpinned, as
-    # FlareLink runs it; pin a tag if an update ever misbehaves.
+    # Token mode, as FlareLink's: which hostname maps to which service is set in the Zero Trust dashboard, so a change
+    # of hostname needs no redeploy. One tunnel an environment, its token in that environment's Infisical: merged with
+    # compose.dev.yaml (Infisical dev), tunnel wexy-dev, api-dev.wexy.ai -> http://forge-gateway:8400; with
+    # compose.prod.yaml (Infisical prod), later, tunnel wexy-prod, api.wexy.ai -> the same. Unpinned, as FlareLink runs
+    # it; pin a tag if an update ever misbehaves.
     image: cloudflare/cloudflared:latest
     command: tunnel --no-autoupdate run
     restart: unless-stopped

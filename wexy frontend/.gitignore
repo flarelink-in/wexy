@@ -1,6 +1,7 @@
 # Dependencies and builds
 node_modules/
 dist/
+dist-dev/
 *.tsbuildinfo
 
 # Logs and local run output (screenshots, films, reports)

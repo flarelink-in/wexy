@@ -10,9 +10,9 @@ import type { Identity } from './identity';
 /**
  * The routes where the gateway spends the App Check token, so each request needs a limited-use token of its
  * own: a cached one would pass once and be refused as a replay after. The gateway's ForgeRoutesTest pins the
- * same routes there (the agent turn's since EA2.4); test/http.test.mjs pins them here.
+ * same routes there (the agent turn's since EA2.4, a module call's since EA4.2); test/http.test.mjs pins them here.
  */
-export const SINGLE_USE_ROUTES: readonly string[] = ['POST /v1/forge/plan', 'POST /v1/agent/turn', 'POST /v1/worlds'];
+export const SINGLE_USE_ROUTES: readonly string[] = ['POST /v1/forge/plan', 'POST /v1/agent/turn', 'POST /v1/agent/module', 'POST /v1/worlds'];
 
 export function needsSingleUseAppCheck(method: string, path: string): boolean {
     const pathname = decodeURIComponent(new URL(path, 'https://gateway.invalid').pathname);

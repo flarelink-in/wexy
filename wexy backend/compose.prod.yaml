@@ -13,7 +13,9 @@
 #
 # Images come from deploy.sh: EventVision's Vultr registry and the `latest` tag while the product is developed (the
 # user, 2026-10-29, Q47); WEXY_REGISTRY and WEXY_IMAGE_TAG override them. With `latest`, `up -d` alone keeps the image
-# it has: `pull` first, then `up -d`.
+# it has: `pull` first, then `up -d`. Dev runs first (the user, 2026-10-31): compose.dev.yaml is this file's dev copy,
+# at api-dev.wexy.ai; a change here goes there too. Prod, when it comes, is api.wexy.ai and should pin a numbered tag
+# that ran on dev.
 name: wexy
 
 x-service: &service
@@ -71,10 +73,16 @@ services:
       # switch App Check off silently (AppCheckFilter passes everything through and logs an error).
       WEXY_APPCHECK_PROJECT_NUMBER: ${WEXY_APPCHECK_PROJECT_NUMBER:?missing from Infisical}
       WEXY_APPCHECK_ALLOWED_APP_IDS: ${WEXY_APPCHECK_ALLOWED_APP_IDS:?missing from Infisical}
-      # Monitor first; enforce once the deployed studio attests near 100% (deploy design §9, Q50).
-      WEXY_APPCHECK_ENFORCE: ${WEXY_APPCHECK_ENFORCE:-false}
-      # The studio's origins, comma-separated: the Firebase Hosting site, then wexy.ai once its DNS is live; and
-      # http://localhost:5173 while the laptop's studio tests against this host (the frontend's Q55).
+      # Enforced (the user, 2026-10-31: "app check enforced"; deploy design §9, D3): a request without a valid token
+      # from the Wexy web app is refused 403 `appcheck`. It fails closed: an unset value enforces, and
+      # WEXY_APPCHECK_ENFORCE=false in Infisical is the deliberate way back to monitor mode, whose log gives the ratio.
+      WEXY_APPCHECK_ENFORCE: ${WEXY_APPCHECK_ENFORCE:-true}
+      # Replay protection on the single-use routes (the plan, the agent turn, publishing): each limited-use token is
+      # spent with Google, and one already spent is refused. In force only together with WEXY_APPCHECK_ENFORCE.
+      WEXY_APPCHECK_REPLAY_ENFORCE: ${WEXY_APPCHECK_REPLAY_ENFORCE:-true}
+      # The studio's origins, comma-separated: https://wexy.ai and https://www.wexy.ai (Firebase Hosting's custom
+      # domain), then https://wexy-bf8f8.web.app as the fallback; http://localhost:5173 only while the laptop's studio
+      # tests against this host (the frontend's Q55), and out again after.
       WEXY_CORS_ALLOWED_ORIGINS: ${WEXY_CORS_ALLOWED_ORIGINS:?missing from Infisical}
       # Firebase uids allowed on /v1/admin/**; empty until the user has signed in once.
       WEXY_ADMIN_UIDS: ${WEXY_ADMIN_UIDS:-}
@@ -105,6 +113,11 @@ services:
       # The Meta key. Empty is allowed on purpose: the service starts paused and the studio shows the archive
       # (B4's mode); it spends nothing. Set it in Infisical to turn live creation on.
       WEXY_META_API_KEY: ${WEXY_META_API_KEY:-}
+      # The global spend ceilings in micro-USD, from this environment's Infisical (deploy design §10, §11). Forwarded by
+      # name alone: set, they replace application.yaml's ($15 a day, $40 a month); unset, compose leaves them out of the
+      # container and those defaults hold. Never an empty value: a cap bound to nothing denies every call.
+      WEXY_SPEND_GLOBAL_DAILYMICROUSD:
+      WEXY_SPEND_GLOBAL_MONTHLYMICROUSD:
       # B1.1 adds the datasource names here (compose.records.yaml carries the database side).
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8411/actuator/health"]

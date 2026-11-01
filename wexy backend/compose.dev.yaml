@@ -1,0 +1,111 @@
+# DEV COPY of compose.prod.yaml (docs/deploy-design.md, D3; FlareLink's pattern, its nginx/dev beside nginx/prod).
+# Dev is deployed first and prod later (the user, 2026-10-31). Only these differ from the prod file; keep the rest in
+# step with it:
+#   - the project, `wexy-dev`, so its containers (wexy-dev-forge-gateway-1 …), network and Redis volume never collide
+#     with prod's, and dev keeps a spend meter of its own;
+#   - the gateway's loopback port on the host, 8500, so that both stacks can run on one host;
+#   - Infisical's `dev` environment instead of `prod`, which holds dev's values: its tunnel token (api-dev.wexy.ai),
+#     its CORS origins (https://dev.wexy.ai, https://wexy-dev.web.app, and http://localhost:5173 for the laptop).
+# The Spring profile stays `prod`, the deployed one: dev differs from prod in its values, not in its settings. App
+# Check is enforced here too.
+#
+#     infisical run --env=dev -- docker compose -f compose.dev.yaml up -d                          # SSH only
+#     infisical run --env=dev -- docker compose -f compose.dev.yaml -f compose.tunnel.yaml up -d   # api-dev.wexy.ai
+#     ssh -L 8400:127.0.0.1:8500 <host>    # the laptop's 8400, as its drives and harnesses expect, onto dev's gateway
+#
+# Images: dev runs `latest`, which deploy.sh pushes after the release's number; prod, later, pins a number that ran on
+# dev first (WEXY_IMAGE_TAG on the host).
+name: wexy-dev
+
+x-service: &service
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
+
+services:
+  redis:
+    <<: *service
+    image: redis:7.2-alpine
+    # Persistent and bounded without eviction, as prod's: a full Redis refuses writes and SpendGuard refuses calls.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "96mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - wexy-redis:/data
+    mem_limit: 128m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  forge-gateway:
+    <<: *service
+    image: ${WEXY_REGISTRY:-blr.vultrcr.com/eventvision}/forge-gateway:${WEXY_IMAGE_TAG:-latest}
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      # Loopback only, 8500 (prod's is 8400): `ssh -L 8400:127.0.0.1:8500 <host>`. The public path is the tunnel.
+      - "127.0.0.1:8500:8400"
+    mem_limit: 640m
+    cpus: 1.0
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      WEXY_FORGE_SERVICE_URL: http://forge-service:8410
+      FIREBASE_SERVICE_ACCOUNT_B64: ${FIREBASE_SERVICE_ACCOUNT_B64:?missing from Infisical}
+      WEXY_INTERNAL_JWT_PRIVATE_KEY: ${WEXY_INTERNAL_JWT_PRIVATE_KEY:?missing from Infisical}
+      WEXY_APPCHECK_PROJECT_NUMBER: ${WEXY_APPCHECK_PROJECT_NUMBER:?missing from Infisical}
+      WEXY_APPCHECK_ALLOWED_APP_IDS: ${WEXY_APPCHECK_ALLOWED_APP_IDS:?missing from Infisical}
+      # Enforced, failing closed, as prod's: WEXY_APPCHECK_ENFORCE=false in Infisical dev is the deliberate way back to
+      # monitor mode. The laptop's studio attests with a registered debug token.
+      WEXY_APPCHECK_ENFORCE: ${WEXY_APPCHECK_ENFORCE:-true}
+      WEXY_APPCHECK_REPLAY_ENFORCE: ${WEXY_APPCHECK_REPLAY_ENFORCE:-true}
+      # Dev's studio origins: https://dev.wexy.ai, https://wexy-dev.web.app, and http://localhost:5173 for the laptop.
+      WEXY_CORS_ALLOWED_ORIGINS: ${WEXY_CORS_ALLOWED_ORIGINS:?missing from Infisical}
+      WEXY_ADMIN_UIDS: ${WEXY_ADMIN_UIDS:-}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8401/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+
+  forge-service:
+    <<: *service
+    image: ${WEXY_REGISTRY:-blr.vultrcr.com/eventvision}/forge-service:${WEXY_IMAGE_TAG:-latest}
+    depends_on:
+      redis:
+        condition: service_healthy
+      forge-gateway:
+        condition: service_started
+    # No ports: the gateway alone reaches it, by name, on this project's network.
+    mem_limit: 640m
+    cpus: 1.0
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      WEXY_GATEWAY_URL: http://forge-gateway:8400
+      WEXY_META_API_BASE_URL: ${WEXY_META_API_BASE_URL:-https://api.meta.ai/v1}
+      # Empty starts the service paused, as prod's: it spends nothing.
+      WEXY_META_API_KEY: ${WEXY_META_API_KEY:-}
+      # Dev's spend ceilings, from Infisical dev, forwarded by name as prod's. Set them below prod's: both stacks spend
+      # one Meta key, and each meter allows its own day (deploy design §11).
+      WEXY_SPEND_GLOBAL_DAILYMICROUSD:
+      WEXY_SPEND_GLOBAL_MONTHLYMICROUSD:
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8411/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+
+volumes:
+  # Named as prod's; compose prefixes the project, so this is wexy-dev_wexy-redis, a meter of dev's own.
+  wexy-redis:
