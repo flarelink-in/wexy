@@ -37,21 +37,28 @@ Use matching Firebase configuration on both sides for real sign-in.
 Removing `mock` enables live model calls and spends credit: supply the API key
 intentionally and review spend caps first. Redis persists counters on loopback 6390.
 
-Private docs, agent instructions, test sources, smoke/mutation tools and reports
-remain local and are excluded from Git. The build above packages the published
-application without tests; it does not certify runtime behavior. Runtime prompt
-Markdown, host rules and Maven wrapper distribution properties are tracked.
+Private docs, agent instructions and retained reports live in the separate
+`wexy-notes` repository. Test sources, fixtures and smoke/mutation tools are tracked
+with the application. The build above skips tests; it does not certify runtime
+behavior. Run `./mvnw -B verify` for the default suite, or
+`./mvnw -B clean verify -Predis-tests` for the strict Redis gate with Docker running.
+Runtime prompt Markdown, host rules and Maven wrapper distribution properties are tracked.
 
 ## Deploy
 
-Images are built from the packaged jars by `forge-gateway/Dockerfile` and `forge-service/Dockerfile`
-and pushed by `./deploy.sh forge-gateway` and `./deploy.sh forge-service` (`WEXY_REGISTRY` overrides the
-default registry; `WEXY_DRY_RUN=1` builds without pushing). On the host, `compose.prod.yaml`
-runs Redis, the gateway and the service, and `compose.tunnel.yaml` adds a Cloudflare tunnel, with every
-secret supplied as an environment variable by an operator-run secret manager:
+Images are built from the packaged jars by `forge-gateway/Dockerfile` and `forge-service/Dockerfile`.
+`bash deploy.sh` runs every test (`clean validate install -Predis-tests`, so Docker must be running), then
+builds both images, tags each with the next version (the registry's newest, its patch bumped) and `latest`,
+and pushes the version, then `latest`. `bash deploy.sh forge-gateway` releases one image; `WEXY_VERSION` sets
+the version, `WEXY_REGISTRY` the registry, and `WEXY_DRY_RUN=1` builds without pushing.
+
+On the host, `compose.dev.yaml` (dev, on `latest`) and `compose.prod.yaml` (prod, pinned to a version) each
+run Redis, the gateway and the service, and `compose.tunnel.yaml` adds a Cloudflare tunnel, with every secret
+supplied as an environment variable by an operator-run secret manager:
 
 ```sh
-infisical run --env=prod -- docker compose -f compose.prod.yaml -f compose.tunnel.yaml up -d
+infisical run --env=dev -- docker compose -f compose.dev.yaml -f compose.tunnel.yaml up -d
+WEXY_IMAGE_TAG=0.0.5 infisical run --env=prod -- docker compose -f compose.prod.yaml -f compose.tunnel.yaml up -d
 ```
 
 Without the tunnel file the stack has no public way in and is reached over SSH. `compose.records.yaml`

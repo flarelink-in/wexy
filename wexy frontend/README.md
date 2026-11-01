@@ -18,9 +18,9 @@ npm run build
 The dev server serves the landing page at `http://localhost:5173` and the studio at
 `/studio.html`. Build type-checks the source and produces the static site in `dist/`.
 
-Tests, contrast checks and GPU harnesses intentionally remain local, outside Git.
-Therefore `npm test`, `npm run contrast` and `npm run verify` need those local files
-and are not fresh-checkout commands. Build does not exercise a GPU or live calls.
+Tests, fixtures, contrast checks and executable development harnesses are tracked.
+Run `npm run verify` for the headless tests, contrast checks and production build.
+Build does not exercise a GPU or live calls; browser/GPU harnesses are separate checks.
 
 ## Backend and configuration
 
@@ -38,9 +38,9 @@ Every `VITE_*` value may reach the browser bundle. Never put the model API key,
 Firebase service account, benchmark bearer or internal signing key there. The
 backend owns paid model calls.
 
-Private docs, agent instructions, tests and dev harnesses are excluded from Git,
-but remain on the development machine. Embedded host rules are runtime resources
-and are included with the application.
+Private docs, agent instructions and retained local evidence live in the separate
+`wexy-notes` repository. Tests and dev harnesses stay with the application.
+Embedded host rules are runtime resources and are included with the application.
 
 ## Stack and attribution
 
