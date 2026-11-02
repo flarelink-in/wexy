@@ -97,7 +97,7 @@ class LoopLifecycleTest {
         s.restart(1_000_000L, 1_200);
 
         Disposable subscription = s.handler.plan(LoopTestServer.handlerRequest("/v1/forge/plan", "uid-1",
-                new PlanRequest("a spiral galaxy", "cosmic", 12))).subscribe(ignored -> {
+                new PlanRequest("a spiral galaxy", "cosmic", 12, null))).subscribe(ignored -> {
         }, error -> {
         });
         await(Duration.ofSeconds(5), () -> s.all(Generation.Kind.PLAN).size() == 1);
@@ -135,7 +135,7 @@ class LoopLifecycleTest {
         assertThat(s.fake.chatRequests()).isZero();
 
         Disposable subscription = s.handler.plan(LoopTestServer.handlerRequest("/v1/forge/plan", "uid-2",
-                new PlanRequest("a spiral galaxy", "cosmic", 12))).subscribe(ignored -> {
+                new PlanRequest("a spiral galaxy", "cosmic", 12, null))).subscribe(ignored -> {
         }, error -> {
         });
         await(Duration.ofSeconds(5), () -> s.all(Generation.Kind.PLAN).size() == 2);
@@ -152,7 +152,7 @@ class LoopLifecycleTest {
         s.fake.chat = FakeMetaApi.sse(0, streamOf(GALAXY, 4, STOP));
 
         ServerResponse response = s.handler.plan(LoopTestServer.handlerRequest("/v1/forge/plan", "uid-1",
-                new PlanRequest("a spiral galaxy", "cosmic", 12))).block(Duration.ofSeconds(10));
+                new PlanRequest("a spiral galaxy", "cosmic", 12, null))).block(Duration.ofSeconds(10));
 
         assertThat(response.statusCode().value()).isEqualTo(200);
         assertThat(s.only(Generation.Kind.PLAN).status()).isEqualTo(Generation.Status.RUNNING);

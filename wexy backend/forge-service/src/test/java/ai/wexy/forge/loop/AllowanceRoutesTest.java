@@ -143,6 +143,90 @@ class AllowanceRoutesTest {
         s.postAs("/v1/forge/author", anonymous("u1"), Map.of("planId", planId, "fn", "evolve")).expectStatus().isOk();
     }
 
+    /** A streamed call of `token`'s, read to its end, so the fake has had its request; its meta's generation id. */
+    private String streamedBy(String path, String token, Object body) {
+        List<ServerSentEvent<String>> events = s.postAs(path, token, body)
+                .expectStatus().isOk().returnResult(LoopTestServer.EVENTS).getResponseBody().collectList().block();
+        return LoopTestServer.data(events.get(0)).path("generationId").asText();
+    }
+
+    /** The W1 bug hunt (2026-11-02): a plan's authors stop at the prompt's budget, with nothing recorded or sent past it. */
+    @Test
+    void aPlansAuthorsStopAtItsBudget() throws Exception {
+        s.admit = TestAdmissions.admit(TestAdmissions.strict(1, 8), Clock.systemUTC());
+        s.restart(1_000_000L, 0);
+        s.fake.chat = FakeMetaApi.sse(0, streamOf(GALAXY, 4, STOP));
+        String planId = plannedBy(anonymous("u1"));
+        s.fake.chat = FakeMetaApi.sse(0, streamOf(FUNCTION, 2, STOP));
+        streamedBy("/v1/forge/author", anonymous("u1"), Map.of("planId", planId, "fn", "evolve"));
+        long sent = s.fake.chatRequests();
+        int records = s.store.snapshot().size();
+
+        JsonNode second = refusal("/v1/forge/author", anonymous("u1"), Map.of("planId", planId, "fn", "evolve"), 429);
+        assertThat(second.path("code").asText()).isEqualTo("rate");
+        assertThat(s.fake.chatRequests()).isEqualTo(sent);
+        assertThat(s.store.snapshot()).hasSize(records);
+    }
+
+    /**
+     * The W1 bug hunt: a repair's depth counts its own chain only, so repeating one at the same parent was unlimited (the
+     * escalator's too). The plan's repairs stop at its budget, siblings included.
+     */
+    @Test
+    void siblingRepairsStopAtThePlansBudget() throws Exception {
+        s.admit = TestAdmissions.admit(TestAdmissions.strict(8, 1), Clock.systemUTC());
+        s.restart(1_000_000L, 0);
+        s.fake.chat = FakeMetaApi.sse(0, streamOf(GALAXY, 4, STOP));
+        String planId = plannedBy(anonymous("u1"));
+        s.fake.chat = FakeMetaApi.sse(0, streamOf(FUNCTION, 2, STOP));
+        String authorId = streamedBy("/v1/forge/author", anonymous("u1"), Map.of("planId", planId, "fn", "evolve"));
+        streamedBy("/v1/forge/repair", anonymous("u1"), LoopTestServer.repairBody(authorId, LoopTestServer.diagnostic("a mismatch")));
+        long sent = s.fake.chatRequests();
+
+        JsonNode sibling = refusal("/v1/forge/repair", anonymous("u1"),
+                LoopTestServer.repairBody(authorId, LoopTestServer.diagnostic("a mismatch")), 429);
+        assertThat(sibling.path("code").asText()).isEqualTo("rate");
+        assertThat(s.fake.chatRequests()).isEqualTo(sent);
+    }
+
+    /**
+     * The W1 bug hunt: the studio re-plans once when the model failed a plan, whose call was dispatched and whose prompt is
+     * spent. A re-plan that names it with the same idea runs inside its prompt; a second re-plan, or one of another idea,
+     * is a new prompt, refused here with the allowance spent and nothing sent.
+     */
+    @Test
+    void aReplanOfAFailedPlanRunsInsideItsPromptOnce() throws Exception {
+        String failed = plannedBy(anonymous("u1"));
+        long sent = s.fake.chatRequests();
+
+        // Another idea first, while the re-plan is still unspent: refused for its idea, not for the budget.
+        assertThat(refusal("/v1/forge/plan", anonymous("u1"),
+                Map.of("prompt", "another galaxy", "style", "cosmic", "seconds", 12, "retryOf", failed), 403).path("code").asText())
+                .as("a re-plan of another idea").isEqualTo("account-required");
+        String replan = streamedBy("/v1/forge/plan", anonymous("u1"),
+                Map.of("prompt", "a spiral galaxy", "style", "cosmic", "seconds", 12, "retryOf", failed));
+        assertThat(replan).isNotEqualTo(failed);
+        assertThat(s.fake.chatRequests()).isEqualTo(sent + 1);
+
+        assertThat(refusal("/v1/forge/plan", anonymous("u1"),
+                Map.of("prompt", "a spiral galaxy", "style", "cosmic", "seconds", 12, "retryOf", replan), 403).path("code").asText())
+                .as("a second re-plan").isEqualTo("account-required");
+        assertThat(s.fake.chatRequests()).isEqualTo(sent + 1);
+        // The re-plan's authors answer to the same prompt.
+        s.fake.chat = FakeMetaApi.sse(0, streamOf(FUNCTION, 2, STOP));
+        streamedBy("/v1/forge/author", anonymous("u1"), Map.of("planId", replan, "fn", "evolve"));
+    }
+
+    /** retryOf names a plan by its generation id; anything else is refused before anything is admitted. */
+    @Test
+    void aRetryOfThatIsNoPlanIdIsABadRequest() throws Exception {
+        assertThat(refusal("/v1/forge/plan", anonymous("u1"),
+                Map.of("prompt", "a spiral galaxy", "style", "cosmic", "seconds", 12, "retryOf", "plan-1"), 400).path("code").asText())
+                .isEqualTo("bad-request");
+        assertThat(s.fake.chatRequests()).isZero();
+        plannedBy(anonymous("u1"));
+    }
+
     /** PL-T13: a Director turn naming its plan runs inside its prompt; naming none, it is an entry, refused with the allowance spent. */
     @Test
     void aDirectorTurnNamingItsPlanRunsInsideItsPrompt() throws Exception {

@@ -169,6 +169,33 @@ class PromptGrantsTest {
                 .isEqualTo(GrantStore.Join.NONE);
     }
 
+    /**
+     * A plan's own follow-ups (the W1 bug hunt, 2026-11-02): its authors and its repairs each stop at their budget,
+     * siblings included, so one prompt cannot drain a lane; one re-plan of the same idea runs inside it, and the
+     * re-plan's id answers to the same prompt and the same spent budgets.
+     */
+    @Test
+    void aPlansAuthorsRepairsAndReplanRunWithinItsBudgets() {
+        Caller u1 = signedIn("u1");
+        grants.grant(u1, "plan-1", "idea-hash").spent();
+
+        for (int i = 0; i < 8; i++) {
+            assertThat(grants.follow(u1, "plan-1", PromptGrants.Kind.AUTHOR, null, null)).isEqualTo(GrantStore.Join.JOINED);
+        }
+        assertThat(grants.follow(u1, "plan-1", PromptGrants.Kind.AUTHOR, null, null)).as("a ninth author").isEqualTo(GrantStore.Join.FULL);
+        for (int i = 0; i < 8; i++) {
+            assertThat(grants.follow(u1, "plan-1", PromptGrants.Kind.REPAIR, null, null)).isEqualTo(GrantStore.Join.JOINED);
+        }
+        assertThat(grants.follow(u1, "plan-1", PromptGrants.Kind.REPAIR, null, null)).as("a ninth repair").isEqualTo(GrantStore.Join.FULL);
+        assertThat(grants.follow(anonymous("u2", "net-a"), "plan-1", PromptGrants.Kind.AUTHOR, null, null)).as("another caller's")
+                .isEqualTo(GrantStore.Join.NONE);
+
+        assertThat(grants.join(u1, "plan-1", PromptGrants.Kind.REPLAN, "other-hash", "plan-2")).as("a re-plan of another idea").isFalse();
+        assertThat(grants.join(u1, "plan-1", PromptGrants.Kind.REPLAN, "idea-hash", "plan-2")).isTrue();
+        assertThat(grants.join(u1, "plan-2", PromptGrants.Kind.REPLAN, "idea-hash", "plan-3")).as("a second re-plan").isFalse();
+        assertThat(grants.follow(u1, "plan-2", PromptGrants.Kind.AUTHOR, null, null)).as("the re-plan's authors").isEqualTo(GrantStore.Join.FULL);
+    }
+
     /** Retry-After is rounded up (the W1 review, 2026-11-02): waiting it never ends before the reset, nor does a time shown from it. */
     @Test
     void aQuotasRetryAfterNeverEndsBeforeTheReset() {
@@ -243,17 +270,17 @@ class PromptGrantsTest {
     /** Startup stops without every allowance, and without a well-formed uid key. */
     @Test
     void anUnsetAllowanceOrABadKeyStopsStartup() {
-        assertThatThrownBy(() -> new PromptGrants(store, new AllowanceProperties(null, 1, 1, 20, 0, java.time.Duration.ofHours(2), 5, 2, 44,
+        assertThatThrownBy(() -> new PromptGrants(store, new AllowanceProperties(null, 1, 1, 20, 0, java.time.Duration.ofHours(2), 5, 2, 44, 8, 8, 1,
                 java.time.Duration.ofDays(400), TestAdmissions.UID_KEY, false), clock))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("anonymous-per-account");
-        assertThatThrownBy(() -> new PromptGrants(store, new AllowanceProperties(1, 1, 1, 20, 0, java.time.Duration.ofHours(2), 5, 2, 44,
+        assertThatThrownBy(() -> new PromptGrants(store, new AllowanceProperties(1, 1, 1, 20, 0, java.time.Duration.ofHours(2), 5, 2, 44, 8, 8, 1,
                 java.time.Duration.ofDays(400), "abc", false), clock))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("uid-hmac-hex");
-        assertThatThrownBy(() -> new PromptGrants(store, new AllowanceProperties(1, 1, 1, 20, 0, java.time.Duration.ofHours(2), 5, 2, 44,
+        assertThatThrownBy(() -> new PromptGrants(store, new AllowanceProperties(1, 1, 1, 20, 0, java.time.Duration.ofHours(2), 5, 2, 44, 8, 8, 1,
                 java.time.Duration.ofDays(400), "", true), clock))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("WEXY_UID_HMAC_KEY");
         // A missing key where none is required counts no one: nothing is granted.
-        PromptGrants keyless = new PromptGrants(store, new AllowanceProperties(1, 1, 1, 20, 0, java.time.Duration.ofHours(2), 5, 2, 44,
+        PromptGrants keyless = new PromptGrants(store, new AllowanceProperties(1, 1, 1, 20, 0, java.time.Duration.ofHours(2), 5, 2, 44, 8, 8, 1,
                 java.time.Duration.ofDays(400), "", false), clock);
         refused(() -> keyless.grant(signedIn("u1"), "plan-1", "h"), ErrorCode.UNAVAILABLE);
     }
@@ -261,7 +288,7 @@ class PromptGrantsTest {
     /** The day starts at the configured hour, in UTC. */
     @Test
     void theDayStartsAtTheConfiguredHour() {
-        PromptGrants six = new PromptGrants(store, new AllowanceProperties(1, 1, 1, 20, 6, java.time.Duration.ofHours(2), 5, 2, 44,
+        PromptGrants six = new PromptGrants(store, new AllowanceProperties(1, 1, 1, 20, 6, java.time.Duration.ofHours(2), 5, 2, 44, 8, 8, 1,
                 java.time.Duration.ofDays(400), TestAdmissions.UID_KEY, false), clock);
         assertThat(six.nextReset()).isEqualTo(Instant.parse("2026-11-03T06:00:00Z"));
         clock.set(Instant.parse("2026-11-03T05:59:00Z"));

@@ -47,6 +47,13 @@ test('L9 plan: the request, the streamed text, L0 applied, the generation from m
     assert.equal(client.source, 'live');
 });
 
+test('the W1 bug hunt: a re-plan names the plan it replaces in retryOf (a first plan sends none: L9)', async () => {
+    const api = fakeApi(streamOf(sse('meta', { ...META, role: 'planner', fn: undefined }), sse('delta', { text: H1.plans.galaxy }), sse('usage', { in: 2200, out: 400, reasoning: 90, cached: 2048 }), sse('done', { status: 'ok' })));
+    const client = createLiveClient(api);
+    await client.plan({ prompt: 'a galaxy', style: 'cosmic', seconds: 12, retryOf: '01JPLAN0000000000000000000' }, {}, signal());
+    assert.deepEqual(api.requests[0].body, { prompt: 'a galaxy', style: 'cosmic', seconds: 12, retryOf: '01JPLAN0000000000000000000' });
+});
+
 test('L10 a plan the server let through but L0 refuses is "upstream", said with the first problems', async () => {
     const bad = JSON.stringify({ ...JSON.parse(H1.plans.galaxy), uniforms: [] });
     const api = fakeApi(streamOf(sse('meta', META), sse('delta', { text: bad }), sse('done', { status: 'ok' })));

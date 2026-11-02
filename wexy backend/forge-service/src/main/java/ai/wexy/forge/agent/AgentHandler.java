@@ -194,7 +194,7 @@ public class AgentHandler {
         // A number beyond an int is refused, not wrapped into range (4294967308 is not 12).
         PlanRequest checked = new PlanRequest(body.path("prompt").isTextual() ? body.path("prompt").asText() : null,
                 body.path("style").isTextual() ? body.path("style").asText() : null,
-                seconds.isIntegralNumber() && seconds.canConvertToInt() ? seconds.asInt() : null).validated(caps);
+                seconds.isIntegralNumber() && seconds.canConvertToInt() ? seconds.asInt() : null, null).validated(caps);
         return new AgentRequest(checked.prompt(), checked.style(), checked.seconds());
     }
 

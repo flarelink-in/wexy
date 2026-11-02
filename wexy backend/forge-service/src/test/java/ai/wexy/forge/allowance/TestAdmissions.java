@@ -22,10 +22,16 @@ public final class TestAdmissions {
 
     /**
      * W1's numbers: one anonymous prompt per account and network, one a day signed in, twenty for an admin; three
-     * revisions, five Director turns, 44 module calls.
+     * revisions, five Director turns, 44 module calls, eight authors and eight repairs a plan, one re-plan.
      */
     public static AllowanceProperties strict() {
-        return new AllowanceProperties(1, 1, 1, 20, 0, Duration.ofHours(2), 5, 3, 44, Duration.ofDays(400), UID_KEY, false);
+        return strict(8, 8);
+    }
+
+    /** As {@link #strict()}, with `authorCalls` authors and `repairCalls` repairs a plan. */
+    public static AllowanceProperties strict(int authorCalls, int repairCalls) {
+        return new AllowanceProperties(1, 1, 1, 20, 0, Duration.ofHours(2), 5, 3, 44, authorCalls, repairCalls, 1, Duration.ofDays(400),
+                UID_KEY, false);
     }
 
     /** Room for the tests about something else: every allowance at a thousand, so none of them decides a test. */
@@ -35,8 +41,8 @@ public final class TestAdmissions {
 
     /** As {@link #wide()}, with `moduleCalls` module calls a prompt. */
     public static AllowanceProperties wide(int moduleCalls) {
-        return new AllowanceProperties(1000, 1000, 1000, 1000, 0, Duration.ofHours(2), 1000, 1000, moduleCalls, Duration.ofDays(400),
-                UID_KEY, false);
+        return new AllowanceProperties(1000, 1000, 1000, 1000, 0, Duration.ofHours(2), 1000, 1000, moduleCalls, 1000, 1000, 1000,
+                Duration.ofDays(400), UID_KEY, false);
     }
 
     /** An admission under `properties`, over a new in-memory store on `clock`, with the recorded content safety. */

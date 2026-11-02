@@ -338,8 +338,11 @@ final class LoopTestServer implements AutoCloseable {
         }
     }
 
+    /** An OK plan in the store, as the plan route leaves it, with its prompt granted to `uid` (its authors and repairs join it). */
     String storedPlan(String uid, String draft) {
-        return stored(Generation.Kind.PLAN, null, null, uid, draft, Generation.Status.OK);
+        String id = stored(Generation.Kind.PLAN, null, null, uid, draft, Generation.Status.OK);
+        admit.admission().entry(new Caller(uid, true, false, "anonymous", TestAdmissions.NETWORK), id, "a spiral galaxy", "plan").spent();
+        return id;
     }
 
     /** A finished generation in the store, as an earlier call would have left it. */

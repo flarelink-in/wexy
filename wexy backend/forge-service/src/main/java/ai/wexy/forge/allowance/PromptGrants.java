@@ -35,10 +35,12 @@ public class PromptGrants {
 
     /**
      * What a follow-up names, and so which of its grant's budgets it uses. A module call names its turn and carries its
-     * prompt: it is inside that prompt or refused, never an entry of its own (the W1 review, 2026-11-02).
+     * prompt; a plan's author or repair call names the plan: each is inside that prompt or refused, never an entry of its
+     * own. A re-plan names the plan the model failed and carries its idea: inside it, or an entry (the W1 review and its
+     * bug hunt, 2026-11-02).
      */
     public enum Kind {
-        DIRECTOR("director"), REVISION("revision"), MODULE("modules");
+        DIRECTOR("director"), REVISION("revision"), MODULE("modules"), AUTHOR("authors"), REPAIR("repairs"), REPLAN("replans");
 
         final String field;
 
@@ -176,6 +178,9 @@ public class PromptGrants {
                 case DIRECTOR -> properties.directorTurns();
                 case REVISION -> properties.revisions();
                 case MODULE -> properties.moduleCalls();
+                case AUTHOR -> properties.authorCalls();
+                case REPAIR -> properties.repairCalls();
+                case REPLAN -> properties.replans();
             };
             GrantStore.Join join = store.join(GRANT + grantId, owner, kind.field, limit, promptHash, newId == null ? null : INDEX + newId, grantId);
             log.info("allowance.follow-up kind={} grant={} {}", kind.field, grantId, join.name().toLowerCase());

@@ -19,6 +19,11 @@ import java.time.Duration;
  * @param revisions           program revision turns one prompt covers (3: the frontend candidate's Q_C since Q110)
  * @param moduleCalls         module calls one prompt covers, each carrying the prompt its turn was granted for (44: two
  *                            attempts of the candidate's Q_C, 12 authors and 10 repairs)
+ * @param authorCalls         a plan's author calls one prompt covers (8: the studio's most is three functions, each
+ *                            retried once on an upstream error, so 6)
+ * @param repairCalls         a plan's repair calls one prompt covers, siblings included (8: the studio's most is three
+ *                            repairs, each retried once, so 6)
+ * @param replans             plans that replace one the model failed, inside its prompt (1: the studio retries once)
  * @param accountMark         how long an anonymous account's spent mark is kept: "ever", bounded for Redis (400 days)
  * @param uidHmacHex          the uid key (WEXY_UID_HMAC_KEY): 32 bytes as 64 hex characters
  * @param uidKeyRequired      true in prod: startup stops without the uid key
@@ -26,8 +31,8 @@ import java.time.Duration;
 @ConfigurationProperties(prefix = "wexy.allowance")
 public record AllowanceProperties(Integer anonymousPerAccount, Integer anonymousPerNetwork, Integer earlyAccessPerDay,
                                   Integer adminPerDay, Integer dayStartsAtHourUtc, Duration promptLife, Integer directorTurns,
-                                  Integer revisions, Integer moduleCalls, Duration accountMark, String uidHmacHex,
-                                  Boolean uidKeyRequired) {
+                                  Integer revisions, Integer moduleCalls, Integer authorCalls, Integer repairCalls,
+                                  Integer replans, Duration accountMark, String uidHmacHex, Boolean uidKeyRequired) {
 
     /** The same values, checked: every one set and in range, or startup stops. */
     public AllowanceProperties validated() {
@@ -38,6 +43,9 @@ public record AllowanceProperties(Integer anonymousPerAccount, Integer anonymous
         count("director-turns", directorTurns);
         count("revisions", revisions);
         count("module-calls", moduleCalls);
+        count("author-calls", authorCalls);
+        count("repair-calls", repairCalls);
+        count("replans", replans);
         if (dayStartsAtHourUtc == null || dayStartsAtHourUtc < 0 || dayStartsAtHourUtc > 23) {
             throw new IllegalStateException("wexy.allowance.day-starts-at-hour-utc must be set, 0 to 23.");
         }

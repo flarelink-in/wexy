@@ -204,6 +204,22 @@ test('L5 upstream is retried once: a plan that fails twice is "didn\'t come thro
     assert.equal(e.sentence, COPY.failures['author-failed']);
 });
 
+test('the W1 bug hunt: the re-plan names the plan the model failed, so it runs inside that prompt; one that never said its id names none', async () => {
+    const meta = { generationId: '01JFAILEDPLAN0000000000000', source: 'live', model: 'm', role: 'planner', fn: null, promptVersion: 'planner.v1' };
+    const failed = (req, progress) => { progress.onMeta?.(meta); return new ForgeError('upstream', 502, 'bad plan'); };
+    const c = fakeClient({ plan: [failed] });
+    assert.equal((await run(c, fakeVerifier(ok())).promise).ok, true);
+    const plans = c.calls.filter(x => x[0] === 'plan').map(x => x[1]);
+    assert.equal(plans.length, 2);
+    assert.equal(plans[0].retryOf, undefined, 'a first plan names none');
+    assert.equal(plans[1].retryOf, meta.generationId, 'the re-plan names the plan it replaces');
+    assert.equal(plans[1].prompt, plans[0].prompt, 'with the same idea');
+
+    const silent = fakeClient({ plan: [new ForgeError('upstream', 502, 'bad plan')] });
+    assert.equal((await run(silent, fakeVerifier(ok())).promise).ok, true);
+    assert.equal(silent.calls.filter(x => x[0] === 'plan')[1][1].retryOf, undefined, 'no meta, no plan to name');
+});
+
 test('L6 one slow function fails the author step and stops its siblings; "still writing" is said after the slow interval', async () => {
     const client = fakeClient({ 'author.sky': [new ForgeError('timeout', 504, 'late')], 'author.evolve': ['slow'] });
     const t0 = performance.now();

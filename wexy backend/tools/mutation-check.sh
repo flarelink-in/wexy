@@ -365,8 +365,27 @@ mutate "a dropped admission keeping its grant" "$A/PromptAdmission.java" forge-s
     's/Schedulers\.boundedElastic\(\)\.schedule\(\(\(Grant\) grant\)::release\)\)\);/Schedulers.boundedElastic().schedule(() -> { })));/'
 mutate "Retry-After floored" "$A/PromptGrants.java" forge-service PromptGrantsTest \
     's/Math\.ceilDiv\(millis, 1000L\)/millis \/ 1000L/'
+
+# The W1 bug hunt (2026-11-02): a plan's authors and repairs run inside its prompt, within their budgets (siblings
+# included); the studio's re-plan of a failed plan runs inside it once, with the same idea; retryOf is a plan's id.
+mutate "an author outside its plan's prompt" "$S/loop/LoopHandler.java" forge-service AllowanceRoutesTest \
+    's/inside\(caller, plan\.id\(\), PromptGrants\.Kind\.AUTHOR\)/Mono.just(Boolean.TRUE)/'
+mutate "a repair outside its plan's prompt" "$S/loop/LoopHandler.java" forge-service AllowanceRoutesTest \
+    's/inside\(caller, plan\.id\(\), PromptGrants\.Kind\.REPAIR\)/Mono.just(Boolean.TRUE)/'
+mutate "authors past their budget" "$A/PromptGrants.java" forge-service PromptGrantsTest \
+    's/case AUTHOR -> properties\.authorCalls\(\);/case AUTHOR -> Long.MAX_VALUE;/'
+mutate "repairs past their budget" "$A/PromptGrants.java" forge-service PromptGrantsTest \
+    's/case REPAIR -> properties\.repairCalls\(\);/case REPAIR -> Long.MAX_VALUE;/'
+mutate "re-plans past their budget" "$A/PromptGrants.java" forge-service PromptGrantsTest \
+    's/case REPLAN -> properties\.replans\(\);/case REPLAN -> Long.MAX_VALUE;/'
+mutate "a re-plan never inside its prompt" "$A/PromptAdmission.java" forge-service AllowanceRoutesTest \
+    's/if \(failedPlanId != null && grants\.join/if (false \&\& grants.join/'
+mutate "a re-plan of another idea joined" "$A/PromptAdmission.java" forge-service AllowanceRoutesTest \
+    's/PromptGrants\.Kind\.REPLAN, sha256\(prompt\), planId\)/PromptGrants.Kind.REPLAN, null, planId)/'
+mutate "a retryOf that is no plan's id" "$S/loop/PlanRequest.java" forge-service AllowanceRoutesTest \
+    's/if \(retryOf != null && !DirectRequest\.ULID\.matcher\(retryOf\)\.matches\(\)\) \{/if (false) {/'
 mutate "a plan not admitted" "$S/loop/LoopHandler.java" forge-service AllowanceRoutesTest \
-    's/return admit\(\(\) -> admission\.entry\(caller, id, plan\.prompt\(\), "plan"\)\)\.flatMap/return admit(() -> null).flatMap/'
+    's/return admit\(\(\) -> admission\.replan\(caller, plan\.retryOf\(\), id, plan\.prompt\(\)\)\)\.flatMap/return admit(() -> null).flatMap/'
 mutate "a turn not admitted" "$S/agent/AgentHandler.java" forge-service AgentRoutesTest \
     's/\? admission\.entry\(caller, turnId, turn\.prompt\(\), "turn"\)/? null/'
 

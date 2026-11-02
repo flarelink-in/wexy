@@ -70,6 +70,32 @@ public class PromptAdmission {
     }
 
     /**
+     * A plan that replaces one the model failed (the studio's own retry; the W1 bug hunt, 2026-11-02): inside that plan's
+     * prompt when it names one of the caller's, carries the same idea and a re-plan is left, since that plan's call was
+     * dispatched and its prompt spent; an entry otherwise. The idea was checked when the prompt was granted.
+     */
+    public Grant replan(Caller caller, String failedPlanId, String planId, String prompt) {
+        if (failedPlanId != null && grants.join(caller, failedPlanId, PromptGrants.Kind.REPLAN, sha256(prompt), planId)) {
+            return null;
+        }
+        return entry(caller, planId, prompt, "plan");
+    }
+
+    /**
+     * A plan's author or repair call (the W1 bug hunt, 2026-11-02): inside the plan's prompt, within its budget of `kind`
+     * (siblings included), or refused before anything is recorded or sent: {@code 404} when the prompt is gone,
+     * {@code 429 rate} when the budget is spent. It carries no text of the creator's: the plan's is the server's. Blocking.
+     */
+    public void planCall(Caller caller, String planId, PromptGrants.Kind kind) {
+        switch (grants.follow(caller, planId, kind, null, null)) {
+            case JOINED -> { }
+            case FULL -> throw new ForgeException(ErrorCode.RATE, kind == PromptGrants.Kind.REPAIR
+                    ? "This world has made all of its repair calls." : "This world has made all of its function calls.");
+            case NONE -> throw new ForgeException(ErrorCode.NOT_FOUND, "This world isn't available.");
+        }
+    }
+
+    /**
      * A module call (the W1 review, 2026-11-02): inside its turn's prompt or refused, never an entry of its own. It must
      * carry the prompt its turn was granted for, whose text was checked then, so it is not checked again; the grant must
      * still be alive and the caller's, with a module call left. Otherwise nothing is recorded or sent: {@code 404} as for

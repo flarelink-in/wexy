@@ -3,6 +3,7 @@ package ai.wexy.forge.loop;
 import ai.wexy.common.ErrorCode;
 import ai.wexy.forge.allowance.Grant;
 import ai.wexy.forge.allowance.PromptAdmission;
+import ai.wexy.forge.allowance.PromptGrants;
 import ai.wexy.forge.allowance.Role;
 import ai.wexy.forge.error.ForgeException;
 import ai.wexy.forge.identity.Caller;
@@ -141,8 +142,9 @@ public class LoopHandler {
                 .flatMap(body -> {
                     PlanRequest plan = body.validated(loop.caps());
                     String id = Ulid.next(Instant.now());
-                    // W1: an entry request, admitted before any record or charge; its authors and repairs name it.
-                    return admit(() -> admission.entry(caller, id, plan.prompt(), "plan")).flatMap(grant -> {
+                    // W1: an entry request, admitted before any record or charge; its authors and repairs name it. A plan
+                    // that replaces one the model failed (retryOf, the studio's own retry) runs inside that one's prompt.
+                    return admit(() -> admission.replan(caller, plan.retryOf(), id, plan.prompt())).flatMap(grant -> {
                         Prompt prompt = prompts.plan(plan.prompt(), plan.style(), plan.seconds());
                         return stream(id, Generation.Kind.PLAN, null, null, "planner", prompt, json(plan), caller, grant.orElse(null));
                     });
@@ -165,8 +167,19 @@ public class LoopHandler {
                     }
                     String idea = read(plan.input()).path("prompt").asText();
                     Prompt prompt = prompts.author(author.fn(), idea, draft);
-                    return stream(Generation.Kind.AUTHOR, plan.id(), author.fn(), "author", prompt, json(author), caller);
+                    // Inside the plan's prompt, within its authors (the W1 bug hunt), off the event loop (Redis).
+                    return inside(caller, plan.id(), PromptGrants.Kind.AUTHOR)
+                            .flatMap(admitted -> stream(Generation.Kind.AUTHOR, plan.id(), author.fn(), "author", prompt, json(author), caller));
                 });
+    }
+
+    /** A plan's follow-up inside its prompt, within its budget of `kind`, checked off the event loop (Redis); else its refusal. */
+    private Mono<Boolean> inside(Caller caller, String planId, PromptGrants.Kind kind) {
+        return Mono.fromCallable(() -> {
+                    admission.planCall(caller, planId, kind);
+                    return Boolean.TRUE;
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     /**
@@ -192,9 +205,12 @@ public class LoopHandler {
                         throw new ForgeException(ErrorCode.BAD_REQUEST, "This function has been repaired three times already.");
                     }
                     String role = depth < MAX_REPAIRS - 1 ? "repairer" : "escalator";
-                    JsonNode draft = read(planOf(parent).orElseThrow(LoopHandler::unknownWorld).output());
+                    Generation plan = planOf(parent).orElseThrow(LoopHandler::unknownWorld);
+                    JsonNode draft = read(plan.output());
                     Prompt prompt = prompts.repair(parent.fn(), draft, CodeBlocks.unfence(parent.output()), repair.diagnostics(), depth + 1);
-                    return stream(Generation.Kind.REPAIR, parent.id(), parent.fn(), role, prompt, json(repair), caller);
+                    // Inside the plan's prompt, within its repairs, siblings included (the depth counts one chain only).
+                    return inside(caller, plan.id(), PromptGrants.Kind.REPAIR)
+                            .flatMap(admitted -> stream(Generation.Kind.REPAIR, parent.id(), parent.fn(), role, prompt, json(repair), caller));
                 });
     }
 

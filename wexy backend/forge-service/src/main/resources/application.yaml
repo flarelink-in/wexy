@@ -118,6 +118,13 @@ wexy:
     # Module calls one prompt covers (the W1 review, 2026-11-02): two attempts of the candidate's Q_C (12 authors and 10
     # repairs), so writing the modules again once still fits. Each must carry the prompt its turn was granted for.
     module-calls: 44
+    # A plan's own follow-ups (the W1 bug hunt, 2026-11-02): its authors and repairs, siblings included, each counted
+    # against the plan's prompt, so one prompt cannot drain a lane. The studio's most for one world is three authors and
+    # three repairs, each retried once on an upstream error (6 each); 8 leaves room for two. One re-plan: the studio's
+    # own retry of a plan the model failed, which names it and carries the same idea.
+    author-calls: 8
+    repair-calls: 8
+    replans: 1
     account-mark: 400d
     # 32 random bytes as 64 hex characters, from Infisical; the prod profile refuses to start without it. Never rotated
     # on deploy: a new key makes every caller new.

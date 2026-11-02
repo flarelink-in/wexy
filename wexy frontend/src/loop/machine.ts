@@ -210,11 +210,17 @@ export async function runLoop<W>(deps: LoopDeps<W>, req: LoopRequest, onEvent: (
     try {
         signal.throwIfAborted();
 
-        // 1. The plan, re-planned once when the backend no longer holds it or answered badly.
+        // 1. The plan, re-planned once when the backend no longer holds it or answered badly. The re-plan names the plan
+        //    its meta said it was (W1's bug hunt, 2026-11-02): that call was dispatched and its prompt spent, so the
+        //    re-plan runs inside it; one that never said is an entry, as a plan whose call never went is given back.
         emit({ type: 'planning' });
         const t0 = performance.now();
+        let replaced: string | undefined;
         const plan = await withSlow(slowMs, () => emit({ type: 'slow', what: 'plan' }), () =>
-            retryOnce(() => client.plan(req, { onText: soFar => emit({ type: 'plan-text', soFar }) }, signal), error => emit({ type: 'retrying', what: 'plan', error })));
+            retryOnce(() => client.plan(replaced ? { ...req, retryOf: replaced } : req, {
+                onText: soFar => emit({ type: 'plan-text', soFar }),
+                onMeta: generation => { if (generation.generationId) replaced = generation.generationId; },
+            }, signal), error => emit({ type: 'retrying', what: 'plan', error })));
         const planMs = performance.now() - t0;
         generations.push(plan.generation);
         emit({ type: 'planned', draft: plan.draft, generation: plan.generation, clamped: plan.clamped, ready: !!plan.ready });

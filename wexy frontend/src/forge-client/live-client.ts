@@ -74,7 +74,8 @@ export function createLiveClient(api: Api, deadlines: Deadlines = DEADLINES): Fo
         source: 'live',
 
         async plan(req, progress, signal): Promise<PlanResult> {
-            const { text, generation } = await stream('/v1/forge/plan', { prompt: req.prompt, style: req.style, seconds: req.seconds }, 'planner', deadlines.planMs, progress, signal);
+            const body = { prompt: req.prompt, style: req.style, seconds: req.seconds, ...(req.retryOf ? { retryOf: req.retryOf } : {}) };
+            const { text, generation } = await stream('/v1/forge/plan', body, 'planner', deadlines.planMs, progress, signal);
             const parsed = parseDraft(text);
             if (!parsed.draft) {
                 // The server validated the same text; a refusal here is a drift between the two schemas, said plainly.

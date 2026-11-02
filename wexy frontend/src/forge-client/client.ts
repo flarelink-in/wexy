@@ -33,6 +33,11 @@ export interface PlanRequest {
     prompt: string;
     style: Style | 'auto';
     seconds: number;
+    /**
+     * The plan this one replaces after the model failed it, its generation id (the W1 bug hunt, 2026-11-02): the loop's
+     * own retry, which then runs inside that plan's prompt instead of asking for a second one. Absent on a first plan.
+     */
+    retryOf?: string;
 }
 
 export interface PlanResult {
