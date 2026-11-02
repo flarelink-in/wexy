@@ -370,9 +370,13 @@ function sentenceFor(code: ErrorCode): string {
         case 'paused': return COPY.failures.budget;
         case 'rate': return COPY.failures.rate;
         case 'unavailable': return COPY.failures.offline;
+        // W1: a revision that names no turn the caller still has is an entry, so it meets the allowance and content
+        // safety as a first turn does, and is said as one.
+        case 'account-required': return COPY.failures.allowance;
+        case 'quota': return COPY.failures.quota;
+        case 'content-refused': return COPY.failures.refused;
         case 'auth':
         case 'appcheck':
-        case 'account-required':
         case 'forbidden': return COPY.failures['sign-in'];
         case 'timeout': return COPY.failures['author-slow'];
         case 'upstream': return COPY.candidate.stream;

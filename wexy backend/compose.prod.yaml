@@ -86,6 +86,9 @@ services:
       WEXY_CORS_ALLOWED_ORIGINS: ${WEXY_CORS_ALLOWED_ORIGINS:?missing from Infisical}
       # Firebase uids allowed on /v1/admin/**; empty until the user has signed in once.
       WEXY_ADMIN_UIDS: ${WEXY_ADMIN_UIDS:-}
+      # W1: the network key forge's allowances count anonymous callers by (ClientNetworkKey; the creations platform
+      # design §11). Required: the prod profile stops without it. Never rotated on deploy: a new key resets every network.
+      WEXY_IP_HMAC_KEY: ${WEXY_IP_HMAC_KEY:?missing from Infisical}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8401/actuator/health"]
       interval: 15s
@@ -118,6 +121,17 @@ services:
       # container and those defaults hold. Never an empty value: a cap bound to nothing denies every call.
       WEXY_SPEND_GLOBAL_DAILYMICROUSD:
       WEXY_SPEND_GLOBAL_MONTHLYMICROUSD:
+      # W1 (Q95): the lanes' daily ceilings, forwarded by name as the global's; unset, application.yaml's hold.
+      WEXY_SPEND_LANE_ANONYMOUS_DAILYMICROUSD:
+      WEXY_SPEND_LANE_EARLY_DAILYMICROUSD:
+      WEXY_SPEND_LANE_ADMIN_DAILYMICROUSD:
+      # W1: the uid key the allowances count callers by (UidKey; the creations platform design §11). Required: the prod
+      # profile stops without it. Never rotated on deploy: a new key makes every caller new.
+      WEXY_UID_HMAC_KEY: ${WEXY_UID_HMAC_KEY:?missing from Infisical}
+      # W1: Azure AI Content Safety, which every prompt's text passes before any grant or call (no verdict, no call). The
+      # prod profile stops without them; names only, the values live in Infisical.
+      AZURE_CONTENT_SAFETY_ENDPOINT: ${AZURE_CONTENT_SAFETY_ENDPOINT:?missing from Infisical}
+      AZURE_CONTENT_SAFETY_KEY: ${AZURE_CONTENT_SAFETY_KEY:?missing from Infisical}
       # B1.1 adds the datasource names here (compose.records.yaml carries the database side).
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8411/actuator/health"]

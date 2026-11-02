@@ -9,8 +9,11 @@ import java.util.TreeSet;
 /**
  * {@code POST /v1/forge/plan} (forge-loop design §5.1): a creator's idea, the style they chose and
  * the film's length. Nothing else a client sends reaches a model (I4).
+ *
+ * @param retryOf the plan this one replaces after the model failed it, its generation id (the W1 bug hunt, 2026-11-02:
+ *                the studio's own retry, which runs inside that plan's prompt), or null for a first plan
  */
-public record PlanRequest(String prompt, String style, Integer seconds) {
+public record PlanRequest(String prompt, String style, Integer seconds, String retryOf) {
 
     static final Set<String> STYLES = Set.of("cinematic", "anime-cel", "cosmic", "brutalist", "auto");
 
@@ -29,6 +32,9 @@ public record PlanRequest(String prompt, String style, Integer seconds) {
             throw new ForgeException(ErrorCode.BAD_REQUEST,
                     "seconds must be between " + caps.minSeconds() + " and " + caps.maxSeconds() + ".");
         }
-        return new PlanRequest(prompt.strip(), style, seconds);
+        if (retryOf != null && !DirectRequest.ULID.matcher(retryOf).matches()) {
+            throw new ForgeException(ErrorCode.BAD_REQUEST, "retryOf is the plan this one replaces, its generation id; leave it out for a first plan.");
+        }
+        return new PlanRequest(prompt.strip(), style, seconds, retryOf);
     }
 }

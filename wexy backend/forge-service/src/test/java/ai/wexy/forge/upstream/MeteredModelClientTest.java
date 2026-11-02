@@ -7,6 +7,7 @@ import ai.wexy.forge.models.ModelCatalog;
 import ai.wexy.forge.models.ModelProperties;
 import ai.wexy.forge.spend.InMemorySpendLedger;
 import ai.wexy.forge.spend.SpendGuard;
+import ai.wexy.forge.spend.SpendLanes;
 import ai.wexy.forge.spend.SpendProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -65,7 +66,7 @@ class MeteredModelClientTest {
         when(provider.getIfAvailable()).thenReturn(redis);
         SpendGuard guard = new SpendGuard(provider, new SpendProperties(null,
                 new SpendProperties.Cap(1_000_000L, 1_000_000L),
-                Map.of("meta-spark", new SpendProperties.Cap(1_000_000L, providerDailyCap))), new SimpleMeterRegistry());
+                Map.of("meta-spark", new SpendProperties.Cap(1_000_000L, providerDailyCap)), SpendLanes.open()), new SimpleMeterRegistry());
         ModelCatalog catalog = new ModelCatalog(new ModelProperties(
                 Map.of("planner", new ModelProperties.Role("m-1", "meta-spark", 100, roleTimeout, null, null)),
                 Map.of("m-1", new ModelProperties.Price(new BigDecimal("1.25"), new BigDecimal("4.25")))), guard);
@@ -93,7 +94,7 @@ class MeteredModelClientTest {
     @Test
     void anAllowedCallIsReservedAtItsBoundThenStreamsThenSettlesToItsCost() throws Exception {
         MeteredModelClient.Metered metered = client().prepare("planner", HELLO,
-                MeteredModelClient.CallOptions.defaults(), "test");
+                MeteredModelClient.CallOptions.defaults(SpendGuard.LANE_ADMIN), "test");
 
         String text = metered.chunks().map(ChatChunk::text).collect(Collectors.joining()).block(Duration.ofSeconds(10));
 
@@ -115,7 +116,7 @@ class MeteredModelClientTest {
     void aReachedCapSendsZeroRequestsUpstream() {
         MeteredModelClient client = client("test-key", ledger.template(), 10L, Duration.ofSeconds(5));
 
-        assertThatThrownBy(() -> client.stream("planner", HELLO, MeteredModelClient.CallOptions.defaults(), "test")
+        assertThatThrownBy(() -> client.stream("planner", HELLO, MeteredModelClient.CallOptions.defaults(SpendGuard.LANE_ADMIN), "test")
                 .blockLast(Duration.ofSeconds(10)))
                 .isInstanceOfSatisfying(ForgeException.class, e -> assertThat(e.code()).isEqualTo(ErrorCode.BUDGET));
         assertThat(fake.chatRequests()).isZero();
@@ -125,12 +126,12 @@ class MeteredModelClientTest {
     @Test
     void chargeRefusesBeforeAnyStreamAndAPaidCallIsNotChargedAgain() throws Exception {
         MeteredModelClient capped = client("test-key", ledger.template(), 10L, Duration.ofSeconds(5));
-        assertThatThrownBy(() -> capped.charge("planner", HELLO, MeteredModelClient.CallOptions.defaults(), "test")
+        assertThatThrownBy(() -> capped.charge("planner", HELLO, MeteredModelClient.CallOptions.defaults(SpendGuard.LANE_ADMIN), "test")
                 .block(Duration.ofSeconds(10)))
                 .isInstanceOfSatisfying(ForgeException.class, e -> assertThat(e.code()).isEqualTo(ErrorCode.BUDGET));
         assertThat(fake.chatRequests()).isZero();
 
-        MeteredModelClient.Metered paid = client().charge("planner", HELLO, MeteredModelClient.CallOptions.defaults(), "test")
+        MeteredModelClient.Metered paid = client().charge("planner", HELLO, MeteredModelClient.CallOptions.defaults(SpendGuard.LANE_ADMIN), "test")
                 .block(Duration.ofSeconds(10));
         assertThat(ledger.totalForProvider("meta-spark")).isEqualTo(paid.chargedMicroUsd());
         int reservations = ledger.reservations();
@@ -147,7 +148,7 @@ class MeteredModelClientTest {
     @Test
     void theListenerHearsTheMetersAnswerOnce() {
         List<MeteredModelClient.Reservation> heard = new CopyOnWriteArrayList<>();
-        MeteredModelClient.Metered paid = client().charge("planner", HELLO, MeteredModelClient.CallOptions.defaults(), "test", heard::add)
+        MeteredModelClient.Metered paid = client().charge("planner", HELLO, MeteredModelClient.CallOptions.defaults(SpendGuard.LANE_ADMIN), "test", heard::add)
                 .block(Duration.ofSeconds(10));
 
         assertThat(heard).hasSize(1);
@@ -157,7 +158,7 @@ class MeteredModelClientTest {
 
         List<MeteredModelClient.Reservation> refused = new CopyOnWriteArrayList<>();
         MeteredModelClient capped = client("test-key", ledger.template(), 10L, Duration.ofSeconds(5));
-        assertThatThrownBy(() -> capped.charge("planner", HELLO, MeteredModelClient.CallOptions.defaults(), "test", refused::add)
+        assertThatThrownBy(() -> capped.charge("planner", HELLO, MeteredModelClient.CallOptions.defaults(SpendGuard.LANE_ADMIN), "test", refused::add)
                 .block(Duration.ofSeconds(10))).isInstanceOf(ForgeException.class);
         assertThat(refused).hasSize(1);
         assertThat(refused.get(0).outcome()).isEqualTo(SpendGuard.Charge.CAP_REACHED);
@@ -171,7 +172,7 @@ class MeteredModelClientTest {
         List<MeteredModelClient.Reservation> heard = new CopyOnWriteArrayList<>();
         MeteredModelClient slow = client("test-key", ledger.template(800), 1_000_000L, Duration.ofSeconds(5));
 
-        Disposable subscription = slow.charge("planner", HELLO, MeteredModelClient.CallOptions.defaults(), "test", heard::add)
+        Disposable subscription = slow.charge("planner", HELLO, MeteredModelClient.CallOptions.defaults(SpendGuard.LANE_ADMIN), "test", heard::add)
                 .subscribe(metered -> {
                 }, error -> {
                 });
@@ -206,11 +207,11 @@ class MeteredModelClientTest {
             doAnswer(invocation -> {
                 Thread.sleep(600);
                 throw new IllegalStateException("the meter's own bug");
-            }).when(spied).reserve(anyString(), anyLong(), anyString());
+            }).when(spied).reserve(anyString(), anyString(), anyLong(), anyString());
             return spied;
         });
 
-        Disposable subscription = broken.charge("planner", HELLO, MeteredModelClient.CallOptions.defaults(), "test", listener)
+        Disposable subscription = broken.charge("planner", HELLO, MeteredModelClient.CallOptions.defaults(SpendGuard.LANE_ADMIN), "test", listener)
                 .subscribe(metered -> {
                 }, error -> {
                 });
@@ -228,7 +229,7 @@ class MeteredModelClientTest {
     /** A listener that throws is a bug in the caller, not a refund: the reservation and the call stand. */
     @Test
     void aListenerThatThrowsDoesNotUnchargeTheCall() {
-        MeteredModelClient.Metered paid = client().charge("planner", HELLO, MeteredModelClient.CallOptions.defaults(), "test",
+        MeteredModelClient.Metered paid = client().charge("planner", HELLO, MeteredModelClient.CallOptions.defaults(SpendGuard.LANE_ADMIN), "test",
                 reservation -> {
                     throw new IllegalStateException("a broken listener");
                 }).block(Duration.ofSeconds(10));
@@ -241,7 +242,7 @@ class MeteredModelClientTest {
     @Test
     void anOverrunOnTheFinalChunkIsSettled() throws Exception {
         fake.chat = FakeMetaApi.sse(0, FakeMetaApi.textChunk("ok"), STOP, usage(5000, 100), "[DONE]");
-        MeteredModelClient.Metered metered = client().prepare("planner", HELLO, MeteredModelClient.CallOptions.defaults(), "test");
+        MeteredModelClient.Metered metered = client().prepare("planner", HELLO, MeteredModelClient.CallOptions.defaults(SpendGuard.LANE_ADMIN), "test");
 
         metered.chunks().blockLast(Duration.ofSeconds(10));
 
@@ -256,7 +257,7 @@ class MeteredModelClientTest {
     @Test
     void aRepeatedOrCumulativeUsageIsSettledOnceAtItsLastValue() throws Exception {
         fake.chat = FakeMetaApi.sse(0, FakeMetaApi.textChunk("ok"), STOP, usage(21, 2), usage(21, 2), "[DONE]");
-        client().stream("planner", HELLO, MeteredModelClient.CallOptions.defaults(), "test").blockLast(Duration.ofSeconds(10));
+        client().stream("planner", HELLO, MeteredModelClient.CallOptions.defaults(SpendGuard.LANE_ADMIN), "test").blockLast(Duration.ofSeconds(10));
         await(Duration.ofSeconds(3), () -> ledger.settlements() == 1);
         Thread.sleep(200);
         assertThat(ledger.settlements()).isEqualTo(1);
@@ -265,7 +266,7 @@ class MeteredModelClientTest {
         InMemorySpendLedger cumulative = new InMemorySpendLedger();
         fake.chat = FakeMetaApi.sse(0, FakeMetaApi.textChunk("ok"), usage(21, 1), FakeMetaApi.textChunk("!"), STOP, usage(21, 2), "[DONE]");
         client("test-key", cumulative.template(), 1_000_000L, Duration.ofSeconds(5))
-                .stream("planner", HELLO, MeteredModelClient.CallOptions.defaults(), "test").blockLast(Duration.ofSeconds(10));
+                .stream("planner", HELLO, MeteredModelClient.CallOptions.defaults(SpendGuard.LANE_ADMIN), "test").blockLast(Duration.ofSeconds(10));
         await(Duration.ofSeconds(3), () -> cumulative.settlements() == 1);
         Thread.sleep(200);
         assertThat(cumulative.settlements()).isEqualTo(1);
@@ -276,7 +277,7 @@ class MeteredModelClientTest {
     @Test
     void aStreamWithoutUsageKeepsItsReservation() throws Exception {
         fake.chat = FakeMetaApi.sse(0, FakeMetaApi.textChunk("ok"), STOP, "[DONE]");
-        MeteredModelClient.Metered metered = client().prepare("planner", HELLO, MeteredModelClient.CallOptions.defaults(), "test");
+        MeteredModelClient.Metered metered = client().prepare("planner", HELLO, MeteredModelClient.CallOptions.defaults(SpendGuard.LANE_ADMIN), "test");
 
         metered.chunks().blockLast(Duration.ofSeconds(10));
 
@@ -289,7 +290,7 @@ class MeteredModelClientTest {
     void aLostMeterSendsZeroRequestsUpstream() {
         MeteredModelClient client = client("test-key", InMemorySpendLedger.failing(), 1_000_000L, Duration.ofSeconds(5));
 
-        assertThatThrownBy(() -> client.stream("planner", HELLO, MeteredModelClient.CallOptions.defaults(), "test")
+        assertThatThrownBy(() -> client.stream("planner", HELLO, MeteredModelClient.CallOptions.defaults(SpendGuard.LANE_ADMIN), "test")
                 .blockLast(Duration.ofSeconds(10)))
                 .isInstanceOfSatisfying(ForgeException.class, e -> assertThat(e.code()).isEqualTo(ErrorCode.PAUSED));
         assertThat(fake.chatRequests()).isZero();
@@ -299,7 +300,7 @@ class MeteredModelClientTest {
     void noKeyMeansPausedAndNothingIsCharged() {
         MeteredModelClient client = client("", ledger.template(), 1_000_000L, Duration.ofSeconds(5));
 
-        assertThatThrownBy(() -> client.stream("planner", HELLO, MeteredModelClient.CallOptions.defaults(), "test")
+        assertThatThrownBy(() -> client.stream("planner", HELLO, MeteredModelClient.CallOptions.defaults(SpendGuard.LANE_ADMIN), "test")
                 .blockLast(Duration.ofSeconds(10)))
                 .isInstanceOfSatisfying(ForgeException.class, e -> assertThat(e.code()).isEqualTo(ErrorCode.PAUSED));
         assertThat(ledger.untouched()).isTrue();
@@ -309,7 +310,7 @@ class MeteredModelClientTest {
     /** Assembling a call costs nothing; only subscribing charges and calls. */
     @Test
     void nothingIsChargedUntilTheStreamIsSubscribed() {
-        Flux<ChatChunk> stream = client().stream("planner", HELLO, MeteredModelClient.CallOptions.defaults(), "test");
+        Flux<ChatChunk> stream = client().stream("planner", HELLO, MeteredModelClient.CallOptions.defaults(SpendGuard.LANE_ADMIN), "test");
 
         assertThat(ledger.untouched()).isTrue();
         assertThat(fake.chatRequests()).isZero();
@@ -320,7 +321,7 @@ class MeteredModelClientTest {
     @Test
     void aCallerCannotRaiseTheRolesOutputCap() throws Exception {
         MeteredModelClient.Metered metered = client().prepare("planner", HELLO,
-                new MeteredModelClient.CallOptions(10_000, null), "test");
+                new MeteredModelClient.CallOptions(10_000, null, null, SpendGuard.LANE_ADMIN), "test");
         metered.chunks().blockLast(Duration.ofSeconds(10));
 
         assertThat(metered.maxOutputTokens()).isEqualTo(100);
@@ -336,7 +337,7 @@ class MeteredModelClientTest {
         MeteredModelClient client = client("test-key", ledger.template(), 1_000_000L, Duration.ofMillis(1_000));
 
         long started = System.nanoTime();
-        assertThatThrownBy(() -> client.stream("planner", HELLO, MeteredModelClient.CallOptions.defaults(), "test")
+        assertThatThrownBy(() -> client.stream("planner", HELLO, MeteredModelClient.CallOptions.defaults(SpendGuard.LANE_ADMIN), "test")
                 .blockLast(Duration.ofSeconds(10)))
                 .isInstanceOfSatisfying(UpstreamException.class,
                         e -> assertThat(e.kind()).isEqualTo(UpstreamException.Kind.TIMEOUT));

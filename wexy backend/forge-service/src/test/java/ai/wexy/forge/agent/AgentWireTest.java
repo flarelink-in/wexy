@@ -5,6 +5,7 @@ import ai.wexy.forge.FakeMetaApi;
 import ai.wexy.forge.engine.AdapterManifest;
 import ai.wexy.forge.engine.EngineBundle;
 import ai.wexy.forge.error.ErrorEnvelopeHandler;
+import ai.wexy.forge.allowance.TestAdmissions;
 import ai.wexy.forge.identity.InternalTokenFilter;
 import ai.wexy.forge.loop.LoopProperties;
 import ai.wexy.forge.models.ModelCatalog;
@@ -13,6 +14,7 @@ import ai.wexy.forge.records.InMemoryGenerationStore;
 import ai.wexy.forge.schemas.JsonSchemas;
 import ai.wexy.forge.spend.InMemorySpendLedger;
 import ai.wexy.forge.spend.SpendGuard;
+import ai.wexy.forge.spend.SpendLanes;
 import ai.wexy.forge.spend.SpendProperties;
 import ai.wexy.forge.templates.HostContract;
 import ai.wexy.forge.templates.PromptBuilder;
@@ -111,7 +113,7 @@ class AgentWireTest {
         ObjectProvider<StringRedisTemplate> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(template);
         SpendGuard guard = new SpendGuard(provider, new SpendProperties(null, new SpendProperties.Cap(5_000_000L, 5_000_000L),
-                Map.of("meta-spark", new SpendProperties.Cap(5_000_000L, sparkDailyCapMicroUsd))), new SimpleMeterRegistry());
+                Map.of("meta-spark", new SpendProperties.Cap(5_000_000L, sparkDailyCapMicroUsd)), SpendLanes.open()), new SimpleMeterRegistry());
         catalog = new ModelCatalog(new ModelProperties(
                 Map.of("agent", new ModelProperties.Role(MODEL, "meta-spark", 16000, Duration.ofSeconds(10), "medium", null)),
                 Map.of(MODEL, new ModelProperties.Price(new BigDecimal("1.25"), new BigDecimal("4.25"), new BigDecimal("0.15")))), guard);
@@ -125,7 +127,7 @@ class AgentWireTest {
                 budget, System::currentTimeMillis);
         // A heartbeat every ten minutes: none comes within a test's turn.
         AgentHandler handler = new AgentHandler(loop, new MeteredModelClient(api, catalog, guard), catalog, store,
-                new LoopProperties(null, Duration.ofMinutes(10), null, false), bundle);
+                new LoopProperties(null, Duration.ofMinutes(10), null, false), bundle, TestAdmissions.open().admission());
         HttpHandler http = RouterFunctions.toHttpHandler(new AgentConfiguration().agentRoutes(handler), HandlerStrategies.builder()
                 .webFilter(new InternalTokenFilter(new ImmutableJWKSet<>(new JWKSet(AgentRoutesTest.GATEWAY.toPublicJWK()))))
                 .exceptionHandler(new ErrorEnvelopeHandler())

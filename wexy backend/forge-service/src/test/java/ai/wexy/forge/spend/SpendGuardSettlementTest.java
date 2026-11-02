@@ -21,6 +21,9 @@ import static org.mockito.Mockito.when;
  */
 class SpendGuardSettlementTest {
 
+    /** The tests below are about the windows; their calls run in one lane (W1), open wide. */
+    private static final String LANE = SpendGuard.LANE_EARLY_ACCESS;
+
     private final InMemorySpendLedger ledger = new InMemorySpendLedger();
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
@@ -29,7 +32,7 @@ class SpendGuardSettlementTest {
         ObjectProvider<StringRedisTemplate> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(redis);
         return new SpendGuard(provider, new SpendProperties("Asia/Kolkata", new SpendProperties.Cap(1_000L, 1_000L),
-                Map.of("meta-spark", new SpendProperties.Cap(100L, 100L))), registry);
+                Map.of("meta-spark", new SpendProperties.Cap(100L, 100L)), SpendLanes.open()), registry);
     }
 
     private double counted(String name, String tag, String value) {
@@ -45,10 +48,11 @@ class SpendGuardSettlementTest {
     @Test
     void theUnusedPartOfAReservationIsReturned() {
         SpendGuard guard = guard(ledger.template());
-        SpendGuard.Receipt receipt = guard.reserve("meta-spark", 100, "a call");
+        SpendGuard.Receipt receipt = guard.reserve("meta-spark", LANE, 100, "a call");
         assertThat(receipt.allowed()).isTrue();
-        assertThat(receipt.keys()).hasSize(4);
-        assertThat(guard.tryCharge("meta-spark", 1, "no room")).isEqualTo(SpendGuard.Charge.CAP_REACHED);
+        // The four windows and the lane's day (W1).
+        assertThat(receipt.keys()).hasSize(5);
+        assertThat(guard.tryCharge("meta-spark", LANE, 1, "no room")).isEqualTo(SpendGuard.Charge.CAP_REACHED);
 
         assertThat(guard.settle(receipt, 40, "the same call")).isEqualTo(SpendGuard.Settlement.REFUNDED);
 
@@ -59,14 +63,14 @@ class SpendGuardSettlementTest {
         assertThat(counted("wexy.spend.charges", "outcome", "overrun")).isZero();
         assertThat(dayGauge()).isEqualTo(40);
         // The room is back: the next call fits.
-        assertThat(guard.tryCharge("meta-spark", 60, "the next call")).isEqualTo(SpendGuard.Charge.ALLOWED);
+        assertThat(guard.tryCharge("meta-spark", LANE, 60, "the next call")).isEqualTo(SpendGuard.Charge.ALLOWED);
     }
 
     /** The ceiling is already full; the overrun is counted anyway, because the money is spent. */
     @Test
     void anOverrunIsCountedBeyondTheCeiling() {
         SpendGuard guard = guard(ledger.template());
-        SpendGuard.Receipt receipt = guard.reserve("meta-spark", 100, "a call at the cap");
+        SpendGuard.Receipt receipt = guard.reserve("meta-spark", LANE, 100, "a call at the cap");
 
         assertThat(guard.settle(receipt, 160, "the same call")).isEqualTo(SpendGuard.Settlement.CHARGED);
 
@@ -77,13 +81,13 @@ class SpendGuardSettlementTest {
         assertThat(dayGauge()).isEqualTo(160);
         assertThat(guard.owed()).isZero();
         // The next call sees the true total and is refused.
-        assertThat(guard.tryCharge("meta-spark", 1, "after the overrun")).isEqualTo(SpendGuard.Charge.CAP_REACHED);
+        assertThat(guard.tryCharge("meta-spark", LANE, 1, "after the overrun")).isEqualTo(SpendGuard.Charge.CAP_REACHED);
     }
 
     @Test
     void aCallThatCostExactlyItsReservationSettlesNothing() {
         SpendGuard guard = guard(ledger.template());
-        SpendGuard.Receipt receipt = guard.reserve("meta-spark", 50, "a call");
+        SpendGuard.Receipt receipt = guard.reserve("meta-spark", LANE, 50, "a call");
 
         assertThat(guard.settle(receipt, 50, "exact")).isEqualTo(SpendGuard.Settlement.NONE);
 
@@ -95,9 +99,10 @@ class SpendGuardSettlementTest {
     @Test
     void aSettlementMovesTheReservationsOwnWindowsAndNeverBelowZero() {
         SpendGuard guard = guard(ledger.template());
-        SpendGuard.Receipt receipt = guard.reserve("meta-spark", 50, "a call");
-        SpendGuard.Receipt yesterday = new SpendGuard.Receipt(SpendGuard.Charge.ALLOWED, "meta-spark", 80,
-                List.of("wexy:spend:m:2026-09", "wexy:spend:m:2026-09:meta-spark", "wexy:spend:d:2026-09-30", "wexy:spend:d:2026-09-30:meta-spark"));
+        SpendGuard.Receipt receipt = guard.reserve("meta-spark", LANE, 50, "a call");
+        SpendGuard.Receipt yesterday = new SpendGuard.Receipt(SpendGuard.Charge.ALLOWED, "meta-spark", LANE, 80,
+                List.of("wexy:spend:m:2026-09", "wexy:spend:m:2026-09:meta-spark", "wexy:spend:d:2026-09-30", "wexy:spend:d:2026-09-30:meta-spark",
+                        "wexy:spend:d:2026-09-30:lane:early"));
 
         assertThat(guard.settle(yesterday, 0, "a call from before the window rolled")).isEqualTo(SpendGuard.Settlement.REFUNDED);
 
@@ -112,7 +117,7 @@ class SpendGuardSettlementTest {
     @Test
     void aRefundThatFailsLeavesTheReservation() {
         SpendGuard guard = guard(ledger.template());
-        SpendGuard.Receipt receipt = guard.reserve("meta-spark", 100, "a call");
+        SpendGuard.Receipt receipt = guard.reserve("meta-spark", LANE, 100, "a call");
         ledger.down(true);
 
         assertThat(guard.settle(receipt, 40, "the same call")).isEqualTo(SpendGuard.Settlement.METER_UNAVAILABLE);
@@ -120,14 +125,14 @@ class SpendGuardSettlementTest {
         ledger.down(false);
         assertThat(ledger.totalForProvider("meta-spark")).isEqualTo(100);
         assertThat(guard.owed()).isZero();
-        assertThat(guard.tryCharge("meta-spark", 1, "no room")).isEqualTo(SpendGuard.Charge.CAP_REACHED);
+        assertThat(guard.tryCharge("meta-spark", LANE, 1, "no room")).isEqualTo(SpendGuard.Charge.CAP_REACHED);
     }
 
     /** An overrun the meter cannot count is owed, pauses every reservation, and is counted first when the meter is back. */
     @Test
     void anOverrunThatCannotBeCountedIsADebtThatPausesReservations() {
         SpendGuard guard = guard(ledger.template());
-        SpendGuard.Receipt receipt = guard.reserve("meta-spark", 50, "a call");
+        SpendGuard.Receipt receipt = guard.reserve("meta-spark", LANE, 50, "a call");
         ledger.down(true);
 
         assertThat(guard.settle(receipt, 110, "the same call")).isEqualTo(SpendGuard.Settlement.METER_UNAVAILABLE);
@@ -138,12 +143,12 @@ class SpendGuardSettlementTest {
         // While the meter is down the debt cannot be counted, so nothing is reserved.
         ledger.down(false);
         ledger.down(true);
-        assertThat(guard.reserve("meta-spark", 1, "during the outage").outcome()).isEqualTo(SpendGuard.Charge.METER_UNAVAILABLE);
+        assertThat(guard.reserve("meta-spark", LANE, 1, "during the outage").outcome()).isEqualTo(SpendGuard.Charge.METER_UNAVAILABLE);
         assertThat(counted("wexy.spend.charges", "outcome", "denied_debt")).isEqualTo(1.0);
 
         // The meter is back: the debt is counted first (50 + 60 = 110 > the cap), so the call is refused by the cap, honestly.
         ledger.down(false);
-        assertThat(guard.reserve("meta-spark", 1, "after the outage").outcome()).isEqualTo(SpendGuard.Charge.CAP_REACHED);
+        assertThat(guard.reserve("meta-spark", LANE, 1, "after the outage").outcome()).isEqualTo(SpendGuard.Charge.CAP_REACHED);
         assertThat(guard.owed()).isZero();
         assertThat(registry.get("wexy.spend.debt.micro.usd").tag("provider", "meta-spark").gauge().value()).isZero();
         assertThat(ledger.totalForProvider("meta-spark")).isEqualTo(110);
@@ -154,31 +159,46 @@ class SpendGuardSettlementTest {
     @Test
     void anOverrunWithoutAMeterIsOwed() {
         SpendGuard guard = guard(null);
-        SpendGuard.Receipt receipt = new SpendGuard.Receipt(SpendGuard.Charge.ALLOWED, "meta-spark", 100, List.of("a", "b", "c", "d"));
+        SpendGuard.Receipt receipt = new SpendGuard.Receipt(SpendGuard.Charge.ALLOWED, "meta-spark", LANE, 100, List.of("a", "b", "c", "d", "e"));
 
         assertThat(guard.settle(receipt, 160, "a call")).isEqualTo(SpendGuard.Settlement.METER_UNAVAILABLE);
 
         assertThat(guard.owed()).isEqualTo(60);
         assertThat(counted("wexy.spend.charges", "outcome", "overrun")).isEqualTo(1.0);
-        assertThat(guard.tryCharge("meta-spark", 1, "a call")).isEqualTo(SpendGuard.Charge.METER_UNAVAILABLE);
+        assertThat(guard.tryCharge("meta-spark", LANE, 1, "a call")).isEqualTo(SpendGuard.Charge.METER_UNAVAILABLE);
     }
 
     @Test
     void onlyAnAllowedReservationCanBeSettled() {
         SpendGuard guard = guard(ledger.template());
-        guard.reserve("meta-spark", 100, "fill the cap");
-        SpendGuard.Receipt refused = guard.reserve("meta-spark", 1, "over the cap");
+        guard.reserve("meta-spark", LANE, 100, "fill the cap");
+        SpendGuard.Receipt refused = guard.reserve("meta-spark", LANE, 1, "over the cap");
         assertThat(refused.outcome()).isEqualTo(SpendGuard.Charge.CAP_REACHED);
 
         assertThatThrownBy(() -> guard.settle(refused, 1, "over the cap")).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> guard.settle(guard.reserve("meta-spark", 0, "free"), 1, "free")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> guard.settle(guard.reserve("meta-spark", LANE, 0, "free"), 1, "free")).isInstanceOf(IllegalArgumentException.class);
         assertThat(ledger.totalForProvider("meta-spark")).isEqualTo(100);
+    }
+
+    /** W1: a settlement moves the lane's day as it moves the rest, so a lane is charged what its calls cost. */
+    @Test
+    void aSettlementMovesTheLaneToo() {
+        SpendGuard guard = guard(ledger.template());
+        SpendGuard.Receipt receipt = guard.reserve("meta-spark", SpendGuard.LANE_ANONYMOUS, 100, "an anonymous call");
+        assertThat(ledger.totalForLane(SpendGuard.LANE_ANONYMOUS)).isEqualTo(100);
+
+        assertThat(guard.settle(receipt, 30, "the same call")).isEqualTo(SpendGuard.Settlement.REFUNDED);
+
+        assertThat(ledger.totalForLane(SpendGuard.LANE_ANONYMOUS)).isEqualTo(30);
+        assertThat(ledger.totalForLane(SpendGuard.LANE_EARLY_ACCESS)).isZero();
+        assertThat(registry.get("wexy.spend.window.spent.micro.usd").tags("scope", "lane", "window", "day", "provider", SpendGuard.LANE_ANONYMOUS)
+                .gauge().value()).isEqualTo(30);
     }
 
     @Test
     void anUnknownProviderCannotBeReserved() {
         SpendGuard guard = guard(ledger.template());
-        assertThatThrownBy(() -> guard.reserve("meta-code", 100, "a call"))
+        assertThatThrownBy(() -> guard.reserve("meta-code", LANE, 100, "a call"))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("wexy.spend.provider");
         assertThat(ledger.untouched()).isTrue();
     }

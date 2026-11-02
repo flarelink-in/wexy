@@ -4,6 +4,7 @@ import ai.wexy.forge.error.ForgeException;
 import ai.wexy.forge.models.ModelCatalog;
 import ai.wexy.forge.models.ModelProperties;
 import ai.wexy.forge.schemas.JsonSchemas;
+import ai.wexy.forge.spend.SpendGuard;
 import ai.wexy.forge.templates.Prompt;
 import ai.wexy.forge.templates.PromptBuilder;
 import ai.wexy.forge.upstream.ChatChunk;
@@ -142,8 +143,9 @@ public class HourOneProbe {
             if (Boolean.FALSE.equals(configured.get(entry.getKey()))) {
                 continue;
             }
+            // The probe is the operator's: its calls are charged to the admin lane (W1).
             ProbeReport.Call call = call("hello", entry.getValue(), HELLO,
-                    new MeteredModelClient.CallOptions(HELLO_MAX_OUTPUT_TOKENS, null));
+                    new MeteredModelClient.CallOptions(HELLO_MAX_OUTPUT_TOKENS, null, null, SpendGuard.LANE_ADMIN));
             calls.add(call);
             findings.addAll(conclusions(call));
         }
@@ -151,7 +153,7 @@ public class HourOneProbe {
         String plannerRole = catalog.roleNames().contains("planner") ? "planner" : null;
         if (plannerRole != null && !Boolean.FALSE.equals(configured.get(catalog.role(plannerRole).model()))) {
             ProbeReport.Call structured = call("structured-output", plannerRole, STRUCTURED,
-                    new MeteredModelClient.CallOptions(HELLO_MAX_OUTPUT_TOKENS, RESPONSE_FORMAT));
+                    new MeteredModelClient.CallOptions(HELLO_MAX_OUTPUT_TOKENS, RESPONSE_FORMAT, null, SpendGuard.LANE_ADMIN));
             calls.add(structured);
             findings.add(structuredOutputFinding(structured));
 
@@ -159,7 +161,7 @@ public class HourOneProbe {
             Map<String, Object> strictDraft = Map.of("type", "json_schema", "json_schema", Map.of(
                     "name", "scene_draft_v1", "schema", schemas.schema(JsonSchemas.SCENE_DRAFT), "strict", true));
             ProbeReport.Call draft = call("strict-draft", plannerRole, prompt.messages(),
-                    new MeteredModelClient.CallOptions(null, strictDraft));
+                    new MeteredModelClient.CallOptions(null, strictDraft, null, SpendGuard.LANE_ADMIN));
             calls.add(draft);
             findings.add(strictDraftFinding(draft));
         }

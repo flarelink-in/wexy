@@ -142,7 +142,7 @@ export class MockClient implements ForgeClient {
         return { fn, text, generation };
     }
 
-    async direct(_spec: SceneSpec, _turn: string, signal: AbortSignal): Promise<DirectResult> {
+    async direct(_spec: SceneSpec, _turn: string, signal: AbortSignal, _planId?: string): Promise<DirectResult> {
         const t0 = performance.now();
         await this.wait(500, signal);
         return { edit: { kind: 'patch', ops: [{ path: 'post.bloom.intensity', value: 0.9 }], summary: 'The glow is stronger.' }, generation: this.generation({ role: 'director' }, t0, null) };

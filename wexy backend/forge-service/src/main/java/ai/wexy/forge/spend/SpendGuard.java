@@ -58,9 +58,27 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * The template is blocking: callers on an event loop run {@link #reserve} and {@link #settle} on
  * boundedElastic.
+ *
+ * W1 (2026-11-02; the creations platform design §11, I6, Q95): every call also names its lane, who
+ * it is for, and the lane's day window is checked and counted in the same script as the four
+ * ceilings. A flood of anonymous accounts spends the anonymous lane at most; early access's share
+ * and the admins' stay theirs, and nothing passes the global cap. An unknown or unset lane is
+ * refused like an unknown provider: the call is never made.
  */
 @Component
 public class SpendGuard {
+
+    /** The lane of every anonymous prompt together (W1). */
+    public static final String LANE_ANONYMOUS = "anonymous";
+    /**
+     * The lane of every signed-in, early-access prompt together (W1). {@code early}, not {@code early-access}: a map key
+     * bound from an environment variable loses its dash, so a dashed lane could never be raised by one.
+     */
+    public static final String LANE_EARLY_ACCESS = "early";
+    /** The admins' lane: the operator's and the judges' allow-listed uids, the design's meta-demo lane, and the probes (W1). */
+    public static final String LANE_ADMIN = "admin";
+    /** Every lane, each required under {@code wexy.spend.lane.*}. */
+    public static final List<String> LANES = List.of(LANE_ANONYMOUS, LANE_EARLY_ACCESS, LANE_ADMIN);
 
     /** What a reservation found. */
     public enum Charge { ALLOWED, CAP_REACHED, METER_UNAVAILABLE }
@@ -72,7 +90,7 @@ public class SpendGuard {
      * A reservation as the meter made it: the outcome, and the amount and the windows it landed in
      * when allowed, so the settlement moves the same windows whatever the clock says by then.
      */
-    public record Receipt(Charge outcome, String provider, long microUsd, List<String> keys) {
+    public record Receipt(Charge outcome, String provider, String lane, long microUsd, List<String> keys) {
 
         public Receipt {
             keys = List.copyOf(keys);
@@ -84,7 +102,7 @@ public class SpendGuard {
     }
 
     /** Money a finished call spent beyond its reservation that the meter has not counted yet. */
-    record Debt(String provider, List<String> keys, long microUsd, String detail) {
+    record Debt(String provider, String lane, List<String> keys, long microUsd, String detail) {
     }
 
     private static final Logger logger = LoggerFactory.getLogger(SpendGuard.class);
@@ -103,7 +121,8 @@ public class SpendGuard {
     /**
      * Returns a delimited string rather than a Lua table on purpose: a table comes back as a mixed
      * array whose decoding depends on the template's serializer. One string parses the same way
-     * everywhere.
+     * everywhere. KEYS[5] and ARGV[8] are the lane's day window and its ceiling (W1), checked last
+     * and counted with the rest, so concurrent calls cannot race past a lane either.
      */
     static final RedisScript<String> CHARGE = new DefaultRedisScript<>(
             "local cost     = tonumber(ARGV[1])\n"
@@ -113,11 +132,13 @@ public class SpendGuard {
             + "local pdCap    = tonumber(ARGV[5])\n"
             + "local monthTtl = tonumber(ARGV[6])\n"
             + "local dayTtl   = tonumber(ARGV[7])\n"
+            + "local ldCap    = tonumber(ARGV[8])\n"
             + "local function n(v) return string.format('%d', v) end\n"
             + "local gm = tonumber(redis.call('GET', KEYS[1]) or '0')\n"
             + "local pm = tonumber(redis.call('GET', KEYS[2]) or '0')\n"
             + "local gd = tonumber(redis.call('GET', KEYS[3]) or '0')\n"
             + "local pd = tonumber(redis.call('GET', KEYS[4]) or '0')\n"
+            + "local ld = tonumber(redis.call('GET', KEYS[5]) or '0')\n"
             + "if gmCap >= 0 and gm + cost > gmCap then\n"
             + "  return 'DENY|GLOBAL_MONTH|' .. n(gm) .. '|' .. n(gmCap)\n"
             + "end\n"
@@ -130,6 +151,9 @@ public class SpendGuard {
             + "if pdCap >= 0 and pd + cost > pdCap then\n"
             + "  return 'DENY|PROVIDER_DAY|' .. n(pd) .. '|' .. n(pdCap)\n"
             + "end\n"
+            + "if ldCap >= 0 and ld + cost > ldCap then\n"
+            + "  return 'DENY|LANE_DAY|' .. n(ld) .. '|' .. n(ldCap)\n"
+            + "end\n"
             + "gm = redis.call('INCRBY', KEYS[1], cost)\n"
             + "redis.call('EXPIRE', KEYS[1], monthTtl, 'NX')\n"
             + "pm = redis.call('INCRBY', KEYS[2], cost)\n"
@@ -138,15 +162,18 @@ public class SpendGuard {
             + "redis.call('EXPIRE', KEYS[3], dayTtl, 'NX')\n"
             + "pd = redis.call('INCRBY', KEYS[4], cost)\n"
             + "redis.call('EXPIRE', KEYS[4], dayTtl, 'NX')\n"
+            + "ld = redis.call('INCRBY', KEYS[5], cost)\n"
+            + "redis.call('EXPIRE', KEYS[5], dayTtl, 'NX')\n"
             + "return 'OK|' .. n(pm) .. '|' .. n(pmCap) .. '|' .. n(pd) .. '|' .. n(pdCap)\n"
-            + "          .. '|' .. n(gm) .. '|' .. n(gmCap) .. '|' .. n(gd) .. '|' .. n(gdCap)\n",
+            + "          .. '|' .. n(gm) .. '|' .. n(gmCap) .. '|' .. n(gd) .. '|' .. n(gdCap)\n"
+            + "          .. '|' .. n(ld) .. '|' .. n(ldCap)\n",
             String.class);
 
     /**
      * Moves every window of a finished call by a signed amount: down for the unused part of its
      * reservation, up for an overrun. No ceiling check, because the money is already spent or
      * already returned; a window never goes below zero. The same keys, the same arguments and the
-     * same reply as {@link #CHARGE}, so the two are read the same way.
+     * same reply as {@link #CHARGE}, so the two are read the same way; the lane's window moves too.
      */
     static final RedisScript<String> ADJUST = new DefaultRedisScript<>(
             "local delta    = tonumber(ARGV[1])\n"
@@ -156,6 +183,7 @@ public class SpendGuard {
             + "local pdCap    = tonumber(ARGV[5])\n"
             + "local monthTtl = tonumber(ARGV[6])\n"
             + "local dayTtl   = tonumber(ARGV[7])\n"
+            + "local ldCap    = tonumber(ARGV[8])\n"
             + "local function n(v) return string.format('%d', v) end\n"
             + "local function move(key, ttl)\n"
             + "  local v = redis.call('INCRBY', key, delta)\n"
@@ -170,8 +198,10 @@ public class SpendGuard {
             + "local pm = move(KEYS[2], monthTtl)\n"
             + "local gd = move(KEYS[3], dayTtl)\n"
             + "local pd = move(KEYS[4], dayTtl)\n"
+            + "local ld = move(KEYS[5], dayTtl)\n"
             + "return 'OK|' .. n(pm) .. '|' .. n(pmCap) .. '|' .. n(pd) .. '|' .. n(pdCap)\n"
-            + "          .. '|' .. n(gm) .. '|' .. n(gmCap) .. '|' .. n(gd) .. '|' .. n(gdCap)\n",
+            + "          .. '|' .. n(gm) .. '|' .. n(gmCap) .. '|' .. n(gd) .. '|' .. n(gdCap)\n"
+            + "          .. '|' .. n(ld) .. '|' .. n(ldCap)\n",
             String.class);
 
     private final StringRedisTemplate redis;
@@ -221,12 +251,16 @@ public class SpendGuard {
             logger.error("SpendGuard has no Redis connection. Every model call will be REFUSED until Redis is "
                     + "reachable: this is the fail-closed path, not a crash.");
         } else {
-            logger.info("SpendGuard active. Global ceiling {}/month, {}/day, rolling in {}.",
-                    usd(properties.global().monthlyMicroUsd()), usd(properties.global().dailyMicroUsd()), zone);
+            logger.info("SpendGuard active. Global ceiling {}/month, {}/day, rolling in {}; lanes {}/day anonymous, {}/day "
+                            + "early access, {}/day admin.",
+                    usd(properties.global().monthlyMicroUsd()), usd(properties.global().dailyMicroUsd()), zone,
+                    usd(properties.lane().get(LANE_ANONYMOUS).dailyMicroUsd()),
+                    usd(properties.lane().get(LANE_EARLY_ACCESS).dailyMicroUsd()),
+                    usd(properties.lane().get(LANE_ADMIN).dailyMicroUsd()));
         }
     }
 
-    /** Refuses to start without every ceiling: a missing cap must deny, never unlock. */
+    /** Refuses to start without every ceiling and every lane: a missing cap must deny, never unlock. */
     private static ZoneId validate(SpendProperties properties) {
         ZoneId zone;
         try {
@@ -236,6 +270,22 @@ public class SpendGuard {
         }
         requireCap("wexy.spend.global", properties.global());
         properties.provider().forEach((name, cap) -> requireCap("wexy.spend.provider." + name, cap));
+        for (String name : properties.lane().keySet()) {
+            if (!LANES.contains(name)) {
+                throw new IllegalStateException("wexy.spend.lane." + name + " is not a lane: the lanes are "
+                        + String.join(", ", LANES) + ".");
+            }
+        }
+        for (String name : LANES) {
+            SpendProperties.Lane lane = properties.lane().get(name);
+            if (lane == null || lane.dailyMicroUsd() == null) {
+                throw new IllegalStateException("No daily ceiling for the " + name + " lane at wexy.spend.lane." + name
+                        + ".daily-micro-usd. Every lane is required; a missing one must deny, never unlock.");
+            }
+            if (lane.dailyMicroUsd() < 0) {
+                throw new IllegalStateException("wexy.spend.lane." + name + " has a negative ceiling. Use 0 to close the lane.");
+            }
+        }
         return zone;
     }
 
@@ -255,19 +305,21 @@ public class SpendGuard {
     }
 
     /** As {@link #reserve}, answering the outcome alone. */
-    public Charge tryCharge(String provider, long microUsd, String detail) {
-        return reserve(provider, microUsd, detail).outcome();
+    public Charge tryCharge(String provider, String lane, long microUsd, String detail) {
+        return reserve(provider, lane, microUsd, detail).outcome();
     }
 
     /**
-     * Claims {@code microUsd} against the ceilings, or refuses. Any overrun still owed is counted
-     * first; while one cannot be, nothing is reserved (the ledger must not run behind the invoice).
+     * Claims {@code microUsd} against the ceilings and the lane's day, or refuses. Any overrun still
+     * owed is counted first; while one cannot be, nothing is reserved (the ledger must not run
+     * behind the invoice).
      *
      * @param provider a key of {@code wexy.spend.provider.*}
+     * @param lane     who the call is for, one of {@link #LANES}: a lane is never guessed
      * @param microUsd what this call can cost at most, already resolved to an integer
      * @param detail   what is being paid for, for the log line when it is refused
      */
-    public Receipt reserve(String provider, long microUsd, String detail) {
+    public Receipt reserve(String provider, String lane, long microUsd, String detail) {
         if (microUsd <= 0) {
             throw new IllegalArgumentException("A billable call must never be counted as free: " + microUsd
                     + " micro-USD for " + detail);
@@ -277,38 +329,43 @@ public class SpendGuard {
             throw new IllegalStateException("No spend ceiling for provider '" + provider
                     + "' under wexy.spend.provider.*; refusing " + detail);
         }
+        SpendProperties.Lane laneCap = lane == null ? null : properties.lane().get(lane);
+        if (laneCap == null) {
+            throw new IllegalStateException("No lane '" + lane + "' under wexy.spend.lane.*: every call names who it is for; "
+                    + "refusing " + detail);
+        }
         if (redis == null) {
             chargeCounter(provider, "denied_no_meter").increment();
             moneyCounter(provider, "refused").increment(microUsd);
-            logger.error("Refusing model call [{}] {}: SpendGuard has no Redis to meter against.", provider, detail);
-            return new Receipt(Charge.METER_UNAVAILABLE, provider, microUsd, List.of());
+            logger.error("Refusing model call [{}, {} lane] {}: SpendGuard has no Redis to meter against.", provider, lane, detail);
+            return new Receipt(Charge.METER_UNAVAILABLE, provider, lane, microUsd, List.of());
         }
         if (!settleDebts()) {
             chargeCounter(provider, "denied_debt").increment();
             moneyCounter(provider, "refused").increment(microUsd);
-            logger.error("Refusing model call [{}] {}: {} of overrun is still uncounted, and no call is reserved until it is.",
-                    provider, detail, usd(owed()));
-            return new Receipt(Charge.METER_UNAVAILABLE, provider, microUsd, List.of());
+            logger.error("Refusing model call [{}, {} lane] {}: {} of overrun is still uncounted, and no call is reserved until it is.",
+                    provider, lane, detail, usd(owed()));
+            return new Receipt(Charge.METER_UNAVAILABLE, provider, lane, microUsd, List.of());
         }
 
-        List<String> keys = windowKeys(provider);
+        List<String> keys = windowKeys(provider, lane);
         String result;
         try {
-            result = redis.execute(CHARGE, keys, arguments(microUsd, providerCap));
+            result = redis.execute(CHARGE, keys, arguments(microUsd, providerCap, laneCap));
         } catch (RuntimeException e) {
             // Fail closed. Counted apart from denied_cap: a cap hit is the design working, this is the
             // design unavailable, and the caller's symptom is the same.
             chargeCounter(provider, "denied_error").increment();
             moneyCounter(provider, "refused").increment(microUsd);
-            logger.error("Refusing model call [{}] {}: SpendGuard could not reach Redis.", provider, detail, e);
-            return new Receipt(Charge.METER_UNAVAILABLE, provider, microUsd, keys);
+            logger.error("Refusing model call [{}, {} lane] {}: SpendGuard could not reach Redis.", provider, lane, detail, e);
+            return new Receipt(Charge.METER_UNAVAILABLE, provider, lane, microUsd, keys);
         }
 
         if (result == null) {
             chargeCounter(provider, "denied_error").increment();
             moneyCounter(provider, "refused").increment(microUsd);
-            logger.error("Refusing model call [{}] {}: SpendGuard's script returned nothing.", provider, detail);
-            return new Receipt(Charge.METER_UNAVAILABLE, provider, microUsd, keys);
+            logger.error("Refusing model call [{}, {} lane] {}: SpendGuard's script returned nothing.", provider, lane, detail);
+            return new Receipt(Charge.METER_UNAVAILABLE, provider, lane, microUsd, keys);
         }
 
         String[] parts = result.split("\\|");
@@ -316,19 +373,20 @@ public class SpendGuard {
         if ("DENY".equals(parts[0])) {
             chargeCounter(provider, "denied_cap").increment();
             moneyCounter(provider, "refused").increment(microUsd);
-            observeDeniedWindow(provider, parts);
-            logger.error("SPEND CAP HIT [{}]: refused {} because the {} ceiling is exhausted ({} of {} spent). "
-                            + "Live creation stays off until the window rolls. Raise wexy.spend.* only after "
+            observeDeniedWindow(provider, lane, parts);
+            logger.error("SPEND CAP HIT [{}, {} lane]: refused {} because the {} ceiling is exhausted ({} of {} spent). "
+                            + "Live creation stays off for this {} until the window rolls. Raise wexy.spend.* only after "
                             + "confirming the spend is legitimate.",
-                    provider, detail, parts[1], usd(Long.parseLong(parts[2])), usd(Long.parseLong(parts[3])));
-            return new Receipt(Charge.CAP_REACHED, provider, microUsd, keys);
+                    provider, lane, detail, parts[1], usd(Long.parseLong(parts[2])), usd(Long.parseLong(parts[3])),
+                    "LANE_DAY".equals(parts[1]) ? "lane" : "service");
+            return new Receipt(Charge.CAP_REACHED, provider, lane, microUsd, keys);
         }
 
         chargeCounter(provider, "allowed").increment();
         moneyCounter(provider, "spent").increment(microUsd);
-        observeAllowedWindows(provider, parts);
-        warnOnThresholdCrossing(provider, microUsd, parts);
-        return new Receipt(Charge.ALLOWED, provider, microUsd, keys);
+        observeAllowedWindows(provider, lane, parts);
+        warnOnThresholdCrossing(provider, lane, microUsd, parts);
+        return new Receipt(Charge.ALLOWED, provider, lane, microUsd, keys);
     }
 
     /**
@@ -355,6 +413,7 @@ public class SpendGuard {
             return Settlement.NONE;
         }
         String provider = receipt.provider();
+        String lane = receipt.lane();
         SpendProperties.Cap providerCap = properties.provider().get(provider);
         if (delta > 0) {
             chargeCounter(provider, "overrun").increment();
@@ -366,10 +425,10 @@ public class SpendGuard {
         } else {
             moneyCounter(provider, "refunded").increment(-delta);
         }
-        Settlement applied = adjust(provider, receipt.keys(), delta, providerCap, detail);
+        Settlement applied = adjust(provider, lane, receipt.keys(), delta, providerCap, detail);
         if (applied == Settlement.METER_UNAVAILABLE) {
             if (delta > 0) {
-                owe(new Debt(provider, receipt.keys(), delta, detail));
+                owe(new Debt(provider, lane, receipt.keys(), delta, detail));
             } else {
                 logger.warn("The unused {} of {}'s reservation could not be returned: the reservation stands.",
                         usd(-delta), detail);
@@ -388,8 +447,8 @@ public class SpendGuard {
     }
 
     /** As {@link #tryCharge}, raising the studio's code instead of returning. */
-    public void chargeOrThrow(String provider, long microUsd, String detail) {
-        switch (tryCharge(provider, microUsd, detail)) {
+    public void chargeOrThrow(String provider, String lane, long microUsd, String detail) {
+        switch (tryCharge(provider, lane, microUsd, detail)) {
             case ALLOWED -> {
             }
             case CAP_REACHED -> throw new ForgeException(ErrorCode.BUDGET,
@@ -400,14 +459,14 @@ public class SpendGuard {
     }
 
     /** Runs the adjust script; which way it moved, or that the meter was lost. */
-    private Settlement adjust(String provider, List<String> keys, long delta, SpendProperties.Cap providerCap, String detail) {
+    private Settlement adjust(String provider, String lane, List<String> keys, long delta, SpendProperties.Cap providerCap, String detail) {
         if (redis == null) {
             logger.error("Cannot settle {} ({}): SpendGuard has no Redis.", detail, usd(delta));
             return Settlement.METER_UNAVAILABLE;
         }
         String result;
         try {
-            result = redis.execute(ADJUST, keys, arguments(delta, providerCap));
+            result = redis.execute(ADJUST, keys, arguments(delta, providerCap, properties.lane().get(lane)));
         } catch (RuntimeException e) {
             logger.error("Cannot settle {} ({}): SpendGuard could not reach Redis.", detail, usd(delta), e);
             return Settlement.METER_UNAVAILABLE;
@@ -416,7 +475,7 @@ public class SpendGuard {
             logger.error("Cannot settle {} ({}): the adjust script answered {}.", detail, usd(delta), result);
             return Settlement.METER_UNAVAILABLE;
         }
-        observeAllowedWindows(provider, result.split("\\|"));
+        observeAllowedWindows(provider, lane, result.split("\\|"));
         return delta > 0 ? Settlement.CHARGED : Settlement.REFUNDED;
     }
 
@@ -436,7 +495,7 @@ public class SpendGuard {
         Debt debt;
         while ((debt = debts.peek()) != null) {
             SpendProperties.Cap providerCap = properties.provider().get(debt.provider());
-            if (adjust(debt.provider(), debt.keys(), debt.microUsd(), providerCap, debt.detail()) == Settlement.METER_UNAVAILABLE) {
+            if (adjust(debt.provider(), debt.lane(), debt.keys(), debt.microUsd(), providerCap, debt.detail()) == Settlement.METER_UNAVAILABLE) {
                 return false;
             }
             debts.remove(debt);
@@ -446,8 +505,11 @@ public class SpendGuard {
         return true;
     }
 
-    /** The four windows a charge lands in: this month and today, across providers and for this one. */
-    private List<String> windowKeys(String provider) {
+    /**
+     * The five windows a charge lands in: this month and today, across providers and for this one,
+     * and the lane's today (W1). A lane's key has a segment more than a provider's, so the two never meet.
+     */
+    private List<String> windowKeys(String provider, String lane) {
         LocalDate today = LocalDate.now(zone);
         String month = MONTH.format(today);
         String day = DAY.format(today);
@@ -455,11 +517,12 @@ public class SpendGuard {
                 KEY_PREFIX + "m:" + month,
                 KEY_PREFIX + "m:" + month + ":" + provider,
                 KEY_PREFIX + "d:" + day,
-                KEY_PREFIX + "d:" + day + ":" + provider);
+                KEY_PREFIX + "d:" + day + ":" + provider,
+                KEY_PREFIX + "d:" + day + ":lane:" + lane);
     }
 
-    /** Both scripts' arguments: the amount, the four ceilings, the two lifetimes. */
-    private Object[] arguments(long microUsd, SpendProperties.Cap providerCap) {
+    /** Both scripts' arguments: the amount, the four ceilings, the two lifetimes, then the lane's ceiling. */
+    private Object[] arguments(long microUsd, SpendProperties.Cap providerCap, SpendProperties.Lane laneCap) {
         SpendProperties.Cap globalCap = properties.global();
         return new Object[]{
                 Long.toString(microUsd),
@@ -468,7 +531,8 @@ public class SpendGuard {
                 Long.toString(globalCap.dailyMicroUsd()),
                 Long.toString(providerCap.dailyMicroUsd()),
                 Long.toString(MONTH_TTL_SECONDS),
-                Long.toString(DAY_TTL_SECONDS)};
+                Long.toString(DAY_TTL_SECONDS),
+                Long.toString(laneCap.dailyMicroUsd())};
     }
 
     private Counter chargeCounter(String provider, String outcome) {
@@ -507,22 +571,24 @@ public class SpendGuard {
     }
 
     /**
-     * OK|providerMonth|providerMonthCap|providerDay|providerDayCap|globalMonth|globalMonthCap|globalDay|globalDayCap.
+     * OK|providerMonth|providerMonthCap|providerDay|providerDayCap|globalMonth|globalMonthCap|globalDay|globalDayCap|laneDay|laneDayCap.
      * The global day is the ceiling that bites first in development ($10 a day), so it has a gauge
-     * and threshold warnings like the others (forge-loop design §4.2).
+     * and threshold warnings like the others (forge-loop design §4.2); each lane's day has its own
+     * (scope {@code lane}, the lane's name as the provider tag: three values, from configuration).
      */
-    private void observeAllowedWindows(String provider, String[] parts) {
-        if (parts.length < 9) {
+    private void observeAllowedWindows(String provider, String lane, String[] parts) {
+        if (parts.length < 11) {
             return;
         }
         observeWindow("provider", "month", provider, parts[1], parts[2]);
         observeWindow("provider", "day", provider, parts[3], parts[4]);
         observeWindow("global", "month", "all", parts[5], parts[6]);
         observeWindow("global", "day", "all", parts[7], parts[8]);
+        observeWindow("lane", "day", lane, parts[9], parts[10]);
     }
 
     /** DENY|WHICH_CEILING|spent|cap */
-    private void observeDeniedWindow(String provider, String[] parts) {
+    private void observeDeniedWindow(String provider, String lane, String[] parts) {
         if (parts.length < 4) {
             return;
         }
@@ -531,6 +597,7 @@ public class SpendGuard {
             case "GLOBAL_DAY" -> observeWindow("global", "day", "all", parts[2], parts[3]);
             case "PROVIDER_MONTH" -> observeWindow("provider", "month", provider, parts[2], parts[3]);
             case "PROVIDER_DAY" -> observeWindow("provider", "day", provider, parts[2], parts[3]);
+            case "LANE_DAY" -> observeWindow("lane", "day", lane, parts[2], parts[3]);
             default -> {
             }
         }
@@ -570,14 +637,15 @@ public class SpendGuard {
     }
 
     /** Logs once as utilisation crosses each threshold, on the call that crossed it. */
-    private void warnOnThresholdCrossing(String provider, long microUsd, String[] parts) {
-        if (parts.length < 9) {
+    private void warnOnThresholdCrossing(String provider, String lane, long microUsd, String[] parts) {
+        if (parts.length < 11) {
             return;
         }
         reportCrossing(provider + " monthly", microUsd, parts[1], parts[2]);
         reportCrossing(provider + " daily", microUsd, parts[3], parts[4]);
         reportCrossing("GLOBAL monthly", microUsd, parts[5], parts[6]);
         reportCrossing("GLOBAL daily", microUsd, parts[7], parts[8]);
+        reportCrossing(lane + " lane daily", microUsd, parts[9], parts[10]);
     }
 
     private void reportCrossing(String label, long microUsd, String afterRaw, String capRaw) {

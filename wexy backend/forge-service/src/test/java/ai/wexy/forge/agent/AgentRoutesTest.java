@@ -5,6 +5,7 @@ import ai.wexy.forge.FakeMetaApi;
 import ai.wexy.forge.engine.AdapterManifest;
 import ai.wexy.forge.engine.EngineBundle;
 import ai.wexy.forge.error.ErrorEnvelopeHandler;
+import ai.wexy.forge.allowance.TestAdmissions;
 import ai.wexy.forge.identity.InternalTokenFilter;
 import ai.wexy.forge.loop.LoopProperties;
 import ai.wexy.forge.models.ModelCatalog;
@@ -14,6 +15,7 @@ import ai.wexy.forge.records.InMemoryGenerationStore;
 import ai.wexy.forge.schemas.JsonSchemas;
 import ai.wexy.forge.spend.InMemorySpendLedger;
 import ai.wexy.forge.spend.SpendGuard;
+import ai.wexy.forge.spend.SpendLanes;
 import ai.wexy.forge.spend.SpendProperties;
 import ai.wexy.forge.templates.HostContract;
 import ai.wexy.forge.templates.PromptBuilder;
@@ -100,6 +102,8 @@ class AgentRoutesTest {
     WebClient raw;
     AgentHandler handler;
     MeteredModelClient models;
+    /** The turn's admission (W1): wide, so these tests are about the turn; AllowanceRoutesTest holds the allowances. */
+    TestAdmissions.Admit admit = TestAdmissions.open();
     private DisposableServer server;
 
     @AfterEach
@@ -125,7 +129,7 @@ class AgentRoutesTest {
         ObjectProvider<StringRedisTemplate> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(template);
         SpendGuard guard = new SpendGuard(provider, new SpendProperties(null, new SpendProperties.Cap(5_000_000L, 5_000_000L),
-                Map.of("meta-spark", new SpendProperties.Cap(5_000_000L, sparkDailyCapMicroUsd))), new SimpleMeterRegistry());
+                Map.of("meta-spark", new SpendProperties.Cap(5_000_000L, sparkDailyCapMicroUsd)), SpendLanes.open()), new SimpleMeterRegistry());
         catalog = new ModelCatalog(new ModelProperties(
                 Map.of("agent", new ModelProperties.Role("m-1", "meta-spark", 16000, Duration.ofSeconds(10), "medium", null)),
                 Map.of("m-1", new ModelProperties.Price(new BigDecimal("1.25"), new BigDecimal("4.25")))), guard);
@@ -139,7 +143,7 @@ class AgentRoutesTest {
                 budget, System::currentTimeMillis);
         models = new MeteredModelClient(api, catalog, guard);
         handler = new AgentHandler(loop, models, catalog, store,
-                new LoopProperties(null, Duration.ofMillis(50), null, false), bundle);
+                new LoopProperties(null, Duration.ofMillis(50), null, false), bundle, admit.admission());
         HttpHandler http = RouterFunctions.toHttpHandler(new AgentConfiguration().agentRoutes(handler), HandlerStrategies.builder()
                 .webFilter(new InternalTokenFilter(new ImmutableJWKSet<>(new JWKSet(GATEWAY.toPublicJWK()))))
                 .exceptionHandler(new ErrorEnvelopeHandler())
@@ -299,7 +303,7 @@ class AgentRoutesTest {
     private static org.springframework.web.reactive.function.server.ServerRequest request(Object body) {
         org.springframework.mock.web.server.MockServerWebExchange exchange = org.springframework.mock.web.server.MockServerWebExchange
                 .from(org.springframework.mock.http.server.reactive.MockServerHttpRequest.post("/v1/agent/turn"));
-        exchange.getAttributes().put(InternalTokenFilter.CALLER_ATTRIBUTE, new ai.wexy.forge.identity.Caller("uid-agent", true, false, "anonymous"));
+        exchange.getAttributes().put(InternalTokenFilter.CALLER_ATTRIBUTE, new ai.wexy.forge.identity.Caller("uid-agent", true, false, "anonymous", TestAdmissions.NETWORK));
         return org.springframework.mock.web.reactive.function.server.MockServerRequest.builder().exchange(exchange)
                 .method(org.springframework.http.HttpMethod.POST).uri(java.net.URI.create("/v1/agent/turn"))
                 .body(reactor.core.publisher.Mono.just(JSON.valueToTree(body)));
@@ -343,7 +347,7 @@ class AgentRoutesTest {
     void aCallWithNoTimeLeftIsRefusedBeforeAnythingIsChargedOrRecorded() {
         start(5_000_000L);
         MeteredModelCaller calls = new MeteredModelCaller(models, catalog, store, "turn-1",
-                new ai.wexy.forge.identity.Caller("uid-agent", true, false, "anonymous"), "{}", "agent.v3", HostContract.VERSION);
+                new ai.wexy.forge.identity.Caller("uid-agent", true, false, "anonymous", TestAdmissions.NETWORK), "{}", "agent.v3", HostContract.VERSION);
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> calls.call(1, List.of(ai.wexy.forge.upstream.ChatMessage.user("x")),
                         null, () -> { }, Duration.ZERO))
@@ -401,6 +405,22 @@ class AgentRoutesTest {
                 && g.promptVersion().equals("agent.v6"));
     }
 
+    /** W1 (the creations platform design §10): a base may name the turn it revises; the revision runs as before. */
+    @Test
+    void aRevisionsBaseMayNameTheTurnItRevises() throws Exception {
+        start(5_000_000L);
+        answers(USAGE, AgentLoopTest.valid("revise"));
+
+        List<ServerSentEvent<String>> events = stream(revision(base -> base.put("turnId", "01JD0000000000000000000000")));
+
+        // As every revision's since EA6.3: its notes to its modules, `repairs`, before the end (empty here).
+        assertThat(names(events)).containsExactly("meta", "call", "usage", "check", "design", "program", "repairs", "done");
+        assertThat(data(events, "done").path("status").asText()).isEqualTo("handed-off");
+        // The id is the allowance's, never the model's: it reaches no prompt.
+        assertThat(fake.requests()).filteredOn(r -> r.path().endsWith("/chat/completions")).singleElement()
+                .matches(r -> !r.body().contains("01JD0000000000000000000000"));
+    }
+
     @Test
     void aRevisionsBaseIsCheckedWholeBeforeAnythingIsRecordedOrCharged() throws Exception {
         start(5_000_000L);
@@ -409,8 +429,12 @@ class AgentRoutesTest {
         nullBase.putNull("base");
 
         refused(nullBase, 400, "base is a revision's versions, design, program and findings");
-        refused(revision(b -> b.remove("findings")), 400, "base takes exactly versions, design, program, findings; findings missing");
-        refused(revision(b -> b.put("prompt", "again")), 400, "base takes exactly versions, design, program, findings; not prompt");
+        refused(revision(b -> b.remove("findings")), 400, "base takes exactly versions, design, program, findings (and optionally turnId); findings missing");
+        refused(revision(b -> b.put("prompt", "again")), 400, "base takes exactly versions, design, program, findings (and optionally turnId); not prompt");
+        // W1: the turn a base revises is a ULID as its meta named it; anything else is the client's bug, said, never a prompt.
+        refused(revision(b -> b.put("turnId", "turn-1")), 400, "base.turnId is the turn this one revises, a ULID as its meta named it, not \"turn-1\"");
+        refused(revision(b -> b.put("turnId", 7)), 400, "base.turnId is the turn this one revises");
+        refused(revision(b -> b.putNull("turnId")), 400, "base.turnId is the turn this one revises");
         refused(revision(b -> ((ObjectNode) b.path("versions")).put("manifest", "0".repeat(64))), 400,
                 "base.versions.manifest is \"" + "0".repeat(64) + "\"; this server speaks " + AdapterManifest.HASH);
         refused(revision(b -> ((ObjectNode) b.path("versions")).put("actionSchema", "agent-action.v1")), 400,
@@ -449,6 +473,66 @@ class AgentRoutesTest {
         assertThat(data(events, "done").path("status").asText()).isEqualTo("handed-off");
     }
 
+    // W1 (the creations platform design §11; PL-T1, PL-T12, PL-T13, PL-T18's order): a turn without a base is an entry
+    // request; a revision naming its turn, with the same prompt, runs inside that turn's prompt.
+
+    private void strict() {
+        admit = TestAdmissions.admit(TestAdmissions.strict(), java.time.Clock.systemUTC());
+    }
+
+    @Test
+    void aRevisionNamingItsTurnRunsInsideItsPromptAndAForgedOneIsANewPrompt() throws Exception {
+        strict();
+        start(5_000_000L);
+        answers(USAGE, PROGRAM);
+        List<ServerSentEvent<String>> first = stream(BODY);
+        String turnId = data(first, "meta").path("turnId").asText();
+        assertThat(data(first, "done").path("status").asText()).isEqualTo("handed-off");
+
+        // The anonymous caller's one prompt is spent: a second first turn is refused before any record or call.
+        int calls = agentCalls().size();
+        post(BODY).expectStatus().isEqualTo(403).expectBody().jsonPath("$.code").isEqualTo("account-required");
+        assertThat(agentCalls()).hasSize(calls);
+
+        // The revision names its turn and carries its prompt: inside it, so it runs.
+        answers(USAGE, AgentLoopTest.valid("revise"));
+        List<ServerSentEvent<String>> revised = stream(revision(base -> base.put("turnId", turnId)));
+        assertThat(data(revised, "done").path("status").asText()).isEqualTo("handed-off");
+
+        // A forged base (no turn, a turn of no one's, another prompt): a new prompt, refused with the allowance spent.
+        post(revision(base -> { })).expectStatus().isEqualTo(403);
+        post(revision(base -> base.put("turnId", "01JD0000000000000000000000"))).expectStatus().isEqualTo(403);
+        ObjectNode otherPrompt = revision(base -> base.put("turnId", turnId));
+        otherPrompt.put("prompt", "a different world entirely");
+        post(otherPrompt).expectStatus().isEqualTo(403);
+        assertThat(agentCalls()).hasSize(calls + 1);
+    }
+
+    @Test
+    void anUnsafeTurnIsRefusedBeforeAnyRecordOrCall() throws Exception {
+        strict();
+        start(5_000_000L);
+        answers(USAGE, PROGRAM);
+        Map<String, Object> unsafe = new java.util.HashMap<>(BODY);
+        unsafe.put("prompt", "a bloody massacre of villagers in pixel art");
+
+        post(unsafe).expectStatus().isEqualTo(422).expectBody().jsonPath("$.code").isEqualTo("content-refused");
+        assertThat(agentCalls()).isEmpty();
+        assertThat(fake.requests()).filteredOn(r -> r.path().endsWith("/chat/completions")).isEmpty();
+        assertThat(admit.store().granted()).isZero();
+    }
+
+    @Test
+    void aTurnWhoseFirstCallIsRefusedGivesItsPromptBack() throws Exception {
+        strict();
+        start(10L);
+        answers(USAGE, PROGRAM);
+
+        post(BODY).expectStatus().isEqualTo(503).expectBody().jsonPath("$.code").isEqualTo("budget");
+        await(Duration.ofSeconds(3), () -> admit.store().released() == 1);
+        assertThat(admit.store().released()).isEqualTo(1);
+    }
+
     /** One bad base: refused with this status, its envelope's message holding this text. */
     private void refused(ObjectNode body, int status, String says) throws Exception {
         String answer = post(body).expectStatus().isEqualTo(status).expectBody(String.class).returnResult().getResponseBody();
@@ -480,7 +564,7 @@ class AgentRoutesTest {
             JWTClaimsSet claims = new JWTClaimsSet.Builder().issuer(InternalToken.ISSUER).subject(uid)
                     .issueTime(new Date(now)).expirationTime(new Date(now + 60_000))
                     .claim(InternalToken.CLAIM_ANONYMOUS, true).claim(InternalToken.CLAIM_ADMIN, false)
-                    .claim(InternalToken.CLAIM_PROVIDER, "anonymous").build();
+                    .claim(InternalToken.CLAIM_PROVIDER, "anonymous").claim(InternalToken.CLAIM_IPK, TestAdmissions.NETWORK).build();
             SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(GATEWAY.getKeyID())
                     .type(JOSEObjectType.JWT).build(), claims);
             jwt.sign(new RSASSASigner(GATEWAY));

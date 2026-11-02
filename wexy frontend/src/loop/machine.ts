@@ -167,7 +167,15 @@ export function classifyError(error: unknown, stage: 'plan' | 'author' | 'repair
                 const minutes = error.retryAfterSeconds === null ? null : Math.max(1, Math.ceil(error.retryAfterSeconds / 60));
                 return { kind: 'rate', sentence: minutes === null ? COPY.failures.rate : COPY.rateWithMinutes(minutes), detail };
             }
-            case 'auth': case 'appcheck': case 'account-required': case 'forbidden': return sentence('sign-in');
+            // W1: on a forge route, account-required is the anonymous allowance spent (the account's one world, or its
+            // network's for the day): the studio offers Google sign-in, never a reload.
+            case 'account-required': return sentence('allowance');
+            case 'quota': {
+                const reset = error.retryAfterSeconds === null ? null : new Date(Date.now() + error.retryAfterSeconds * 1000);
+                return { kind: 'quota', sentence: reset === null ? COPY.failures.quota : COPY.quotaUntil(reset), detail };
+            }
+            case 'content-refused': return sentence('refused');
+            case 'auth': case 'appcheck': case 'forbidden': return sentence('sign-in');
             case 'timeout': return stage === 'plan' ? sentence('plan') : sentence('author-slow');
             case 'upstream':
                 // The backend judged the answer (empty, no function, declined) or Meta failed, twice: not slowness.
@@ -202,11 +210,17 @@ export async function runLoop<W>(deps: LoopDeps<W>, req: LoopRequest, onEvent: (
     try {
         signal.throwIfAborted();
 
-        // 1. The plan, re-planned once when the backend no longer holds it or answered badly.
+        // 1. The plan, re-planned once when the backend no longer holds it or answered badly. The re-plan names the plan
+        //    its meta said it was (W1's bug hunt, 2026-11-02): that call was dispatched and its prompt spent, so the
+        //    re-plan runs inside it; one that never said is an entry, as a plan whose call never went is given back.
         emit({ type: 'planning' });
         const t0 = performance.now();
+        let replaced: string | undefined;
         const plan = await withSlow(slowMs, () => emit({ type: 'slow', what: 'plan' }), () =>
-            retryOnce(() => client.plan(req, { onText: soFar => emit({ type: 'plan-text', soFar }) }, signal), error => emit({ type: 'retrying', what: 'plan', error })));
+            retryOnce(() => client.plan(replaced ? { ...req, retryOf: replaced } : req, {
+                onText: soFar => emit({ type: 'plan-text', soFar }),
+                onMeta: generation => { if (generation.generationId) replaced = generation.generationId; },
+            }, signal), error => emit({ type: 'retrying', what: 'plan', error })));
         const planMs = performance.now() - t0;
         generations.push(plan.generation);
         emit({ type: 'planned', draft: plan.draft, generation: plan.generation, clamped: plan.clamped, ready: !!plan.ready });

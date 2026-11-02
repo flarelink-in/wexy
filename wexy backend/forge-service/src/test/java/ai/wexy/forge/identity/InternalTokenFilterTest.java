@@ -82,7 +82,24 @@ class InternalTokenFilterTest {
     void theGatewaysTokenMakesTheCaller() throws Exception {
         post("/v1/forge/plan", token(gatewayKey, InternalToken.ISSUER, 120_000));
 
-        assertThat(Caller.of(reached.get())).isEqualTo(new Caller("anon-uid", true, false, "anonymous"));
+        assertThat(Caller.of(reached.get())).isEqualTo(new Caller("anon-uid", true, false, "anonymous", null));
+    }
+
+    /** W1: the caller's network key travels in the signed token, and only there: the caller carries what the gateway signed. */
+    @Test
+    void theCallersNetworkKeyComesFromTheToken() throws Exception {
+        long now = System.currentTimeMillis();
+        JWTClaimsSet claims = new JWTClaimsSet.Builder().issuer(InternalToken.ISSUER).subject("anon-uid")
+                .issueTime(new Date(now)).expirationTime(new Date(now + 120_000))
+                .claim(InternalToken.CLAIM_ANONYMOUS, true).claim(InternalToken.CLAIM_ADMIN, false)
+                .claim(InternalToken.CLAIM_PROVIDER, "anonymous").claim(InternalToken.CLAIM_IPK, "a1b2c3").build();
+        SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(gatewayKey.getKeyID())
+                .type(JOSEObjectType.JWT).build(), claims);
+        jwt.sign(new RSASSASigner(gatewayKey));
+
+        post("/v1/forge/plan", jwt.serialize());
+
+        assertThat(Caller.of(reached.get()).ipk()).isEqualTo("a1b2c3");
     }
 
     @Test

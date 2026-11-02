@@ -3,3 +3,9 @@
 spring:
   config:
     import: "optional:file:.env[.properties],optional:file:../.env[.properties]"
+
+wexy:
+  allowance:
+    # Not a secret: the ASCII of "local-dev-not-a-secret-uidhmac-1", so the local stack counts callers as a deployment
+    # does (W1). The local profile never runs anywhere else; .env may set a real one.
+    uid-hmac-hex: ${WEXY_UID_HMAC_KEY:6c6f63616c2d6465762d6e6f742d612d7365637265742d756964686d61632d31}

@@ -3,6 +3,7 @@ package ai.wexy.gateway.auth;
 import ai.wexy.common.ErrorCode;
 import ai.wexy.common.InternalToken;
 import ai.wexy.gateway.error.GatewayRejection;
+import ai.wexy.gateway.shield.ClientNetworkKey;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -40,6 +41,7 @@ public class AuthorizationFilter {
 
     private final FirebaseTokenVerifier verifier;
     private final InternalTokenMinter minter;
+    private final ClientNetworkKey networkKey;
     private final Set<String> adminUids;
 
     private final PolicyFilter anonymousAllowed = new PolicyFilter(Policy.ANONYMOUS_ALLOWED);
@@ -60,10 +62,12 @@ public class AuthorizationFilter {
 
     public AuthorizationFilter(FirebaseTokenVerifier verifier,
                                InternalTokenMinter minter,
+                               ClientNetworkKey networkKey,
                                MeterRegistry meterRegistry,
                                @Value("${wexy.auth.admin-uids:}") String adminUids) {
         this.verifier = verifier;
         this.minter = minter;
+        this.networkKey = networkKey;
         this.adminUids = Arrays.stream(adminUids.split(","))
                 .map(String::trim)
                 .filter(uid -> !uid.isEmpty())
@@ -158,8 +162,9 @@ public class AuthorizationFilter {
             exchange.getAttributes().put(AuthAttributes.ANONYMOUS, caller.anonymous());
             authorisedMeter.increment();
 
+            // The network key comes from the address the gateway resolved, never from a header the client chose (W1).
             ServerHttpRequest outbound = exchange.getRequest().mutate()
-                    .header(InternalToken.HEADER, minter.mint(caller, admin))
+                    .header(InternalToken.HEADER, minter.mint(caller, admin, networkKey.of(exchange)))
                     .build();
             return chain.filter(exchange.mutate().request(outbound).build());
         }

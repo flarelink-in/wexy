@@ -74,7 +74,8 @@ export function createLiveClient(api: Api, deadlines: Deadlines = DEADLINES): Fo
         source: 'live',
 
         async plan(req, progress, signal): Promise<PlanResult> {
-            const { text, generation } = await stream('/v1/forge/plan', { prompt: req.prompt, style: req.style, seconds: req.seconds }, 'planner', deadlines.planMs, progress, signal);
+            const body = { prompt: req.prompt, style: req.style, seconds: req.seconds, ...(req.retryOf ? { retryOf: req.retryOf } : {}) };
+            const { text, generation } = await stream('/v1/forge/plan', body, 'planner', deadlines.planMs, progress, signal);
             const parsed = parseDraft(text);
             if (!parsed.draft) {
                 // The server validated the same text; a refusal here is a drift between the two schemas, said plainly.
@@ -93,10 +94,11 @@ export function createLiveClient(api: Api, deadlines: Deadlines = DEADLINES): Fo
             return { fn, text: unfence(text), generation };
         },
 
-        async direct(spec: SceneSpec, turn: string, signal): Promise<DirectResult> {
+        async direct(spec: SceneSpec, turn: string, signal, planId?: string): Promise<DirectResult> {
             const t0 = performance.now();
             try {
-                const res = await api.send({ method: 'POST', path: '/v1/forge/direct', body: { spec, turn }, auth: true, signal: within(signal, deadlines.directMs) });
+                const body = planId ? { spec, turn, planId } : { spec, turn };
+                const res = await api.send({ method: 'POST', path: '/v1/forge/direct', body, auth: true, signal: within(signal, deadlines.directMs) });
                 const doc = await res.json() as Record<string, unknown>;
                 const usage = doc.usage && typeof doc.usage === 'object' ? (doc.usage as StreamUsage) : null;
                 const generation: GenerationInfo = {

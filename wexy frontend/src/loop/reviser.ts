@@ -12,7 +12,8 @@
 //               never zero (the design §8).
 // Whether a hand-off changed S is the machine's to judge, since a program revision may not; the backend keeps S too.
 // Each event goes to the machine as it comes: the candidate keeps the revision's turn, its model, template and every
-// call with its charge, for Developer view and the bundle (the EA4.5 review).
+// call with its charge, for Developer view and the bundle (the EA4.5 review). The base names the turn it revises (W1,
+// 2026-11-02): the backend runs the revision inside that turn's prompt, so it spends none of its own.
 
 import { TURN_VERSIONS, type AgentClient } from '../forge-client/agent-client';
 import type { RevisionResult, Reviser } from './candidate';
@@ -22,7 +23,7 @@ export function createReviser(client: AgentClient): Reviser {
     return async (request, signal, onEvent = () => {}): Promise<RevisionResult> => {
         const result = await client.turn({
             prompt: request.request.prompt, style: request.request.style, seconds: request.request.seconds,
-            base: { versions: TURN_VERSIONS, design: request.design, program: request.program, findings: request.findings },
+            base: { turnId: request.turnId, versions: TURN_VERSIONS, design: request.design, program: request.program, findings: request.findings },
         }, onEvent, signal);
         const calls = result.calls.length;
         if (result.status === 'handed-off') {

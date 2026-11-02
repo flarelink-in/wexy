@@ -19,8 +19,9 @@ import java.util.Date;
  * Adapted from FlareLink's InternalIdentityService (pre-existing work). Changed: no profile lookup
  * in a user service, and so no profile cache or its connection pool; the claims come from the
  * Firebase token alone (backend architecture §4): the uid as the subject, whether the caller is
- * anonymous, whether the uid is on the admin allow-list, and the sign-in provider. Minted with
- * Nimbus rather than jjwt, so the gateway needs one JOSE library.
+ * anonymous, whether the uid is on the admin allow-list, and the sign-in provider; since W1, the
+ * caller's network key ({@code ipk}), from the address the gateway resolved, never from a header the
+ * client wrote. Minted with Nimbus rather than jjwt, so the gateway needs one JOSE library.
  */
 @Component
 public class InternalTokenMinter {
@@ -59,17 +60,26 @@ public class InternalTokenMinter {
         return token;
     }
 
-    public String mint(VerifiedCaller caller, boolean admin) {
+    /**
+     * The token for a verified caller.
+     *
+     * @param ipk the caller's network key ({@code ClientNetworkKey}), or null when there is none: the
+     *            claim is then left out, never sent empty (W1)
+     */
+    public String mint(VerifiedCaller caller, boolean admin, String ipk) {
         long now = System.currentTimeMillis();
-        JWTClaimsSet claims = new JWTClaimsSet.Builder()
+        JWTClaimsSet.Builder builder = new JWTClaimsSet.Builder()
                 .issuer(InternalToken.ISSUER)
                 .subject(caller.uid())
                 .issueTime(new Date(now))
                 .expirationTime(new Date(now + InternalToken.LIFETIME_MILLIS))
                 .claim(InternalToken.CLAIM_ANONYMOUS, caller.anonymous())
                 .claim(InternalToken.CLAIM_ADMIN, admin)
-                .claim(InternalToken.CLAIM_PROVIDER, caller.provider())
-                .build();
+                .claim(InternalToken.CLAIM_PROVIDER, caller.provider());
+        if (ipk != null) {
+            builder.claim(InternalToken.CLAIM_IPK, ipk);
+        }
+        JWTClaimsSet claims = builder.build();
         SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256)
                 .keyID(signingKey.getKeyId())
                 .type(JOSEObjectType.JWT)

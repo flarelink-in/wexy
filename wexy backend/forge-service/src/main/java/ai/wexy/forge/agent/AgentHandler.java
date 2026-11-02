@@ -1,6 +1,8 @@
 package ai.wexy.forge.agent;
 
 import ai.wexy.common.ErrorCode;
+import ai.wexy.forge.allowance.Grant;
+import ai.wexy.forge.allowance.PromptAdmission;
 import ai.wexy.forge.engine.AdapterManifest;
 import ai.wexy.forge.engine.EngineBundle;
 import ai.wexy.forge.error.ForgeException;
@@ -49,6 +51,12 @@ import java.util.concurrent.atomic.AtomicReference;
  * refused) is an HTTP envelope, {@code 503 budget} or {@code paused}, as the loop's routes answer a refusal; any other
  * opens the stream with {@code meta}, then the loop's events, a heartbeat through its silences, and exactly one
  * terminal event (A7). The client leaving cancels the call in flight and ends the turn (A8).
+ *
+ * <p>W1 (the creations platform design §11): a turn without a base is an entry request, admitted before any record or
+ * charge (the caller's allowance, the idea's content safety, one grant: {@link PromptAdmission}); a revision naming its
+ * turn ({@code base.turnId}) runs inside that turn's prompt when the caller has it, a revision is left and the prompt is
+ * the same, and is an entry otherwise. The grant is spent at the turn's first word, its first allowed charge, and given
+ * back when the turn never spoke.
  */
 @Component
 public class AgentHandler {
@@ -65,9 +73,11 @@ public class AgentHandler {
     private final GenerationStore store;
     private final LoopProperties loopProperties;
     private final EngineBundle bundle;
+    private final PromptAdmission admission;
 
     public AgentHandler(AgentLoop loop, MeteredModelClient models, ModelCatalog catalog, GenerationStore store,
-                        LoopProperties loopProperties, EngineBundle bundle) {
+                        LoopProperties loopProperties, EngineBundle bundle, PromptAdmission admission) {
+        this.admission = admission;
         this.loop = loop;
         this.models = models;
         this.catalog = catalog;
@@ -86,39 +96,53 @@ public class AgentHandler {
                     // A revision's base is checked whole before anything is recorded or charged (AgentBase).
                     AgentBase base = body.has("base") ? loop.base(body.path("base"), bundle.bundleHash()) : null;
                     String turnId = Ulid.next(Instant.now());
-                    // The template the loop builds every call from: records and meta name it, never a copy of its id.
-                    MeteredModelCaller calls = new MeteredModelCaller(models, catalog, store, turnId, caller,
-                            body.toString(), loop.promptVersion(), HostContract.VERSION);
-                    Sinks.Many<ServerSentEvent<String>> events = Sinks.many().unicast().onBackpressureBuffer();
-                    Sinks.One<Boolean> opened = Sinks.one();
-                    AtomicReference<AgentOutcome> silent = new AtomicReference<>();
-                    AtomicBoolean cancelled = new AtomicBoolean();
-                    Schedulers.boundedElastic().schedule(() -> run(turnId, turn, base, calls, events, opened, silent, cancelled));
-                    // A client that leaves before the first word ends the turn too (gate A): no call starts after it,
-                    // and one the meter is deciding stops there; the body's own cancel covers the stream after.
-                    return opened.asMono().doOnCancel(() -> {
-                        cancelled.set(true);
-                        calls.cancel();
-                    }).flatMap(started -> started
-                            ? ServerResponse.ok()
-                                    .contentType(MediaType.TEXT_EVENT_STREAM)
-                                    .header(HttpHeaders.CACHE_CONTROL, "no-store")
-                                    .header("X-Accel-Buffering", "no")
-                                    .body(BodyInserters.fromServerSentEvents(SseEncoder.heartbeats(events.asFlux().doOnCancel(() -> {
-                                        cancelled.set(true);
-                                        calls.cancel();
-                                    }), loopProperties.heartbeat())))
-                            : Mono.error(refusal(silent.get())));
+                    // W1: admitted before any record or charge, off the event loop (Redis, content safety); a client gone
+                    // meanwhile gets nothing, and its grant goes back (PromptAdmission.offLoop).
+                    return PromptAdmission.offLoop(() -> base == null
+                                    ? admission.entry(caller, turnId, turn.prompt(), "turn")
+                                    : admission.revision(caller, base.turnId(), turnId, turn.prompt()))
+                            .flatMap(grant -> start(caller, body, turn, base, turnId, grant.orElse(null)));
                 });
+    }
+
+    /** The admitted turn: its loop on its own thread, and the response once it has said its first word, or why not. */
+    private Mono<ServerResponse> start(Caller caller, JsonNode body, AgentRequest turn, AgentBase base, String turnId, Grant grant) {
+        // The template the loop builds every call from: records and meta name it, never a copy of its id.
+        MeteredModelCaller calls = new MeteredModelCaller(models, catalog, store, turnId, caller,
+                body.toString(), loop.promptVersion(), HostContract.VERSION);
+        Sinks.Many<ServerSentEvent<String>> events = Sinks.many().unicast().onBackpressureBuffer();
+        Sinks.One<Boolean> opened = Sinks.one();
+        AtomicReference<AgentOutcome> silent = new AtomicReference<>();
+        AtomicBoolean cancelled = new AtomicBoolean();
+        Schedulers.boundedElastic().schedule(() -> run(turnId, turn, base, calls, events, opened, silent, cancelled, grant));
+        // A client that leaves before the first word ends the turn too (gate A): no call starts after it,
+        // and one the meter is deciding stops there; the body's own cancel covers the stream after.
+        return opened.asMono().doOnCancel(() -> {
+            cancelled.set(true);
+            calls.cancel();
+        }).flatMap(started -> started
+                ? ServerResponse.ok()
+                        .contentType(MediaType.TEXT_EVENT_STREAM)
+                        .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                        .header("X-Accel-Buffering", "no")
+                        .body(BodyInserters.fromServerSentEvents(SseEncoder.heartbeats(events.asFlux().doOnCancel(() -> {
+                            cancelled.set(true);
+                            calls.cancel();
+                        }), loopProperties.heartbeat())))
+                : Mono.error(refusal(silent.get())));
     }
 
     /** The turn, on its own thread: the loop, then its terminal event, or nothing at all when it never spoke. */
     private void run(String turnId, AgentRequest turn, AgentBase base, MeteredModelCaller calls, Sinks.Many<ServerSentEvent<String>> events,
-                     Sinks.One<Boolean> opened, AtomicReference<AgentOutcome> silent, AtomicBoolean cancelled) {
+                     Sinks.One<Boolean> opened, AtomicReference<AgentOutcome> silent, AtomicBoolean cancelled, Grant grant) {
         AgentOutcome outcome;
         try {
             outcome = loop.run(turn, base, calls, event -> {
                 if (opened.tryEmitValue(Boolean.TRUE).isSuccess()) {
+                    // The first word follows the first allowed charge: the turn's prompt is spent (W1).
+                    if (grant != null) {
+                        grant.spent();
+                    }
                     events.tryEmitNext(encode("meta", meta(turnId)));
                 }
                 events.tryEmitNext(encode(event.name(), event.data()));
@@ -133,6 +157,10 @@ public class AgentHandler {
         // Kept before the signal: the response is chosen on the signal's own thread, and reads it at once.
         silent.set(outcome);
         if (opened.tryEmitValue(Boolean.FALSE).isSuccess()) {
+            // The turn never spoke: no model call was dispatched, so its prompt goes back (W1).
+            if (grant != null) {
+                grant.release();
+            }
             return;
         }
         ServerSentEvent<String> terminal = terminal(outcome);
@@ -166,7 +194,7 @@ public class AgentHandler {
         // A number beyond an int is refused, not wrapped into range (4294967308 is not 12).
         PlanRequest checked = new PlanRequest(body.path("prompt").isTextual() ? body.path("prompt").asText() : null,
                 body.path("style").isTextual() ? body.path("style").asText() : null,
-                seconds.isIntegralNumber() && seconds.canConvertToInt() ? seconds.asInt() : null).validated(caps);
+                seconds.isIntegralNumber() && seconds.canConvertToInt() ? seconds.asInt() : null, null).validated(caps);
         return new AgentRequest(checked.prompt(), checked.style(), checked.seconds());
     }
 

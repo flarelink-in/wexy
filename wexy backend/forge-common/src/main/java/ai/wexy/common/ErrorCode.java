@@ -8,6 +8,11 @@ package ai.wexy.common;
  * (design guidelines §1). Several codes share a status because the studio answers them
  * differently: {@code budget} and {@code paused} send it to the archive, {@code unavailable} asks
  * for a retry.
+ *
+ * W1 (2026-11-02; the creations platform design §10) adds two: {@code content-refused}, an idea
+ * content safety refused before any grant or model call, and {@code quota}, a signed-in caller's
+ * allowance spent, always with {@code Retry-After} to its reset. A spent anonymous allowance is the
+ * existing {@code account-required}: signing in is the way on, not waiting.
  */
 public enum ErrorCode {
 
@@ -18,7 +23,9 @@ public enum ErrorCode {
     FORBIDDEN("forbidden", 403),
     NOT_FOUND("not-found", 404),
     TOO_LARGE("too-large", 413),
+    CONTENT_REFUSED("content-refused", 422),
     RATE("rate", 429),
+    QUOTA("quota", 429),
     INTERNAL("internal", 500),
     UPSTREAM("upstream", 502),
     BUDGET("budget", 503),
@@ -56,7 +63,8 @@ public enum ErrorCode {
     /**
      * The code for an error that arrives with a status and none of ours: a framework 404, a proxy
      * timeout, a refused connection. Statuses with several codes take the one that promises least:
-     * 403 is {@code forbidden}, 503 is {@code unavailable}.
+     * 403 is {@code forbidden}, 503 is {@code unavailable}, 429 is {@code rate} (never {@code quota},
+     * whose reset only forge knows), and 422 is {@code bad-request} (never a content refusal).
      */
     public static ErrorCode forStatus(int status) {
         return switch (status) {

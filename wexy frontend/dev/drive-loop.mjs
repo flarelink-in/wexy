@@ -148,6 +148,15 @@ const appCheckDebug = appCheckDebugToken();
 if (appCheckDebug) {
     await page.send('Page.addScriptToEvaluateOnNewDocument', { source: `self.FIREBASE_APPCHECK_DEBUG_TOKEN = ${JSON.stringify(appCheckDebug)};` });
 }
+// W1: a local gateway counts prompts as a deployment does, so several ideas from one anonymous caller would be refused
+// after the first. On loopback (dev tokens) the drive signs in as the gateway's local operator, an admin with twenty a
+// day (its application-local.yaml); a deployed gateway takes Firebase tokens, and its allowance is the caller's own.
+const LOCAL_OPERATOR = '00000000000000000000000000000001';
+if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(gateway)) {
+    await page.send('Page.addScriptToEvaluateOnNewDocument', {
+        source: `localStorage.setItem('wexy.devUid', ${JSON.stringify(LOCAL_OPERATOR)}); localStorage.setItem('wexy.devProvider', 'google');`,
+    });
+}
 console.log(`drive-loop: App Check ${appCheckDebug ? 'by a registered debug token, given at run time (not shown)' : 'by what the studio can attest (no debug token given)'}`);
 
 const evaluate = async expression => {

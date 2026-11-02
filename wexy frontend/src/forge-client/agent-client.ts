@@ -52,6 +52,12 @@ export interface BaseFinding {
 
 /** A program revision's base: the design (fixed for the revision) and the program a turn handed off, and what the browser found. */
 export interface AgentTurnBase {
+    /**
+     * The turn this one revises, as its meta named it (W1, 2026-11-02; the creations platform designs §10): the backend
+     * runs the revision inside that turn's prompt. A base without it, or naming a turn the caller does not have, spends a
+     * new prompt.
+     */
+    turnId: string;
     versions: TurnVersions;
     design: SolutionDesign;
     program: WorldProgram;
@@ -94,6 +100,7 @@ function wireBase(base: AgentTurnBase): AgentTurnBase {
         message: cutCodePoints(f.message, BASE_CAPS.message),
     }));
     const wire: AgentTurnBase = {
+        turnId: base.turnId,
         versions: { actionSchema: base.versions.actionSchema, bundle: base.versions.bundle, manifest: base.versions.manifest },
         design: base.design,
         program: base.program,

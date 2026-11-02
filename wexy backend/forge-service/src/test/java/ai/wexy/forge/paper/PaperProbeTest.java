@@ -7,6 +7,7 @@ import ai.wexy.forge.models.ModelProperties;
 import ai.wexy.forge.schemas.JsonSchemas;
 import ai.wexy.forge.spend.InMemorySpendLedger;
 import ai.wexy.forge.spend.SpendGuard;
+import ai.wexy.forge.spend.SpendLanes;
 import ai.wexy.forge.spend.SpendProperties;
 import ai.wexy.forge.templates.HostContract;
 import ai.wexy.forge.templates.Prompt;
@@ -78,7 +79,7 @@ class PaperProbeTest {
         when(redis.getIfAvailable()).thenReturn(template);
         // Room for six whole reservations: a refused call keeps its reservation (it ends without usage, Q43).
         SpendGuard guard = new SpendGuard(redis, new SpendProperties(null, new SpendProperties.Cap(5_000_000L, 5_000_000L),
-                Map.of("meta-spark", new SpendProperties.Cap(5_000_000L, 5_000_000L))), new SimpleMeterRegistry());
+                Map.of("meta-spark", new SpendProperties.Cap(5_000_000L, 5_000_000L)), SpendLanes.open()), new SimpleMeterRegistry());
         ModelCatalog catalog = new ModelCatalog(new ModelProperties(
                 Map.of("paper", new ModelProperties.Role("muse-spark-1.3", "meta-spark", 16000, Duration.ofSeconds(10), "medium", null)),
                 Map.of("muse-spark-1.3", new ModelProperties.Price(new BigDecimal("1.25"), new BigDecimal("4.25"), new BigDecimal("0.15")))),

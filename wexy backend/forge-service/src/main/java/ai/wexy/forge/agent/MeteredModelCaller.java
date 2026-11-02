@@ -1,6 +1,7 @@
 package ai.wexy.forge.agent;
 
 import ai.wexy.common.ErrorCode;
+import ai.wexy.forge.allowance.Role;
 import ai.wexy.forge.error.ForgeException;
 import ai.wexy.forge.identity.Caller;
 import ai.wexy.forge.models.ModelCatalog;
@@ -111,8 +112,8 @@ final class MeteredModelCaller implements ModelCaller {
 
         MeteredModelClient.Metered metered;
         try {
-            metered = models.charge(ROLE, messages, new MeteredModelClient.CallOptions(null, responseFormat, safetyId(caller.uid())),
-                    "agent " + id, listener).block();
+            metered = models.charge(ROLE, messages, new MeteredModelClient.CallOptions(null, responseFormat, safetyId(caller.uid()),
+                    Role.of(caller).lane()), "agent " + id, listener).block();
         } catch (ForgeException e) {
             boolean refused = e.code() == ErrorCode.BUDGET || e.code() == ErrorCode.PAUSED;
             finish(id, null, null, null, 0, started, refused ? Generation.Status.DENIED : Generation.Status.ERROR);

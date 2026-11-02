@@ -4,6 +4,8 @@ import ai.wexy.common.InternalToken;
 import ai.wexy.forge.FakeMetaApi;
 import ai.wexy.forge.error.ErrorEnvelopeHandler;
 import ai.wexy.forge.identity.Caller;
+import ai.wexy.forge.allowance.AllowanceHandler;
+import ai.wexy.forge.allowance.TestAdmissions;
 import ai.wexy.forge.identity.InternalTokenFilter;
 import ai.wexy.forge.models.ModelCatalog;
 import ai.wexy.forge.models.ModelProperties;
@@ -14,6 +16,7 @@ import ai.wexy.forge.records.Ulid;
 import ai.wexy.forge.schemas.JsonSchemas;
 import ai.wexy.forge.spend.InMemorySpendLedger;
 import ai.wexy.forge.spend.SpendGuard;
+import ai.wexy.forge.spend.SpendLanes;
 import ai.wexy.forge.spend.SpendProperties;
 import ai.wexy.forge.templates.HostContract;
 import ai.wexy.forge.templates.PromptBuilder;
@@ -100,6 +103,11 @@ final class LoopTestServer implements AutoCloseable {
 
     final FakeMetaApi fake = new FakeMetaApi();
     final InMemorySpendLedger ledger = new InMemorySpendLedger();
+    /**
+     * The admission every entry request passes (W1): wide by default, so a test about something else is never decided by
+     * the allowances; a test about them sets a strict one, then {@link #restart}s.
+     */
+    TestAdmissions.Admit admit = TestAdmissions.open();
     InMemoryGenerationStore store;
     InMemoryOutcomeStore outcomes;
     ModelCatalog catalog;
@@ -141,13 +149,13 @@ final class LoopTestServer implements AutoCloseable {
         meters = new SimpleMeterRegistry();
         SpendGuard guard = new SpendGuard(provider, new SpendProperties(null, new SpendProperties.Cap(1_000_000L, 1_000_000L),
                 Map.of("meta-spark", new SpendProperties.Cap(1_000_000L, providerDailyCapMicroUsd),
-                        "meta-wonder", new SpendProperties.Cap(1_000_000L, 1_000_000L))), meters);
+                        "meta-wonder", new SpendProperties.Cap(1_000_000L, 1_000_000L)), SpendLanes.open()), meters);
         if (meterThrows) {
             guard = spy(guard);
             doAnswer(invocation -> {
                 Thread.sleep(meterDelayMillis);
                 throw new IllegalStateException("the meter's own bug");
-            }).when(guard).reserve(anyString(), anyLong(), anyString());
+            }).when(guard).reserve(anyString(), anyString(), anyLong(), anyString());
         }
         catalog = new ModelCatalog(new ModelProperties(Map.of(
                 "planner", new ModelProperties.Role("m-1", "meta-spark", 2500, Duration.ofSeconds(10), "low", "scene-draft.v1"),
@@ -164,8 +172,9 @@ final class LoopTestServer implements AutoCloseable {
         store = new InMemoryGenerationStore(100, Duration.ofHours(2), Clock.systemUTC());
         outcomes = new InMemoryOutcomeStore(100, Duration.ofHours(2), Clock.systemUTC());
         handler = new LoopHandler(prompts, new MeteredModelClient(api, catalog, guard), store, outcomes, new JsonSchemas(),
-                catalog, new LoopProperties(null, Duration.ofMillis(50), null, false), meters);
-        HttpHandler http = RouterFunctions.toHttpHandler(new LoopRouter().loopRoutes(handler), HandlerStrategies.builder()
+                catalog, new LoopProperties(null, Duration.ofMillis(50), null, false), meters, admit.admission());
+        HttpHandler http = RouterFunctions.toHttpHandler(new LoopRouter().loopRoutes(handler)
+                .and(new AllowanceHandler.Routes().allowanceRoutes(new AllowanceHandler(admit.grants()))), HandlerStrategies.builder()
                 .webFilter(new InternalTokenFilter(new ImmutableJWKSet<>(new JWKSet(GATEWAY.toPublicJWK()))))
                 .exceptionHandler(new ErrorEnvelopeHandler())
                 .build());
@@ -198,12 +207,21 @@ final class LoopTestServer implements AutoCloseable {
     }
 
     static String token(String uid) {
+        return token(uid, true, false, TestAdmissions.NETWORK);
+    }
+
+    /** The gateway's token for `uid`: anonymous or signed in with Google, on the admin list or not, from network `ipk` (none when null). */
+    static String token(String uid, boolean anonymous, boolean admin, String ipk) {
         try {
             long now = System.currentTimeMillis();
-            JWTClaimsSet claims = new JWTClaimsSet.Builder().issuer(InternalToken.ISSUER).subject(uid)
+            JWTClaimsSet.Builder builder = new JWTClaimsSet.Builder().issuer(InternalToken.ISSUER).subject(uid)
                     .issueTime(new Date(now)).expirationTime(new Date(now + 60_000))
-                    .claim(InternalToken.CLAIM_ANONYMOUS, true).claim(InternalToken.CLAIM_ADMIN, false)
-                    .claim(InternalToken.CLAIM_PROVIDER, "anonymous").build();
+                    .claim(InternalToken.CLAIM_ANONYMOUS, anonymous).claim(InternalToken.CLAIM_ADMIN, admin)
+                    .claim(InternalToken.CLAIM_PROVIDER, anonymous ? "anonymous" : "google.com");
+            if (ipk != null) {
+                builder.claim(InternalToken.CLAIM_IPK, ipk);
+            }
+            JWTClaimsSet claims = builder.build();
             SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(GATEWAY.getKeyID())
                     .type(JOSEObjectType.JWT).build(), claims);
             jwt.sign(new RSASSASigner(GATEWAY));
@@ -247,11 +265,21 @@ final class LoopTestServer implements AutoCloseable {
     }
 
     WebTestClient.ResponseSpec post(String path, String uid, Object body) {
+        return postAs(path, uid == null ? null : token(uid), body);
+    }
+
+    /** As {@link #post}, under a token the test minted ({@link #token(String, boolean, boolean, String)}). */
+    WebTestClient.ResponseSpec postAs(String path, String token, Object body) {
         WebTestClient.RequestBodySpec spec = client.post().uri(path).contentType(MediaType.APPLICATION_JSON);
-        if (uid != null) {
-            spec.header(InternalToken.HEADER, token(uid));
+        if (token != null) {
+            spec.header(InternalToken.HEADER, token);
         }
         return spec.bodyValue(body).exchange();
+    }
+
+    /** {@code GET /v1/forge/allowance} under `token` (W1). */
+    WebTestClient.ResponseSpec allowance(String token) {
+        return client.get().uri("/v1/forge/allowance").header(InternalToken.HEADER, token).exchange();
     }
 
     List<ServerSentEvent<String>> stream(String path, String uid, Object body) {
@@ -264,7 +292,7 @@ final class LoopTestServer implements AutoCloseable {
     /** A handler's request, as a test calls it without a server: the caller vouched for, the body given. */
     static <T> ServerRequest handlerRequest(String path, String uid, T body) {
         MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.post(path));
-        exchange.getAttributes().put(InternalTokenFilter.CALLER_ATTRIBUTE, new Caller(uid, true, false, "anonymous"));
+        exchange.getAttributes().put(InternalTokenFilter.CALLER_ATTRIBUTE, new Caller(uid, true, false, "anonymous", TestAdmissions.NETWORK));
         return MockServerRequest.builder().exchange(exchange).method(org.springframework.http.HttpMethod.POST)
                 .uri(java.net.URI.create(path)).body(Mono.just(body));
     }
@@ -310,8 +338,11 @@ final class LoopTestServer implements AutoCloseable {
         }
     }
 
+    /** An OK plan in the store, as the plan route leaves it, with its prompt granted to `uid` (its authors and repairs join it). */
     String storedPlan(String uid, String draft) {
-        return stored(Generation.Kind.PLAN, null, null, uid, draft, Generation.Status.OK);
+        String id = stored(Generation.Kind.PLAN, null, null, uid, draft, Generation.Status.OK);
+        admit.admission().entry(new Caller(uid, true, false, "anonymous", TestAdmissions.NETWORK), id, "a spiral galaxy", "plan").spent();
+        return id;
     }
 
     /** A finished generation in the store, as an earlier call would have left it. */

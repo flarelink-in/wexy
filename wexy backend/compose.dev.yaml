@@ -69,6 +69,8 @@ services:
       # Dev's studio origins: https://dev.wexy.ai, https://wexy-dev.web.app, and http://localhost:5173 for the laptop.
       WEXY_CORS_ALLOWED_ORIGINS: ${WEXY_CORS_ALLOWED_ORIGINS:?missing from Infisical}
       WEXY_ADMIN_UIDS: ${WEXY_ADMIN_UIDS:-}
+      # W1: dev's own network key (never prod's), as prod's: required, never rotated on deploy.
+      WEXY_IP_HMAC_KEY: ${WEXY_IP_HMAC_KEY:?missing from Infisical}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8401/actuator/health"]
       interval: 15s
@@ -99,6 +101,13 @@ services:
       # one Meta key, and each meter allows its own day (deploy design §11).
       WEXY_SPEND_GLOBAL_DAILYMICROUSD:
       WEXY_SPEND_GLOBAL_MONTHLYMICROUSD:
+      # W1, as prod's: the lanes by name; dev's own uid key and Azure resource, required.
+      WEXY_SPEND_LANE_ANONYMOUS_DAILYMICROUSD:
+      WEXY_SPEND_LANE_EARLY_DAILYMICROUSD:
+      WEXY_SPEND_LANE_ADMIN_DAILYMICROUSD:
+      WEXY_UID_HMAC_KEY: ${WEXY_UID_HMAC_KEY:?missing from Infisical}
+      AZURE_CONTENT_SAFETY_ENDPOINT: ${AZURE_CONTENT_SAFETY_ENDPOINT:?missing from Infisical}
+      AZURE_CONTENT_SAFETY_KEY: ${AZURE_CONTENT_SAFETY_KEY:?missing from Infisical}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8411/actuator/health"]
       interval: 15s

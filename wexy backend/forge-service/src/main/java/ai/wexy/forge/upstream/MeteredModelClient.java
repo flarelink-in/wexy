@@ -48,20 +48,19 @@ public class MeteredModelClient {
     private static final Logger log = LoggerFactory.getLogger(MeteredModelClient.class);
 
     /**
-     * Per-call adjustments within a role's limits.
+     * Per-call adjustments within a role's limits, and who the call is for.
      *
      * @param maxOutputTokens  lower than the role's cap, never higher; null for the role's
      * @param responseFormat   an OpenAI-style {@code response_format}, or null
      * @param safetyIdentifier a stable hash of the caller for Meta's abuse checks, or null
+     * @param lane             the spend lane the call is charged to ({@link SpendGuard#LANES}; W1): always named, never
+     *                         defaulted, so no call can land in another group's share; an unknown one is refused
      */
-    public record CallOptions(Integer maxOutputTokens, Map<String, Object> responseFormat, String safetyIdentifier) {
+    public record CallOptions(Integer maxOutputTokens, Map<String, Object> responseFormat, String safetyIdentifier, String lane) {
 
-        public CallOptions(Integer maxOutputTokens, Map<String, Object> responseFormat) {
-            this(maxOutputTokens, responseFormat, null);
-        }
-
-        public static CallOptions defaults() {
-            return new CallOptions(null, null, null);
+        /** No adjustment: the role's cap, no response format, no safety identifier, in {@code lane}. */
+        public static CallOptions defaults(String lane) {
+            return new CallOptions(null, null, null, lane);
         }
     }
 
@@ -144,7 +143,7 @@ public class MeteredModelClient {
                 return Mono.error(new ForgeException(ErrorCode.PAUSED,
                         "Live creation is paused: no model API key is configured."));
             }
-            return decide(role, bound, priced.inputTokens(), detail, listener)
+            return decide(role, options.lane(), bound, priced.inputTokens(), detail, listener)
                     .flatMap(receipt -> switch (receipt.outcome()) {
                         case ALLOWED -> Mono.just(new Metered(roleName, role.model(), role.provider(), maxOutput,
                                 priced.inputTokens(), bound,
@@ -197,7 +196,7 @@ public class MeteredModelClient {
      * {@code subscribeOn} would interrupt the thread on cancel, and an interrupted Redis call
      * answers "unavailable" for a charge that may well have landed.)
      */
-    private Mono<SpendGuard.Receipt> decide(ModelProperties.Role role, long bound, long inputTokens, String detail,
+    private Mono<SpendGuard.Receipt> decide(ModelProperties.Role role, String lane, long bound, long inputTokens, String detail,
                                             ChargeListener listener) {
         return Mono.create(sink -> {
             AtomicBoolean waiting = new AtomicBoolean(true);
@@ -205,7 +204,7 @@ public class MeteredModelClient {
             Schedulers.boundedElastic().schedule(() -> {
                 SpendGuard.Receipt receipt;
                 try {
-                    receipt = spendGuard.reserve(role.provider(), bound, detail);
+                    receipt = spendGuard.reserve(role.provider(), lane, bound, detail);
                 } catch (RuntimeException e) {
                     tellFailed(listener, e, detail);
                     if (waiting.get()) {

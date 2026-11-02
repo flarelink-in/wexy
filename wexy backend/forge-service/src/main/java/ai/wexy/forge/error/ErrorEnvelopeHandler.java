@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.web.reactive.error.ErrorWebExceptionHandler;
 import org.springframework.core.annotation.Order;
 import org.springframework.core.io.buffer.DataBufferLimitException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.server.reactive.ServerHttpResponse;
@@ -41,6 +42,10 @@ public class ErrorEnvelopeHandler implements ErrorWebExceptionHandler {
         if (error instanceof ForgeException forge) {
             code = forge.code();
             message = forge.getMessage();
+            // A wait that ends (W1: quota's reset) travels as Retry-After, in whole seconds; nothing else gets one.
+            if (forge.retryAfterSeconds() != null && !exchange.getResponse().isCommitted()) {
+                exchange.getResponse().getHeaders().set(HttpHeaders.RETRY_AFTER, Long.toString(forge.retryAfterSeconds()));
+            }
         } else if (error instanceof UpstreamException upstream) {
             code = upstream.errorCode();
             message = upstream.publicMessage();

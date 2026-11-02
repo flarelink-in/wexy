@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { H1 } from '../src/contract/h1/index.ts';
 import { ForgeError } from '../src/forge-client/errors.ts';
-import { COPY } from '../src/loop/copy.ts';
+import { clockTime, COPY } from '../src/loop/copy.ts';
 import { runLoop } from '../src/loop/machine.ts';
 import { autofix } from '../src/contract/autofix.ts';
 import { withProgramText } from '../src/contract/spec.ts';
@@ -150,6 +150,11 @@ test('L4 model-side failures end in a plain sentence, and nothing is authored af
         [new ForgeError('rate', 429, 'slow down', 130), 'rate', COPY.rateWithMinutes(3)],
         [new ForgeError('rate', 429, 'slow down'), 'rate', COPY.failures.rate],
         [new ForgeError('auth', 401, 'no'), 'sign-in', COPY.failures['sign-in']],
+        // W1 (PL-FE8, PL-FE9): the anonymous allowance spent offers sign-in, never a reload; early access's world of the
+        // day made says when the next opens only when the server said so; a refused idea says so; none counts anything.
+        [new ForgeError('account-required', 403, 'spent'), 'allowance', COPY.failures.allowance],
+        [new ForgeError('quota', 429, 'made'), 'quota', COPY.failures.quota],
+        [new ForgeError('content-refused', 422, 'unsafe'), 'refused', COPY.failures.refused],
         [new ForgeError('timeout', 504, 'late'), 'plan', COPY.failures.plan],
         [new ForgeError('too-large', 413, 'bug'), 'internal', COPY.failures.internal],
         [new Error('boom'), 'internal', COPY.failures.internal],
@@ -162,6 +167,20 @@ test('L4 model-side failures end in a plain sentence, and nothing is authored af
         assert.equal(out.sentence, sentence, error.message);
         assert.ok(!client.calls.some(c => c[0] === 'author'), error.message);
     }
+});
+
+test('PL-FE8 early access\'s reset is the server\'s Retry-After, said as a time on this device\'s clock; a day ahead names its weekday', async () => {
+    const client = fakeClient({ plan: [new ForgeError('quota', 429, 'made', 3 * 3600), new ForgeError('quota', 429, 'made', 3 * 3600)] });
+    const before = Date.now();
+    const out = await run(client, fakeVerifier(ok())).promise;
+    assert.equal(out.kind, 'quota');
+    const at = [before, Date.now()].map(t => COPY.quotaUntil(new Date(t + 3 * 3600 * 1000)));
+    assert.ok(at.includes(out.sentence), out.sentence);
+    assert.match(out.sentence, /^You've made today's world\. Early access gives one a day; the next opens at .+\. You can still open, film and export your worlds\.$/);
+    const now = new Date(2026, 10, 2, 22, 0);
+    assert.equal(clockTime(new Date(2026, 10, 2, 23, 30), now), new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date(2026, 10, 2, 23, 30)));
+    const tomorrow = clockTime(new Date(2026, 10, 3, 5, 30), now);
+    assert.ok(tomorrow.startsWith(new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(new Date(2026, 10, 3))), tomorrow);
 });
 
 test('L5 upstream is retried once: a plan that fails twice is "didn\'t come through"; an author that ran out of room says so; one with no usable answer twice says the AI couldn\'t write it', async () => {
@@ -183,6 +202,22 @@ test('L5 upstream is retried once: a plan that fails twice is "didn\'t come thro
     const e = await run(empty, fakeVerifier(ok())).promise;
     assert.equal(e.kind, 'author-failed', 'an author with no usable answer twice is not "too long"');
     assert.equal(e.sentence, COPY.failures['author-failed']);
+});
+
+test('the W1 bug hunt: the re-plan names the plan the model failed, so it runs inside that prompt; one that never said its id names none', async () => {
+    const meta = { generationId: '01JFAILEDPLAN0000000000000', source: 'live', model: 'm', role: 'planner', fn: null, promptVersion: 'planner.v1' };
+    const failed = (req, progress) => { progress.onMeta?.(meta); return new ForgeError('upstream', 502, 'bad plan'); };
+    const c = fakeClient({ plan: [failed] });
+    assert.equal((await run(c, fakeVerifier(ok())).promise).ok, true);
+    const plans = c.calls.filter(x => x[0] === 'plan').map(x => x[1]);
+    assert.equal(plans.length, 2);
+    assert.equal(plans[0].retryOf, undefined, 'a first plan names none');
+    assert.equal(plans[1].retryOf, meta.generationId, 'the re-plan names the plan it replaces');
+    assert.equal(plans[1].prompt, plans[0].prompt, 'with the same idea');
+
+    const silent = fakeClient({ plan: [new ForgeError('upstream', 502, 'bad plan')] });
+    assert.equal((await run(silent, fakeVerifier(ok())).promise).ok, true);
+    assert.equal(silent.calls.filter(x => x[0] === 'plan')[1][1].retryOf, undefined, 'no meta, no plan to name');
 });
 
 test('L6 one slow function fails the author step and stops its siblings; "still writing" is said after the slow interval', async () => {

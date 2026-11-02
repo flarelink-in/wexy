@@ -303,8 +303,24 @@ class RepairDirectOutcomesTest {
         s.post("/v1/forge/direct", "uid-1", directBody(JSON.readTree(GALAXY), "  ")).expectStatus().isBadRequest();
         s.post("/v1/forge/direct", "uid-1", Map.of("spec", "not an object", "turn", "brighter")).expectStatus().isBadRequest();
         s.post("/v1/forge/direct", "uid-1", Map.of("turn", "brighter")).expectStatus().isBadRequest();
+        // W1: planId, when given, is a plan's generation id; anything else is the client's bug, said, never a prompt.
+        s.post("/v1/forge/direct", "uid-1", Map.of("spec", JSON.readTree(GALAXY), "turn", "brighter", "planId", "plan-1"))
+                .expectStatus().isBadRequest().expectBody().jsonPath("$.message").value(m -> assertThat((String) m).startsWith("planId is the plan"));
         assertThat(s.fake.chatRequests()).isZero();
         assertThat(s.store.snapshot()).isEmpty();
+    }
+
+    /** W1 (the creations platform design §10): a Director turn may name the plan whose world it edits; it runs as before. */
+    @Test
+    void aDirectCallMayNameItsPlan() throws Exception {
+        s.fake.chat = FakeMetaApi.sse(0, streamOf(EDIT, 3, STOP));
+
+        s.post("/v1/forge/direct", "uid-1", Map.of("spec", JSON.readTree(GALAXY), "turn", "make it glow more", "planId", "01JD0000000000000000000000"))
+                .expectStatus().isOk().expectBody().jsonPath("$.edit.kind").isEqualTo("patch");
+
+        assertThat(s.only(Generation.Kind.DIRECT).status()).isEqualTo(Generation.Status.OK);
+        // The id is the allowance's, never the model's.
+        assertThat(s.sent(0).toString()).doesNotContain("01JD0000000000000000000000");
     }
 
     /** R10: a report about the caller's own generations is accepted and stored with the caller's uid. */
