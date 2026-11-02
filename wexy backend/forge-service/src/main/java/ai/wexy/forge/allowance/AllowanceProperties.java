@@ -17,6 +17,8 @@ import java.time.Duration;
  * @param promptLife          how long a granted prompt's follow-ups may name it: the generation store's TTL (2 h)
  * @param directorTurns       Director turns one prompt covers (5)
  * @param revisions           program revision turns one prompt covers (3: the frontend candidate's Q_C since Q110)
+ * @param moduleCalls         module calls one prompt covers, each carrying the prompt its turn was granted for (44: two
+ *                            attempts of the candidate's Q_C, 12 authors and 10 repairs)
  * @param accountMark         how long an anonymous account's spent mark is kept: "ever", bounded for Redis (400 days)
  * @param uidHmacHex          the uid key (WEXY_UID_HMAC_KEY): 32 bytes as 64 hex characters
  * @param uidKeyRequired      true in prod: startup stops without the uid key
@@ -24,7 +26,8 @@ import java.time.Duration;
 @ConfigurationProperties(prefix = "wexy.allowance")
 public record AllowanceProperties(Integer anonymousPerAccount, Integer anonymousPerNetwork, Integer earlyAccessPerDay,
                                   Integer adminPerDay, Integer dayStartsAtHourUtc, Duration promptLife, Integer directorTurns,
-                                  Integer revisions, Duration accountMark, String uidHmacHex, Boolean uidKeyRequired) {
+                                  Integer revisions, Integer moduleCalls, Duration accountMark, String uidHmacHex,
+                                  Boolean uidKeyRequired) {
 
     /** The same values, checked: every one set and in range, or startup stops. */
     public AllowanceProperties validated() {
@@ -34,6 +37,7 @@ public record AllowanceProperties(Integer anonymousPerAccount, Integer anonymous
         count("admin-per-day", adminPerDay);
         count("director-turns", directorTurns);
         count("revisions", revisions);
+        count("module-calls", moduleCalls);
         if (dayStartsAtHourUtc == null || dayStartsAtHourUtc < 0 || dayStartsAtHourUtc > 23) {
             throw new IllegalStateException("wexy.allowance.day-starts-at-hour-utc must be set, 0 to 23.");
         }

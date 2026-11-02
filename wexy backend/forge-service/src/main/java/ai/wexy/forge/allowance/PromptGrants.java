@@ -33,9 +33,12 @@ import java.util.Map;
 @Component
 public class PromptGrants {
 
-    /** What a follow-up names, and so which of its grant's budgets it uses. */
+    /**
+     * What a follow-up names, and so which of its grant's budgets it uses. A module call names its turn and carries its
+     * prompt: it is inside that prompt or refused, never an entry of its own (the W1 review, 2026-11-02).
+     */
     public enum Kind {
-        DIRECTOR("director"), REVISION("revision");
+        DIRECTOR("director"), REVISION("revision"), MODULE("modules");
 
         final String field;
 
@@ -151,19 +154,32 @@ public class PromptGrants {
      * prompt's text: it is then a new prompt. {@code 503 unavailable} when the store cannot answer.
      */
     public boolean join(Caller caller, String namedId, Kind kind, String promptHash, String newId) {
+        return follow(caller, namedId, kind, promptHash, newId) == GrantStore.Join.JOINED;
+    }
+
+    /**
+     * As {@link #join}, saying why not: {@code FULL} when the named prompt's `kind` budget is spent, {@code NONE} when it
+     * names no live prompt of the caller's or (with `promptHash`) another prompt's text. {@code 503} when the store
+     * cannot answer.
+     */
+    GrantStore.Join follow(Caller caller, String namedId, Kind kind, String promptHash, String newId) {
         String owner = uidKey.of(caller.uid());
         if (owner == null || namedId == null) {
-            return false;
+            return GrantStore.Join.NONE;
         }
         try {
             String grantId = store.lookup(INDEX + namedId);
             if (grantId == null) {
-                return false;
+                return GrantStore.Join.NONE;
             }
-            long limit = kind == Kind.DIRECTOR ? properties.directorTurns() : properties.revisions();
+            long limit = switch (kind) {
+                case DIRECTOR -> properties.directorTurns();
+                case REVISION -> properties.revisions();
+                case MODULE -> properties.moduleCalls();
+            };
             GrantStore.Join join = store.join(GRANT + grantId, owner, kind.field, limit, promptHash, newId == null ? null : INDEX + newId, grantId);
             log.info("allowance.follow-up kind={} grant={} {}", kind.field, grantId, join.name().toLowerCase());
-            return join == GrantStore.Join.JOINED;
+            return join;
         } catch (RuntimeException e) {
             throw unavailable(e);
         }
@@ -207,7 +223,10 @@ public class PromptGrants {
                     ? "This network has made its free world today. Sign in with Google for early access: one world a day."
                     : "You've made your free world. Sign in with Google for early access: one world a day.");
         }
-        long seconds = Math.max(1, Duration.between(clock.instant(), nextReset()).toSeconds());
+        // Whole seconds rounded up: a client that waits this long is never early, and a reset time shown from it is never
+        // before the reset (the studio said 5:29 for a 5:30 reset when this was floored).
+        long millis = Duration.between(clock.instant(), nextReset()).toMillis();
+        long seconds = Math.max(1, Math.ceilDiv(millis, 1000L));
         return new ForgeException(ErrorCode.QUOTA, "Today's world is made; the next opens at the day's reset.", seconds);
     }
 

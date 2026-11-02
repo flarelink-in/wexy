@@ -269,10 +269,10 @@ public class LoopHandler {
 
     /**
      * The admission, off the event loop (Redis, content safety): its grant, or empty for a follow-up inside its prompt;
-     * a refusal errors with its envelope's code.
+     * a refusal errors with its envelope's code. A client gone meanwhile gets nothing, and its grant goes back.
      */
     private static Mono<Optional<Grant>> admit(Callable<Grant> admit) {
-        return Mono.fromCallable(() -> Optional.ofNullable(admit.call())).subscribeOn(Schedulers.boundedElastic());
+        return PromptAdmission.offLoop(admit);
     }
 
     /** A streamed call: the charge, then the events as text/event-stream. */

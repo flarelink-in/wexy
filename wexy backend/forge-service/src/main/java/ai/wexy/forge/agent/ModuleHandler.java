@@ -1,6 +1,7 @@
 package ai.wexy.forge.agent;
 
 import ai.wexy.common.ErrorCode;
+import ai.wexy.forge.allowance.PromptAdmission;
 import ai.wexy.forge.allowance.Role;
 import ai.wexy.forge.engine.AdapterManifest;
 import ai.wexy.forge.engine.EngineBundle;
@@ -35,6 +36,7 @@ import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.SignalType;
+import reactor.core.scheduler.Schedulers;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -52,7 +54,9 @@ import java.util.regex.Pattern;
  *
  * <p>In order: the request is checked whole ({@link ModuleRequest}: 413 or 400, before anything); the turn must be the
  * caller's (one of its calls is the caller's own record, else 404: no caller attaches usage to somebody else's turn);
- * the assembled prompt must fit {@link #MAX_PROMPT_BYTES}; then the call becomes a generation of kind {@code AGENT}
+ * the assembled prompt must fit {@link #MAX_PROMPT_BYTES}; the call must run inside the turn's granted prompt, carrying
+ * that prompt's text, with the grant alive and a module call left ({@link PromptAdmission#module}: 404, or 429 when
+ * spent; W1's review, so no module call carries new, unchecked text); then the call becomes a generation of kind {@code AGENT}
  * under the turn, RUNNING before it is charged; {@link MeteredModelClient#charge} reserves its bound, and a refusal is
  * an envelope ({@code 503 budget} or {@code paused}) with nothing sent upstream. The stream is {@code meta}, which
  * echoes the job, its subject, the versions, the module and its interfaceHash; the model's text as {@code delta}s;
@@ -82,9 +86,11 @@ public class ModuleHandler {
     private final EngineBundle bundle;
     private final JsonSchemas schemas;
     private final NodeCheck nodes;
+    private final PromptAdmission admission;
 
     public ModuleHandler(PromptBuilder prompts, MeteredModelClient models, ModelCatalog catalog, GenerationStore store, LoopProperties loop,
-                         EngineBundle bundle, AdapterManifest manifest, JsonSchemas schemas) {
+                         EngineBundle bundle, AdapterManifest manifest, JsonSchemas schemas, PromptAdmission admission) {
+        this.admission = admission;
         this.prompts = prompts;
         this.models = models;
         this.catalog = catalog;
@@ -115,7 +121,13 @@ public class ModuleHandler {
                         throw new ForgeException(ErrorCode.TOO_LARGE, "This module's prompt would be " + bytes + " bytes; at most " + MAX_PROMPT_BYTES
                                 + ". Send fewer or smaller nodes.");
                     }
-                    return stream(m, prompt, caller);
+                    // Inside the turn's granted prompt, off the event loop (Redis), before any record or charge.
+                    return Mono.fromCallable(() -> {
+                                admission.module(caller, m.turnId(), m.request().prompt());
+                                return Boolean.TRUE;
+                            })
+                            .subscribeOn(Schedulers.boundedElastic())
+                            .flatMap(admitted -> stream(m, prompt, caller));
                 });
     }
 

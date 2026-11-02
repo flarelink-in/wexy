@@ -115,6 +115,9 @@ wexy:
     prompt-life: 2h
     director-turns: 5
     revisions: 3
+    # Module calls one prompt covers (the W1 review, 2026-11-02): two attempts of the candidate's Q_C (12 authors and 10
+    # repairs), so writing the modules again once still fits. Each must carry the prompt its turn was granted for.
+    module-calls: 44
     account-mark: 400d
     # 32 random bytes as 64 hex characters, from Infisical; the prod profile refuses to start without it. Never rotated
     # on deploy: a new key makes every caller new.

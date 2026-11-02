@@ -37,7 +37,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -97,11 +96,11 @@ public class AgentHandler {
                     // A revision's base is checked whole before anything is recorded or charged (AgentBase).
                     AgentBase base = body.has("base") ? loop.base(body.path("base"), bundle.bundleHash()) : null;
                     String turnId = Ulid.next(Instant.now());
-                    // W1: admitted before any record or charge, off the event loop (Redis, content safety).
-                    return Mono.fromCallable(() -> Optional.ofNullable(base == null
+                    // W1: admitted before any record or charge, off the event loop (Redis, content safety); a client gone
+                    // meanwhile gets nothing, and its grant goes back (PromptAdmission.offLoop).
+                    return PromptAdmission.offLoop(() -> base == null
                                     ? admission.entry(caller, turnId, turn.prompt(), "turn")
-                                    : admission.revision(caller, base.turnId(), turnId, turn.prompt())))
-                            .subscribeOn(Schedulers.boundedElastic())
+                                    : admission.revision(caller, base.turnId(), turnId, turn.prompt()))
                             .flatMap(grant -> start(caller, body, turn, base, turnId, grant.orElse(null)));
                 });
     }

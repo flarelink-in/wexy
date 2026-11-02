@@ -339,7 +339,7 @@ mutate "a spent day granted anyway" "$A/PromptGrants.java" forge-service PromptG
 mutate "quota without its reset" "$A/PromptGrants.java" forge-service PromptGrantsTest \
     's/"Today.s world is made; the next opens at the day.s reset\.", seconds\)/"Today\x27s world is made.", null)/'
 mutate "a follow-up past its budget" "$A/PromptGrants.java" forge-service PromptGrantsTest \
-    's/long limit = kind == Kind\.DIRECTOR \? properties\.directorTurns\(\) : properties\.revisions\(\);/long limit = Long.MAX_VALUE;/'
+    's/case REVISION -> properties\.revisions\(\);/case REVISION -> Long.MAX_VALUE;/'
 mutate "a revision of another prompt joined" "$A/PromptGrants.java" forge-service PromptGrantsTest \
     's/store\.join\(GRANT \+ grantId, owner, kind\.field, limit, promptHash,/store.join(GRANT + grantId, owner, kind.field, limit, null,/'
 mutate "a prompt never given back" "$A/Grant.java" forge-service PromptGrantsTest \
@@ -350,6 +350,21 @@ mutate "the safety check before the allowance" "$A/PromptAdmission.java" forge-s
     's/        grants\.check\(caller\);\n        checkSafety\(text, route\);/        checkSafety(text, route);/'
 mutate "a Director turn unchecked inside its prompt" "$A/PromptAdmission.java" forge-service AllowanceRoutesTest \
     's/        checkSafety\(turn, "direct"\);\n//'
+
+# The W1 review (2026-11-02): a module call runs inside its turn's granted prompt, carrying that prompt, within its
+# budget; an admission its request left mid-way gives its grant back; Retry-After never ends before the reset.
+mutate "a module call outside its prompt" "$S/agent/ModuleHandler.java" forge-service ModuleRoutesTest \
+    's/admission\.module\(caller, m\.turnId\(\), m\.request\(\)\.prompt\(\)\);/m.turnId();/'
+mutate "a module call's idea unchecked" "$A/PromptAdmission.java" forge-service ModuleRoutesTest \
+    's/PromptGrants\.Kind\.MODULE, sha256\(prompt\), null\)/PromptGrants.Kind.MODULE, null, null)/'
+mutate "module calls past their budget" "$A/PromptGrants.java" forge-service PromptGrantsTest \
+    's/case MODULE -> properties\.moduleCalls\(\);/case MODULE -> Long.MAX_VALUE;/'
+mutate "a cancelled admission keeping its grant" "$A/PromptAdmission.java" forge-service OffLoopAdmissionTest \
+    's/                            if \(grant != null\) \{\n                                grant\.release\(\);\n                            \}\n//'
+mutate "a dropped admission keeping its grant" "$A/PromptAdmission.java" forge-service OffLoopAdmissionTest \
+    's/Schedulers\.boundedElastic\(\)\.schedule\(\(\(Grant\) grant\)::release\)\)\);/Schedulers.boundedElastic().schedule(() -> { })));/'
+mutate "Retry-After floored" "$A/PromptGrants.java" forge-service PromptGrantsTest \
+    's/Math\.ceilDiv\(millis, 1000L\)/millis \/ 1000L/'
 mutate "a plan not admitted" "$S/loop/LoopHandler.java" forge-service AllowanceRoutesTest \
     's/return admit\(\(\) -> admission\.entry\(caller, id, plan\.prompt\(\), "plan"\)\)\.flatMap/return admit(() -> null).flatMap/'
 mutate "a turn not admitted" "$S/agent/AgentHandler.java" forge-service AgentRoutesTest \

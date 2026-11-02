@@ -2,9 +2,12 @@ package ai.wexy.forge.agent;
 
 import ai.wexy.common.InternalToken;
 import ai.wexy.forge.FakeMetaApi;
+import ai.wexy.forge.allowance.Grant;
+import ai.wexy.forge.allowance.TestAdmissions;
 import ai.wexy.forge.engine.AdapterManifest;
 import ai.wexy.forge.engine.EngineBundle;
 import ai.wexy.forge.error.ErrorEnvelopeHandler;
+import ai.wexy.forge.identity.Caller;
 import ai.wexy.forge.identity.InternalTokenFilter;
 import ai.wexy.forge.loop.LoopProperties;
 import ai.wexy.forge.models.ModelCatalog;
@@ -94,11 +97,18 @@ class ModuleRoutesTest {
     static final Pattern EVENT = Pattern.compile("^event:(\\w+)$", Pattern.MULTILINE);
     static final Pattern HEARTBEAT = Pattern.compile("^:.*\\n\\n", Pattern.MULTILINE);
 
+    /** The caller every request's token names (AgentRoutesTest.token): anonymous, on the tests' network. */
+    static final Caller CALLER = new Caller("uid-agent", true, false, "anonymous", TestAdmissions.NETWORK);
+
     final FakeMetaApi fake = new FakeMetaApi();
     final InMemorySpendLedger ledger = new InMemorySpendLedger();
+    /** The admission module calls answer to (W1's review): room for the tests about something else, unless one sets its own. */
+    TestAdmissions.Admit admit = TestAdmissions.open();
     InMemoryGenerationStore store;
     EngineBundle bundle;
     String turnId;
+    /** The turn's granted prompt, as AgentHandler's admission grants it for a turn without a base. */
+    Grant grant;
     String baseUrl;
     private DisposableServer server;
 
@@ -127,7 +137,8 @@ class ModuleRoutesTest {
         store = new InMemoryGenerationStore(100, Duration.ofHours(2), Clock.systemUTC());
         bundle = EngineBundle.load(JSON);
         ModuleHandler handler = new ModuleHandler(prompts, new MeteredModelClient(api, catalog, guard), catalog, store,
-                new LoopProperties(null, Duration.ofMillis(50), null, false), bundle, AdapterManifest.load(JSON), new JsonSchemas());
+                new LoopProperties(null, Duration.ofMillis(50), null, false), bundle, AdapterManifest.load(JSON), new JsonSchemas(),
+                admit.admission());
         HttpHandler http = RouterFunctions.toHttpHandler(new AgentConfiguration().moduleRoutes(handler), HandlerStrategies.builder()
                 .webFilter(new InternalTokenFilter(new ImmutableJWKSet<>(new JWKSet(AgentRoutesTest.GATEWAY.toPublicJWK()))))
                 .exceptionHandler(new ErrorEnvelopeHandler())
@@ -137,11 +148,13 @@ class ModuleRoutesTest {
         newTurn();
     }
 
-    /** The caller's turn: one of its calls on record, as AgentHandler's caller records it. */
+    /** The caller's turn: one of its calls on record, as AgentHandler's caller records it, and its prompt granted. */
     private void newTurn() {
         turnId = Ulid.next(Instant.now());
         store.begin(Generation.started(Ulid.next(Instant.now()), Generation.Kind.AGENT, turnId, "agent", "m-1", "agent.v3", "h1", null, "{}",
                 Generation.Source.USER, "uid-agent", Instant.now()));
+        grant = admit.admission().entry(CALLER, turnId, PROMPT, "turn");
+        grant.spent();
     }
 
     /** The fake answers each call with this text, in a few chunks, a stop and the usage. */
@@ -490,6 +503,71 @@ class ModuleRoutesTest {
         assertThat(post(unknown).status()).isEqualTo(404);
         assertThat(fake.chatRequests()).isZero();
         assertThat(moduleRecords()).isEmpty();
+    }
+
+    /**
+     * The W1 review's high finding (2026-11-02): a module call that carries another idea than its turn's granted prompt
+     * would put unchecked text in front of the model on an old turn's grant. It is refused as an unknown turn, before
+     * any record or charge; the turn's own idea still runs.
+     */
+    @Test
+    void aModuleCallCarryingAnotherIdeaIsNotFoundAndNothingIsSent() throws Exception {
+        start(5_000_000L);
+        answers(BODY);
+        ObjectNode other = author();
+        ((ObjectNode) other.path("request")).put("prompt", "an idea no check has seen");
+        Answer answer = post(other);
+        assertThat(answer.status()).isEqualTo(404);
+        assertThat(JSON.readTree(answer.body()).path("code").asText()).isEqualTo("not-found");
+        assertThat(fake.chatRequests()).isZero();
+        assertThat(moduleRecords()).isEmpty();
+        assertThat(post(author()).status()).as("its own idea").isEqualTo(200);
+    }
+
+    /** A turn of the caller's whose prompt is gone (given back, past its life, never granted) admits no module call. */
+    @Test
+    void aTurnWhosePromptIsGoneAdmitsNoModuleCall() throws Exception {
+        start(5_000_000L);
+        answers(BODY);
+        turnId = Ulid.next(Instant.now());
+        store.begin(Generation.started(Ulid.next(Instant.now()), Generation.Kind.AGENT, turnId, "agent", "m-1", "agent.v3", "h1", null, "{}",
+                Generation.Source.USER, "uid-agent", Instant.now()));
+        Answer answer = post(author());
+        assertThat(answer.status()).isEqualTo(404);
+        assertThat(JSON.readTree(answer.body()).path("code").asText()).isEqualTo("not-found");
+        assertThat(fake.chatRequests()).isZero();
+        assertThat(moduleRecords()).isEmpty();
+    }
+
+    /**
+     * A module call names an agent turn. The caller's own plan, granted for the same idea, is no turn: its grant would
+     * join, so the record of a turn under that id is what refuses it.
+     */
+    @Test
+    void aModuleCallNamingAPlanIsNotFound() throws Exception {
+        start(5_000_000L);
+        answers(BODY);
+        String planId = Ulid.next(Instant.now());
+        admit.admission().entry(CALLER, planId, PROMPT, "plan").spent();
+        ObjectNode onPlan = author();
+        onPlan.put("turnId", planId);
+        Answer answer = post(onPlan);
+        assertThat(answer.status()).isEqualTo(404);
+        assertThat(fake.chatRequests()).isZero();
+    }
+
+    /** A prompt's module calls stop at its budget: past it, 429 rate with nothing recorded or sent. */
+    @Test
+    void aPromptsModuleCallsStopAtItsBudget() throws Exception {
+        admit = TestAdmissions.admit(TestAdmissions.wide(1), Clock.systemUTC());
+        start(5_000_000L);
+        answers(BODY);
+        assertThat(post(author()).status()).isEqualTo(200);
+        Answer second = post(author());
+        assertThat(second.status()).isEqualTo(429);
+        assertThat(JSON.readTree(second.body()).path("code").asText()).isEqualTo("rate");
+        assertThat(fake.chatRequests()).isEqualTo(1L);
+        assertThat(moduleRecords()).hasSize(1);
     }
 
     @Test
