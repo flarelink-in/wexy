@@ -100,6 +100,14 @@ public class ForgeRoutes {
                 .filter(rateLimits.byClient("admin"))
                 .filter(authorization.adminOnly());
 
+        // W1 (the creations platform design §10): the caller's own allowance. Signed in, anonymous included, with the
+        // cached App Check token (nothing is spent), an address bucket and a per-uid one.
+        Function<GatewayFilterSpec, UriSpec> accountRead = f -> f
+                .filter(rateLimits.byClient("account-read"))
+                .filter(appCheck)
+                .filter(authorization.anonymousAllowed())
+                .filter(rateLimits.byUser("account-read-user"));
+
         return builder.routes()
                 // --- Forge: the model calls (streamed) and the browser's reports ---
                 .route("forge-plan", r -> r.path("/v1/forge/plan").and().method(HttpMethod.POST)
@@ -116,6 +124,8 @@ public class ForgeRoutes {
                         .filters(agentEntry).uri(forgeService))
                 .route("agent-module", r -> r.path("/v1/agent/module").and().method(HttpMethod.POST)
                         .filters(agentModule).uri(forgeService))
+                .route("forge-allowance", r -> r.path("/v1/forge/allowance").and().method(HttpMethod.GET)
+                        .filters(accountRead).uri(forgeService))
 
                 // --- Public reads ---
                 .route("forge-mode", r -> r.path("/v1/forge/mode").and().method(HttpMethod.GET)

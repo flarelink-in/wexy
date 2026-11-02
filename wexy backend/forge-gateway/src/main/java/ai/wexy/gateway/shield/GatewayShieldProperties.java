@@ -104,6 +104,10 @@ public class GatewayShieldProperties {
             Map.entry("agent-module-anonymous", new Bucket(AgentTurn.MODULE_CALLS / 120.0, AgentTurn.MODULE_CALLS)),
             Map.entry("publish", new Bucket(0.1, 10)),
             Map.entry("publish-user", new Bucket(0.05, 5)),
+            // W1: the caller's own allowance, read after each Create and sign-in (GET /v1/forge/allowance): cheap reads,
+            // paced so a loop of them cannot hammer Redis; an address, then the uid.
+            Map.entry("account-read", new Bucket(2, 30)),
+            Map.entry("account-read-user", new Bucket(0.5, 10)),
             Map.entry("admin", new Bucket(1, 10))
     ));
 

@@ -21,6 +21,9 @@ wexy:
   firebase:
     # Startup stops without a credential (FirebaseCredentials); only the local profile runs without one.
     required: true
+  network-key:
+    # W1: startup stops without WEXY_IP_HMAC_KEY (ClientNetworkKey), since no anonymous caller could be counted.
+    required: true
   cors:
     # No default on purpose: compose refuses to start without the value, so a deployment can never answer the
     # wrong origin by omission (deploy design §7).

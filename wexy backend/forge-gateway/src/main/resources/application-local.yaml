@@ -10,6 +10,15 @@ spring:
 wexy:
   firebase:
     required: false
+  network-key:
+    # Not a secret: the ASCII of "local-dev-not-a-secret-iphmac-k1", so the local stack counts anonymous callers by
+    # their network as a deployment does (W1). The local profile never runs anywhere else; .env may set a real one.
+    hmac-hex: ${WEXY_IP_HMAC_KEY:6c6f63616c2d6465762d6e6f742d612d7365637265742d6970686d61632d6b31}
+  auth:
+    # W1: the local operator, a dev uid on the admin list (twenty worlds a day, the admin lane), which the frontend's
+    # loop drive signs in as (dev.google.<uid>), so its several ideas a run are not refused as one anonymous caller's.
+    # Dev tokens exist under this profile alone, so it admits no one anywhere else; WEXY_ADMIN_UIDS replaces it.
+    admin-uids: ${WEXY_ADMIN_UIDS:00000000000000000000000000000001}
   cors:
     allowed-origins: http://localhost:5173,http://127.0.0.1:5173
   appcheck:
@@ -35,3 +44,6 @@ wexy:
       agent-module: { refill-per-second: 30, burst-capacity: 600 }
       agent-module-user: { refill-per-second: 30, burst-capacity: 600 }
       agent-module-anonymous: { refill-per-second: 30, burst-capacity: 600 }
+      # W1: the allowance read after each Create and sign-in; a drive reads it often.
+      account-read: { refill-per-second: 30, burst-capacity: 300 }
+      account-read-user: { refill-per-second: 30, burst-capacity: 300 }

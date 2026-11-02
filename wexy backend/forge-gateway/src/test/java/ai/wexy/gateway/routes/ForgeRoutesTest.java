@@ -31,7 +31,8 @@ class ForgeRoutesTest {
     private static final List<String> PUBLIC_READS = List.of("forge-mode", "archive-match", "worlds-read",
             "showcase", "stats");
     private static final List<String> SIGNED_IN = List.of("forge-plan", "forge-author", "forge-repair",
-            "forge-direct", "forge-outcomes", "agent-turn", "agent-module", "worlds-publish", "worlds-complete", "worlds-report");
+            "forge-direct", "forge-outcomes", "agent-turn", "agent-module", "forge-allowance", "worlds-publish", "worlds-complete",
+            "worlds-report");
 
     @Autowired
     private RouteLocator routeLocator;
@@ -50,8 +51,8 @@ class ForgeRoutesTest {
         List<String> ids = routeLocator.getRoutes().map(Route::getId).collectList().block();
 
         assertThat(ids).containsExactlyInAnyOrder("forge-plan", "forge-author", "forge-repair", "forge-direct",
-                "forge-outcomes", "agent-turn", "agent-module", "forge-mode", "archive-match", "worlds-read", "showcase", "stats",
-                "worlds-publish", "worlds-complete", "worlds-report", "admin");
+                "forge-outcomes", "agent-turn", "agent-module", "forge-allowance", "forge-mode", "archive-match", "worlds-read",
+                "showcase", "stats", "worlds-publish", "worlds-complete", "worlds-report", "admin");
     }
 
     @Test
@@ -67,6 +68,19 @@ class ForgeRoutesTest {
         // Spending includes the attestation, so neither runs the plain check as well.
         assertThat(route("forge-plan").getFilters()).doesNotContain(appCheck);
         assertThat(route("worlds-publish").getFilters()).doesNotContain(appCheck);
+    }
+
+    /**
+     * W1 (the creations platform design §10): the caller's own allowance is a signed-in read, anonymous callers
+     * included, with the cached App Check token (it spends nothing, so it is not single-use), an address bucket and a
+     * per-uid one. The single-use set above is unchanged by it.
+     */
+    @Test
+    void theAllowanceIsASignedInReadWithTheCachedCheck() {
+        List<GatewayFilter> filters = route("forge-allowance").getFilters();
+        assertThat(filters).contains(appCheck, authorization.anonymousAllowed()).doesNotContain(appCheck.singleUse());
+        assertThat(buckets(filters)).containsExactly("account-read", "account-read-user");
+        assertThat(route("forge-allowance").getPredicate().toString()).contains("/v1/forge/allowance").contains("GET");
     }
 
     @Test

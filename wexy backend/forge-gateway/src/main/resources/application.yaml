@@ -51,6 +51,11 @@ wexy:
   auth:
     # Comma-separated Firebase uids allowed on /v1/admin/**.
     admin-uids: ${WEXY_ADMIN_UIDS:}
+  # W1: the caller's network as forge's allowances count it (ClientNetworkKey; the creations platform design §11): 32
+  # random bytes as 64 hex characters, from Infisical. Without it requests carry no ipk, and forge grants anonymous
+  # callers no prompt; the prod profile refuses to start. Never rotated on deploy: a new key resets every network.
+  network-key:
+    hmac-hex: ${WEXY_IP_HMAC_KEY:}
   cors:
     allowed-origins: ${WEXY_CORS_ALLOWED_ORIGINS:https://wexy.ai,https://www.wexy.ai}
   appcheck:

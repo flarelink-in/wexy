@@ -26,6 +26,15 @@ public final class InternalToken {
     /** Firebase's {@code sign_in_provider}: {@code anonymous}, {@code google.com}, … */
     public static final String CLAIM_PROVIDER = "provider";
 
+    /**
+     * The caller's network as forge's allowances count it (W1; the creations platform design §11):
+     * HMAC-SHA256 of the client's IPv4 address, or its IPv6 /64, under the gateway's network key, in
+     * lowercase hex. Absent when the address could not be resolved or no key is configured, and then
+     * an anonymous caller gets no prompt. Signed with the token, so no client can choose it; hashed,
+     * so forge never sees an address.
+     */
+    public static final String CLAIM_IPK = "ipk";
+
     /** Two minutes, as FlareLink's: long enough for a request, short enough that a leak expires. */
     public static final long LIFETIME_MILLIS = 120_000;
 

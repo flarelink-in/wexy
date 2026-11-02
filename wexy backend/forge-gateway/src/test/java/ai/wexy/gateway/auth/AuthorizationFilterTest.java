@@ -3,6 +3,10 @@ package ai.wexy.gateway.auth;
 import ai.wexy.common.ErrorCode;
 import ai.wexy.common.InternalToken;
 import ai.wexy.gateway.error.GatewayRejection;
+import ai.wexy.gateway.shield.ClientAddressResolver;
+import ai.wexy.gateway.shield.ClientNetworkKey;
+import ai.wexy.gateway.shield.ClientNetworkKeyTest;
+import ai.wexy.gateway.shield.GatewayShieldProperties;
 import com.nimbusds.jose.crypto.RSASSAVerifier;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
@@ -18,6 +22,7 @@ import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
+import java.net.InetSocketAddress;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -44,8 +49,12 @@ class AuthorizationFilterTest {
         };
     };
 
+    /** The network key as the gateway resolves it: the socket's peer, no proxy trusted (the test profile's). */
+    private final ClientNetworkKey networkKey = new ClientNetworkKey(new ClientAddressResolver(new GatewayShieldProperties()),
+            ClientNetworkKeyTest.KEY, false);
+
     private final AuthorizationFilter authorization = new AuthorizationFilter(
-            verifier, new InternalTokenMinter(signingKey), new SimpleMeterRegistry(), " admin-uid , ");
+            verifier, new InternalTokenMinter(signingKey), networkKey, new SimpleMeterRegistry(), " admin-uid , ");
 
     private final AtomicReference<ServerWebExchange> forwarded = new AtomicReference<>();
     private final GatewayFilterChain chain = exchange -> {
@@ -53,10 +62,22 @@ class AuthorizationFilterTest {
         return Mono.empty();
     };
 
+    private static final String PEER = "203.0.113.42";
+
     private static MockServerWebExchange request(String authorizationHeader) {
+        return request(authorizationHeader, PEER, null);
+    }
+
+    private static MockServerWebExchange request(String authorizationHeader, String peer, String forwardedFor) {
         MockServerHttpRequest.BaseBuilder<?> builder = MockServerHttpRequest.post("/v1/forge/plan");
         if (authorizationHeader != null) {
             builder.header(HttpHeaders.AUTHORIZATION, authorizationHeader);
+        }
+        if (forwardedFor != null) {
+            builder.header("X-Forwarded-For", forwardedFor);
+        }
+        if (peer != null) {
+            builder.remoteAddress(new InetSocketAddress(peer, 41234));
         }
         return MockServerWebExchange.from(builder);
     }
@@ -92,6 +113,41 @@ class AuthorizationFilterTest {
         // The post-authentication limiter keys on these, never on anything the client sent.
         assertThat((String) forwarded.get().getAttribute(AuthAttributes.UID)).isEqualTo("anon-uid");
         assertThat((Boolean) forwarded.get().getAttribute(AuthAttributes.ANONYMOUS)).isTrue();
+    }
+
+    /**
+     * PL-T17's ipk (W1): every token carries the caller's network key, from the address the gateway resolved, so
+     * forge can count anonymous prompts per network; no request header can set it.
+     */
+    @Test
+    void theTokenCarriesTheCallersNetworkKeyAndNoHeaderCanSetIt() throws Exception {
+        String expected = networkKey.of(request(null));
+        assertThat(expected).matches("[0-9a-f]{64}");
+
+        send(authorization.anonymousAllowed(), "Bearer h.anonymous.s");
+        assertThat(forwardedClaims().getStringClaim(InternalToken.CLAIM_IPK)).isEqualTo(expected);
+
+        // A forwarded-for the gateway does not trust, and an inbound internal token, change nothing.
+        MockServerWebExchange spoofed = MockServerWebExchange.from(MockServerHttpRequest.post("/v1/forge/plan")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer h.google.s")
+                .header("X-Forwarded-For", "198.51.100.1")
+                .header(InternalToken.HEADER, "forged")
+                .remoteAddress(new InetSocketAddress(PEER, 1)));
+        authorization.anonymousAllowed().filter(spoofed, chain).block();
+        assertThat(forwarded.get().getRequest().getHeaders().get(InternalToken.HEADER)).hasSize(1);
+        assertThat(forwardedClaims().getStringClaim(InternalToken.CLAIM_IPK)).isEqualTo(expected);
+    }
+
+    /** No resolvable address, or no key: no claim at all, never an empty or made-up one, and forge grants no anonymous prompt. */
+    @Test
+    void withoutANetworkKeyTheClaimIsLeftOut() throws Exception {
+        authorization.anonymousAllowed().filter(request("Bearer h.anonymous.s", null, null), chain).block();
+        assertThat(forwardedClaims().getClaims()).doesNotContainKey(InternalToken.CLAIM_IPK);
+
+        AuthorizationFilter keyless = new AuthorizationFilter(verifier, new InternalTokenMinter(signingKey),
+                new ClientNetworkKey(new ClientAddressResolver(new GatewayShieldProperties()), "", false), new SimpleMeterRegistry(), "");
+        keyless.anonymousAllowed().filter(request("Bearer h.anonymous.s"), chain).block();
+        assertThat(forwardedClaims().getClaims()).doesNotContainKey(InternalToken.CLAIM_IPK);
     }
 
     @Test
