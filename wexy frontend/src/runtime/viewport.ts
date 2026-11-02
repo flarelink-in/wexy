@@ -191,6 +191,11 @@ export class Viewport {
         };
     }
 
+    /** Held by a pause (a film, a photo, a probe's quiet window): a review's capture waits for its own turn (EA6). */
+    get held(): boolean {
+        return this.pauses > 0;
+    }
+
     /**
      * Swap the running world: the switch EA5's commit() makes. Everything that can fail runs first, on the new world and
      * on locals: its quality floor, the ladder, the rung, its dial set. Only then do the assignments run, which cannot

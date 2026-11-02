@@ -81,27 +81,40 @@ export function instanceBox(local: Box, record: ArrayLike<number>, at: number): 
     return { min: [center[0] - half[0], center[1] - half[1], center[2] - half[2]], max: [center[0] + half[0], center[1] + half[1], center[2] + half[2]] };
 }
 
-/** A batch's instance records, read back: every one up to BOUNDS_SAMPLE, else RUNS evenly spaced runs. */
+/**
+ * A batch's instance records, read back: every one up to BOUNDS_SAMPLE, else RUNS evenly spaced runs. Every read is
+ * asked for before the first await.
+ */
 async function sampled(read: NonNullable<BoundsPort['readBuffer']>, buffer: Handle, instances: number): Promise<Float32Array> {
     const bytes = INSTANCE_FLOATS * 4;
     if (instances <= BOUNDS_SAMPLE) return new Float32Array(await read(buffer, instances * bytes, 0));
     const run = Math.floor(BOUNDS_SAMPLE / RUNS);
+    const runs = Array.from({ length: RUNS }, (_, k) => read(buffer, run * bytes, Math.floor(k * (instances - run) / (RUNS - 1)) * bytes));
     const out = new Float32Array(RUNS * run * INSTANCE_FLOATS);
-    for (let k = 0; k < RUNS; k++) {
-        const first = Math.floor(k * (instances - run) / (RUNS - 1));
-        out.set(new Float32Array(await read(buffer, run * bytes, first * bytes)), k * run * INSTANCE_FLOATS);
-    }
+    (await Promise.all(runs)).forEach((part, k) => out.set(new Float32Array(part), k * run * INSTANCE_FLOATS));
     return out;
 }
 
-/** Each mesh batch's box in world space, from its instances as the device holds them; null when this engine cannot read them. */
+/**
+ * Each mesh batch's box in world space, from its instances as the device holds them; null when this engine cannot read
+ * them. Every batch's reads are submitted before the first await, so all of them see one tick: a review reads them in
+ * the same quiet section as its frames (review-capture.ts, EA6).
+ */
 export async function worldBounds(batches: readonly MeshBatchState[], port: BoundsPort): Promise<WorldBounds | null> {
     if (!port.readBuffer || !port.geometryBox) return null;
+    const read = port.readBuffer.bind(port);
+    const geometryBox = port.geometryBox.bind(port);
+    const asked = batches.map(b => {
+        const local = geometryBox(b.geometry);
+        return local && b.instances > 0 ? { b, local, records: sampled(read, b.buffer, b.instances) } : null;
+    });
+    const got = await Promise.all(asked.map(a => a?.records ?? null));
     const out: BatchBox[] = [];
-    for (const b of batches) {
-        const local = port.geometryBox(b.geometry);
-        if (!local || b.instances <= 0) continue;
-        const records = await sampled(port.readBuffer.bind(port), b.buffer, b.instances);
+    for (let i = 0; i < asked.length; i++) {
+        const a = asked[i];
+        const records = got[i];
+        if (!a || !records) continue;
+        const { b, local } = a;
         let box: Box | null = null;
         let count = 0;
         for (let at = 0; at + INSTANCE_FLOATS <= records.length; at += INSTANCE_FLOATS) {
@@ -168,7 +181,7 @@ export function frameWorld(bounds: WorldBounds | null, fovDegrees: number, aspec
     const eye = eyeOf(view);
     for (const b of bounds.batches) {
         if (eye.every((v, i) => v > b.box.min[i] && v < b.box.max[i])) {
-            notes.push(`EA_FRAME the camera starts inside ${b.node}'s box (${dims(b.box)} units): its inside faces fill the view`);
+            notes.push(`EA_FRAME the camera starts inside ${b.node}'s bounding box (${dims(b.box)} units): its geometry may block the view`);
         }
     }
     return { view, subject, notes };

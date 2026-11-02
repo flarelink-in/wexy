@@ -98,7 +98,8 @@ test('the camera framed on the world: a batch that dwarfs the rest is said and l
     const written = frameWorld(castle(box([-234, -54, -234], [234, 50, 234])), 45, 16 / 9);
     assert.equal(written.notes.length, 2, written.notes.join(' | '));
     assert.match(written.notes[0], /^EA_SCALE batchhill spans 468 × 104 × 468 units, 29 times the rest of the world \(16 across\): a primitive's size and its instances' scale multiply, so one of them is likely meant as 1$/);
-    assert.match(written.notes[1], /^EA_FRAME the camera starts inside batchhill's box \(468 × 104 × 468 units\): its inside faces fill the view$/);
+    // A bounding box, not the geometry (the outside review of 11-02 night): inside one, the geometry may block the view.
+    assert.match(written.notes[1], /^EA_FRAME the camera starts inside batchhill's bounding box \(468 × 104 × 468 units\): its geometry may block the view$/);
     near(written.subject.min, [-8, -2.9, -8], 'the shot is of the castle, not the hill');
     near(written.subject.max, [8, 16, 10], 'the shot is of the castle, not the hill');
     near(written.view.target, [0, 6.55, 1], 'aimed at the middle of the castle');
