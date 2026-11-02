@@ -36,8 +36,9 @@ public final class InMemorySpendLedger {
     /** As {@link #template()}, with every script answered after a pause: a slow meter, for the cancellation tests. */
     public StringRedisTemplate template(long delayMillis) {
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        // Eight arguments since W1: the amount, the four ceilings, the two lifetimes, then the lane's ceiling.
         when(redis.execute(any(RedisScript.class), anyList(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenAnswer(invocation -> {
                     if (delayMillis > 0) {
                         Thread.sleep(delayMillis);
@@ -49,7 +50,7 @@ public final class InMemorySpendLedger {
                             invocation.getArgument(1),
                             invocation.getArgument(2), invocation.getArgument(3),
                             invocation.getArgument(4), invocation.getArgument(5),
-                            invocation.getArgument(6));
+                            invocation.getArgument(6), invocation.getArgument(9));
                 });
         return redis;
     }
@@ -58,7 +59,7 @@ public final class InMemorySpendLedger {
     public static StringRedisTemplate failing() {
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         when(redis.execute(any(RedisScript.class), anyList(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenThrow(new QueryTimeoutException("Redis command timed out"));
         return redis;
     }
@@ -68,19 +69,21 @@ public final class InMemorySpendLedger {
         down.set(isDown);
     }
 
-    /** The charge script's decision, or the adjust script's signed, floored move. */
+    /** The charge script's decision, or the adjust script's signed, floored move; the lane's day is KEYS[5] (W1). */
     synchronized String apply(boolean adjust, List<String> keys, String amountRaw, String globalMonthCapRaw,
-                              String providerMonthCapRaw, String globalDayCapRaw, String providerDayCapRaw) {
+                              String providerMonthCapRaw, String globalDayCapRaw, String providerDayCapRaw, String laneDayCapRaw) {
         long amount = Long.parseLong(amountRaw);
         long globalMonthCap = Long.parseLong(globalMonthCapRaw);
         long providerMonthCap = Long.parseLong(providerMonthCapRaw);
         long globalDayCap = Long.parseLong(globalDayCapRaw);
         long providerDayCap = Long.parseLong(providerDayCapRaw);
+        long laneDayCap = Long.parseLong(laneDayCapRaw);
 
         long globalMonth = value(keys.get(0));
         long providerMonth = value(keys.get(1));
         long globalDay = value(keys.get(2));
         long providerDay = value(keys.get(3));
+        long laneDay = value(keys.get(4));
 
         if (adjust) {
             settlements.incrementAndGet();
@@ -96,6 +99,9 @@ public final class InMemorySpendLedger {
             if (denial == null) {
                 denial = denied("PROVIDER_DAY", providerDay, providerDayCap, amount);
             }
+            if (denial == null) {
+                denial = denied("LANE_DAY", laneDay, laneDayCap, amount);
+            }
             if (denial != null) {
                 return denial;
             }
@@ -105,8 +111,18 @@ public final class InMemorySpendLedger {
         providerMonth = move(keys.get(1), amount);
         globalDay = move(keys.get(2), amount);
         providerDay = move(keys.get(3), amount);
+        laneDay = move(keys.get(4), amount);
         return "OK|" + providerMonth + "|" + providerMonthCap + "|" + providerDay + "|"
-                + providerDayCap + "|" + globalMonth + "|" + globalMonthCap + "|" + globalDay + "|" + globalDayCap;
+                + providerDayCap + "|" + globalMonth + "|" + globalMonthCap + "|" + globalDay + "|" + globalDayCap
+                + "|" + laneDay + "|" + laneDayCap;
+    }
+
+    /** Today's total for one lane (W1). */
+    public synchronized long totalForLane(String lane) {
+        return totals.entrySet().stream()
+                .filter(entry -> entry.getKey().contains(":d:") && entry.getKey().endsWith(":lane:" + lane))
+                .mapToLong(Map.Entry::getValue)
+                .sum();
     }
 
     private static String denied(String scope, long current, long cap, long cost) {

@@ -374,19 +374,25 @@ public record ModuleRequest(String turnId, String jobId, JsonNode subject, JsonN
 
     /** Exactly these keys, no other and none missing; refused in the words a developer can act on (AgentBase uses it too). */
     static void exactly(JsonNode node, List<String> keys, String what) {
+        exactly(node, keys, List.of(), what);
+    }
+
+    /** As {@link #exactly(JsonNode, List, String)}, where each of {@code optional} may also appear, or not. */
+    static void exactly(JsonNode node, List<String> keys, List<String> optional, String what) {
+        String also = optional.isEmpty() ? "" : " (and optionally " + String.join(", ", optional) + ")";
         if (!node.isObject()) {
-            throw bad(what + " must be an object with " + String.join(", ", keys) + ".");
+            throw bad(what + " must be an object with " + String.join(", ", keys) + also + ".");
         }
         List<String> extra = new ArrayList<>();
         for (Iterator<String> it = node.fieldNames(); it.hasNext(); ) {
             String key = it.next();
-            if (!keys.contains(key)) {
+            if (!keys.contains(key) && !optional.contains(key)) {
                 extra.add(key.length() > 40 ? key.substring(0, 40) : key);
             }
         }
         List<String> missing = keys.stream().filter(k -> !node.has(k)).toList();
         if (!extra.isEmpty() || !missing.isEmpty()) {
-            throw bad(what + " takes exactly " + String.join(", ", keys) + (extra.isEmpty() ? "" : "; not " + String.join(", ", extra.subList(0, Math.min(5, extra.size()))))
+            throw bad(what + " takes exactly " + String.join(", ", keys) + also + (extra.isEmpty() ? "" : "; not " + String.join(", ", extra.subList(0, Math.min(5, extra.size()))))
                     + (missing.isEmpty() ? "" : "; " + String.join(", ", missing) + " missing") + ".");
         }
     }

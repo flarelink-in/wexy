@@ -10,3 +10,6 @@ wexy:
   meta-api:
     base-url: http://127.0.0.1:1/v1
     api-key: ""
+  allowance:
+    # A test key, not a secret (W1): the allowances count callers as a deployment does; Redis refuses, so they deny.
+    uid-hmac-hex: 7465737474657374746573747465737474657374746573747465737474657374

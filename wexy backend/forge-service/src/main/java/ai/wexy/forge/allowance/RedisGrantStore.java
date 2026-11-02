@@ -1,0 +1,168 @@
+package ai.wexy.forge.allowance;
+
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.stereotype.Component;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * The grants in Redis (W1), on SpendGuard's patterns: each step that checks and writes is one Lua script, every key it
+ * touches passed in KEYS, a delimited string as the reply, the clock read in Java. Redis unreachable throws, and the
+ * caller grants nothing (the fail-closed path). {@code EXPIRE ... NX} needs Redis 7, as SpendGuard's scripts do.
+ */
+@Component
+class RedisGrantStore implements GrantStore {
+
+    /**
+     * KEYS: the n counters, the grant's record, its index. ARGV: n, the n limits, the n lifetimes, the grant's life, its
+     * id, then the record's field and value pairs. All or nothing: a counter at its limit writes nothing.
+     */
+    static final RedisScript<String> GRANT = new DefaultRedisScript<>(
+            "local n = tonumber(ARGV[1])\n"
+            + "for i = 1, n do\n"
+            + "  local used = tonumber(redis.call('GET', KEYS[i]) or '0')\n"
+            + "  if used >= tonumber(ARGV[1 + i]) then return 'DENY|' .. (i - 1) end\n"
+            + "end\n"
+            + "for i = 1, n do\n"
+            + "  redis.call('INCR', KEYS[i])\n"
+            + "  redis.call('EXPIRE', KEYS[i], tonumber(ARGV[1 + n + i]), 'NX')\n"
+            + "end\n"
+            + "local life = tonumber(ARGV[2 + 2 * n])\n"
+            + "local record = KEYS[n + 1]\n"
+            + "for j = 4 + 2 * n, #ARGV, 2 do\n"
+            + "  redis.call('HSET', record, ARGV[j], ARGV[j + 1])\n"
+            + "end\n"
+            + "redis.call('EXPIRE', record, life)\n"
+            + "redis.call('SET', KEYS[n + 2], ARGV[3 + 2 * n], 'EX', life)\n"
+            + "return 'OK'\n",
+            String.class);
+
+    /**
+     * KEYS: the grant's record, the new index (unused when ARGV[6] is 0). ARGV: owner, field, limit, the prompt's hash or
+     * empty, the grant's id, 1 to index.
+     */
+    static final RedisScript<String> JOIN = new DefaultRedisScript<>(
+            "local record = KEYS[1]\n"
+            + "if redis.call('EXISTS', record) == 0 then return 'NONE' end\n"
+            + "if redis.call('HGET', record, 'owner') ~= ARGV[1] then return 'NONE' end\n"
+            + "if ARGV[4] ~= '' and redis.call('HGET', record, 'prompt') ~= ARGV[4] then return 'NONE' end\n"
+            + "local used = tonumber(redis.call('HGET', record, ARGV[2]) or '0')\n"
+            + "if used >= tonumber(ARGV[3]) then return 'FULL' end\n"
+            + "redis.call('HINCRBY', record, ARGV[2], 1)\n"
+            + "if ARGV[6] == '1' then\n"
+            + "  local ttl = redis.call('TTL', record)\n"
+            + "  if ttl > 0 then redis.call('SET', KEYS[2], ARGV[5], 'EX', ttl) end\n"
+            + "end\n"
+            + "return 'JOINED'\n",
+            String.class);
+
+    /** KEYS: the grant's record. */
+    static final RedisScript<String> DISPATCHED = new DefaultRedisScript<>(
+            "if redis.call('EXISTS', KEYS[1]) == 0 then return 'GONE' end\n"
+            + "redis.call('HSET', KEYS[1], 'dispatched', '1')\n"
+            + "return 'OK'\n",
+            String.class);
+
+    /**
+     * KEYS: the grant's record, its index, then its counters. ARGV: the counters as the record names them. Only an
+     * unspent grant whose record names exactly these counters is given back.
+     */
+    static final RedisScript<String> RELEASE = new DefaultRedisScript<>(
+            "local record = KEYS[1]\n"
+            + "if redis.call('EXISTS', record) == 0 then return 'GONE' end\n"
+            + "if redis.call('HGET', record, 'dispatched') == '1' then return 'SPENT' end\n"
+            + "if redis.call('HGET', record, 'counters') ~= ARGV[1] then return 'MISMATCH' end\n"
+            + "for i = 3, #KEYS do\n"
+            + "  local v = redis.call('DECR', KEYS[i])\n"
+            + "  if v <= 0 then redis.call('DEL', KEYS[i]) end\n"
+            + "end\n"
+            + "redis.call('DEL', record, KEYS[2])\n"
+            + "return 'RELEASED'\n",
+            String.class);
+
+    private final StringRedisTemplate redis;
+
+    RedisGrantStore(ObjectProvider<StringRedisTemplate> redisProvider) {
+        this.redis = redisProvider.getIfAvailable();
+    }
+
+    private StringRedisTemplate redis() {
+        if (redis == null) {
+            throw new IllegalStateException("No Redis connection: the allowances cannot be checked.");
+        }
+        return redis;
+    }
+
+    @Override
+    public List<Long> counts(List<String> counters) {
+        List<String> values = redis().opsForValue().multiGet(counters);
+        if (values == null || values.size() != counters.size()) {
+            throw new IllegalStateException("Redis answered no counts.");
+        }
+        List<Long> out = new ArrayList<>(values.size());
+        for (String v : values) {
+            out.add(v == null ? 0L : Long.parseLong(v));
+        }
+        return out;
+    }
+
+    @Override
+    public int grant(List<String> counters, List<Long> limits, List<Long> lifetimesSeconds, String grantKey, String grantId,
+                     String indexKey, Map<String, String> record, long lifeSeconds) {
+        List<String> keys = new ArrayList<>(counters);
+        keys.add(grantKey);
+        keys.add(indexKey);
+        List<Object> args = new ArrayList<>();
+        args.add(Integer.toString(counters.size()));
+        limits.forEach(l -> args.add(Long.toString(l)));
+        lifetimesSeconds.forEach(t -> args.add(Long.toString(t)));
+        args.add(Long.toString(lifeSeconds));
+        args.add(grantId);
+        record.forEach((field, value) -> {
+            args.add(field);
+            args.add(value);
+        });
+        String reply = redis().execute(GRANT, keys, args.toArray());
+        if ("OK".equals(reply)) {
+            return -1;
+        }
+        if (reply != null && reply.startsWith("DENY|")) {
+            return Integer.parseInt(reply.substring(5));
+        }
+        throw new IllegalStateException("The grant script answered " + reply);
+    }
+
+    @Override
+    public String lookup(String indexKey) {
+        return redis().opsForValue().get(indexKey);
+    }
+
+    @Override
+    public Join join(String grantKey, String owner, String field, long limit, String prompt, String newIndexKey, String grantId) {
+        String reply = redis().execute(JOIN, List.of(grantKey, newIndexKey == null ? grantKey : newIndexKey),
+                owner, field, Long.toString(limit), prompt == null ? "" : prompt, grantId, newIndexKey == null ? "0" : "1");
+        if (reply == null) {
+            throw new IllegalStateException("The join script answered nothing.");
+        }
+        return Join.valueOf(reply);
+    }
+
+    @Override
+    public void dispatched(String grantKey) {
+        redis().execute(DISPATCHED, List.of(grantKey));
+    }
+
+    @Override
+    public boolean release(String grantKey, String indexKey, List<String> counters) {
+        List<String> keys = new ArrayList<>();
+        keys.add(grantKey);
+        keys.add(indexKey);
+        keys.addAll(counters);
+        return "RELEASED".equals(redis().execute(RELEASE, keys, String.join(" ", counters)));
+    }
+}

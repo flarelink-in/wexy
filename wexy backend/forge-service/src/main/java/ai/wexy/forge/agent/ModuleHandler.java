@@ -1,6 +1,7 @@
 package ai.wexy.forge.agent;
 
 import ai.wexy.common.ErrorCode;
+import ai.wexy.forge.allowance.Role;
 import ai.wexy.forge.engine.AdapterManifest;
 import ai.wexy.forge.engine.EngineBundle;
 import ai.wexy.forge.error.ForgeException;
@@ -162,7 +163,7 @@ public class ModuleHandler {
     /** The charge: a refusal finishes the record as DENIED, a fault before the call as ERROR, before the envelope goes out. */
     private Mono<MeteredModelClient.Metered> charge(Call call, Caller caller) {
         return Mono.defer(() -> models.charge(ROLE, call.prompt.messages(), new MeteredModelClient.CallOptions(null, null,
-                        MeteredModelCaller.safetyId(caller.uid())), "module " + call.g.id(), call))
+                        MeteredModelCaller.safetyId(caller.uid()), Role.of(caller).lane()), "module " + call.g.id(), call))
                 .onErrorResume(error -> {
                     boolean refused = error instanceof ForgeException f && (f.code() == ErrorCode.BUDGET || f.code() == ErrorCode.PAUSED);
                     call.finish(refused ? Generation.Status.DENIED : Generation.Status.ERROR);

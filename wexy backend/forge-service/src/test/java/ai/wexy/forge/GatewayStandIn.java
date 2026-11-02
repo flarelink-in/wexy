@@ -55,14 +55,21 @@ public final class GatewayStandIn implements AutoCloseable {
         return "http://127.0.0.1:" + server.getAddress().getPort() + InternalToken.JWKS_PATH;
     }
 
-    /** An internal token for a caller, as the gateway mints it. */
-    public String token(String uid, boolean anonymous, boolean admin) {
+    /**
+     * An internal token for a caller, as the gateway mints it. {@code ipk} is the network key it signs in from the
+     * request's address (W1), or null when it could resolve none.
+     */
+    public String token(String uid, boolean anonymous, boolean admin, String ipk) {
         try {
             long now = System.currentTimeMillis();
-            JWTClaimsSet claims = new JWTClaimsSet.Builder().issuer(InternalToken.ISSUER).subject(uid)
+            JWTClaimsSet.Builder builder = new JWTClaimsSet.Builder().issuer(InternalToken.ISSUER).subject(uid)
                     .issueTime(new Date(now)).expirationTime(new Date(now + InternalToken.LIFETIME_MILLIS))
                     .claim(InternalToken.CLAIM_ANONYMOUS, anonymous).claim(InternalToken.CLAIM_ADMIN, admin)
-                    .claim(InternalToken.CLAIM_PROVIDER, anonymous ? "anonymous" : "google.com").build();
+                    .claim(InternalToken.CLAIM_PROVIDER, anonymous ? "anonymous" : "google.com");
+            if (ipk != null) {
+                builder.claim(InternalToken.CLAIM_IPK, ipk);
+            }
+            JWTClaimsSet claims = builder.build();
             SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(key.getKeyID())
                     .type(JOSEObjectType.JWT).build(), claims);
             jwt.sign(new RSASSASigner(key));

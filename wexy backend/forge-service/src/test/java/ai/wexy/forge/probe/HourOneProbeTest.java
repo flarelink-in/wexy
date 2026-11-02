@@ -6,6 +6,7 @@ import ai.wexy.forge.models.ModelProperties;
 import ai.wexy.forge.schemas.JsonSchemas;
 import ai.wexy.forge.spend.InMemorySpendLedger;
 import ai.wexy.forge.spend.SpendGuard;
+import ai.wexy.forge.spend.SpendLanes;
 import ai.wexy.forge.spend.SpendProperties;
 import ai.wexy.forge.templates.HostContract;
 import ai.wexy.forge.templates.PromptBuilder;
@@ -53,7 +54,7 @@ class HourOneProbeTest {
                 "meta-spark", new SpendProperties.Cap(1_000_000L, 1_000_000L),
                 "meta-wonder", new SpendProperties.Cap(1_000_000L, 1_000_000L));
         SpendGuard guard = new SpendGuard(redis, new SpendProperties(null,
-                new SpendProperties.Cap(2_000_000L, 2_000_000L), providers), new SimpleMeterRegistry());
+                new SpendProperties.Cap(2_000_000L, 2_000_000L), providers, SpendLanes.open()), new SimpleMeterRegistry());
         ModelCatalog catalog = new ModelCatalog(new ModelProperties(
                 Map.of("planner", new ModelProperties.Role("muse-spark-1.3", "meta-spark", 1500, Duration.ofSeconds(5), null, null),
                         "escalator", new ModelProperties.Role("muse-wonder-1.0", "meta-wonder", 1500, Duration.ofSeconds(5), null, null)),

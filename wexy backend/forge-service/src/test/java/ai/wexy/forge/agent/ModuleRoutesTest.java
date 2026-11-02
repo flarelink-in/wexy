@@ -15,6 +15,7 @@ import ai.wexy.forge.records.Ulid;
 import ai.wexy.forge.schemas.JsonSchemas;
 import ai.wexy.forge.spend.InMemorySpendLedger;
 import ai.wexy.forge.spend.SpendGuard;
+import ai.wexy.forge.spend.SpendLanes;
 import ai.wexy.forge.spend.SpendProperties;
 import ai.wexy.forge.templates.HostContract;
 import ai.wexy.forge.templates.PromptBuilder;
@@ -115,7 +116,7 @@ class ModuleRoutesTest {
         ObjectProvider<StringRedisTemplate> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(template);
         SpendGuard guard = new SpendGuard(provider, new SpendProperties(null, new SpendProperties.Cap(5_000_000L, 5_000_000L),
-                Map.of("meta-spark", new SpendProperties.Cap(5_000_000L, sparkDailyCapMicroUsd))), new SimpleMeterRegistry());
+                Map.of("meta-spark", new SpendProperties.Cap(5_000_000L, sparkDailyCapMicroUsd)), SpendLanes.open()), new SimpleMeterRegistry());
         ModelCatalog catalog = new ModelCatalog(new ModelProperties(
                 Map.of("module", new ModelProperties.Role("m-1", "meta-spark", 12000, Duration.ofSeconds(10), "medium", null)),
                 Map.of("m-1", new ModelProperties.Price(new BigDecimal("1.25"), new BigDecimal("4.25")))), guard);

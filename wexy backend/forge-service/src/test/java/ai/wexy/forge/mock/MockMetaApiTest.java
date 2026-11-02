@@ -126,9 +126,17 @@ class MockMetaApiTest {
         return host.exemplars(fn).stream().filter(e -> e.world().equals(world)).findFirst().orElseThrow().code();
     }
 
+    /**
+     * An anonymous creator's token, as the gateway signs it (W1): each test's creator on a network of its own, so the
+     * real allowance in Redis grants each its one free world, as a deployment counts it.
+     */
+    private static String token(String uid) {
+        return GATEWAY.token(uid, true, false, "net-" + uid);
+    }
+
     private List<ServerSentEvent<String>> stream(String path, String uid, Object body) {
         FluxExchangeResult<ServerSentEvent<String>> result = client.post().uri(path)
-                .header(InternalToken.HEADER, GATEWAY.token(uid, true, false))
+                .header(InternalToken.HEADER, token(uid))
                 .contentType(MediaType.APPLICATION_JSON).bodyValue(body).exchange()
                 .expectStatus().isOk().returnResult(EVENTS);
         return result.getResponseBody().collectList().block(Duration.ofSeconds(30));
@@ -136,7 +144,7 @@ class MockMetaApiTest {
 
     private WebTestClient.ResponseSpec post(String path, String uid, Object body) {
         return client.post().uri(path)
-                .header(InternalToken.HEADER, GATEWAY.token(uid, true, false))
+                .header(InternalToken.HEADER, token(uid))
                 .contentType(MediaType.APPLICATION_JSON).bodyValue(body).exchange();
     }
 
@@ -188,11 +196,14 @@ class MockMetaApiTest {
                 .allMatch(g -> g.chargedMicroUsd() > 0 && g.costMicroUsd() != null && g.costMicroUsd() > 0);
     }
 
-    /** The second call of a template reads as cached, as Meta reports a cached prefix. */
+    /**
+     * The second call of a template reads as cached, as Meta reports a cached prefix. The second plan is another
+     * creator's: an anonymous account makes one world (W1), and the prefix is the template's, not the caller's.
+     */
     @Test
     void aTemplateStreamedBeforeReportsCachedTokens() {
         stream("/v1/forge/plan", "uid-cache", plan("a spiral galaxy"));
-        List<ServerSentEvent<String>> again = stream("/v1/forge/plan", "uid-cache", plan("a spiral galaxy"));
+        List<ServerSentEvent<String>> again = stream("/v1/forge/plan", "uid-cache-2", plan("a spiral galaxy"));
 
         assertThat(first(again, "usage").path("cached").asLong()).isPositive();
     }
@@ -338,12 +349,16 @@ class MockMetaApiTest {
         assertThat(store.find(first(repair, "meta").path("generationId").asText()).orElseThrow().status()).isEqualTo(Generation.Status.OK);
     }
 
-    /** B0.4, R12 for direct: the recorded edit, validated, as one JSON document with the call's meta and usage. */
+    /**
+     * B0.4, R12 for direct: the recorded edit, validated, as one JSON document with the call's meta and usage. The
+     * turn names its plan, as the studio sends it (W1), so it runs inside the plan's prompt on the real allowance.
+     */
     @Test
     void theDirectorAnswersTheRecordedEditThroughTheRoute() throws Exception {
         List<ServerSentEvent<String>> plan = stream("/v1/forge/plan", "uid-direct", plan("a spiral galaxy"));
 
-        byte[] body = post("/v1/forge/direct", "uid-direct", Map.of("spec", JSON.readTree(text(plan)), "turn", "make it glow more"))
+        byte[] body = post("/v1/forge/direct", "uid-direct", Map.of("spec", JSON.readTree(text(plan)), "turn", "make it glow more",
+                        "planId", planId(plan)))
                 .expectStatus().isOk().expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
                 .expectBody().returnResult().getResponseBody();
         JsonNode answer = JSON.readTree(body);

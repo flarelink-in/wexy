@@ -26,11 +26,19 @@ import java.util.Map;
  * the browser's words about its own checks, which this server cannot run (only the browser has X): data, quoted to the
  * model as data. Ownership is not asked: a base is a program this server judges again, and the revision is a turn like
  * any other, under the caller's own buckets and caps.
+ *
+ * <p>W1 (2026-11-02; the creations platform design §10, §11): a base may name the turn it revises, {@code turnId}, as
+ * that turn's meta gave it. Only its shape is checked here; whether the caller has that turn, and its prompt a revision
+ * left, is the allowance's to judge. A base without it, or naming a turn the caller does not have, spends a new prompt.
+ *
+ * @param turnId the turn this one revises, or null when the base names none
  */
-public record AgentBase(JsonNode design, JsonNode program, List<BaseFinding> findings) {
+public record AgentBase(String turnId, JsonNode design, JsonNode program, List<BaseFinding> findings) {
 
     /** A base's keys: no other is taken. */
     static final List<String> FIELDS = List.of("versions", "design", "program", "findings");
+    /** The key a base may add (W1): the turn it revises. */
+    static final String TURN_ID = "turnId";
     /** The pins a base names, in the order a mismatch is told: the action contract, the engine bundle, the adapter manifest. */
     static final List<String> VERSION_KEYS = List.of("actionSchema", "bundle", "manifest");
     /**
@@ -70,7 +78,15 @@ public record AgentBase(JsonNode design, JsonNode program, List<BaseFinding> fin
         if (ModuleRequest.utf8(base.toString()) > MAX_BASE_BYTES) {
             throw new ForgeException(ErrorCode.TOO_LARGE, "base is at most " + MAX_BASE_BYTES + " bytes as JSON.");
         }
-        ModuleRequest.exactly(base, FIELDS, "base");
+        ModuleRequest.exactly(base, FIELDS, List.of(TURN_ID), "base");
+        String turnId = null;
+        if (base.has(TURN_ID)) {
+            JsonNode id = base.path(TURN_ID);
+            if (!id.isTextual() || !ModuleRequest.ULID.matcher(id.asText()).matches()) {
+                throw ModuleRequest.bad("base.turnId is the turn this one revises, a ULID as its meta named it, not " + ModuleRequest.shown(id) + ".");
+            }
+            turnId = id.asText();
+        }
 
         // The versions first: a browser built for another contract is told so before anything else is judged.
         JsonNode versions = base.path("versions");
@@ -103,7 +119,7 @@ public record AgentBase(JsonNode design, JsonNode program, List<BaseFinding> fin
             throw ModuleRequest.bad("base.program does not pass the host's check, so no turn could have handed it off: " + f.code() + " at "
                     + f.path() + ": " + ModuleRequest.clip(f.message()));
         }
-        return new AgentBase(design.deepCopy(), program.deepCopy(), findings(base.path("findings")));
+        return new AgentBase(turnId, design.deepCopy(), program.deepCopy(), findings(base.path("findings")));
     }
 
     /** The browser's findings: 1 to 32, each exactly an id, a code, a path or null, and a message, each within its cap. */

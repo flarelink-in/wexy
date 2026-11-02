@@ -299,5 +299,77 @@ mutate "an anonymous module bucket of the old seven calls" "$G/shield/GatewayShi
 mutate "a signed-in module bucket of the old fourteen calls" "$G/shield/GatewayShieldProperties.java" forge-gateway ForgeRoutesTest \
     's/new Bucket\(AgentTurn\.MODULE_CALLS \/ 60\.0, 2 \* AgentTurn\.MODULE_CALLS\)/new Bucket(7 \/ 60.0, 14)/'
 
+# W1.2 (2026-11-02; the creations platform design §11, PL-T17's ipk): the network an anonymous caller is counted by is the
+# address the gateway resolved, an IPv6 address's /64, keyed; never a header the client wrote, never made up without a key.
+mutate "ipk from the client's forwarded-for" "$G/shield/ClientNetworkKey.java" forge-gateway ClientNetworkKeyTest \
+    's/byte\[\] network = network\(resolver\.resolve\(exchange\)\);/byte[] network = network(String.valueOf(exchange.getRequest().getHeaders().getFirst("X-Forwarded-For")));/'
+mutate "ipk keeps a whole IPv6 address" "$G/shield/ClientNetworkKey.java" forge-gateway ClientNetworkKeyTest \
+    's/byte\[\] out = new byte\[1 \+ \(bytes\.length == 4 \? 4 : 8\)\];/byte[] out = new byte[1 + bytes.length];/'
+mutate "ipk unkeyed" "$G/shield/ClientNetworkKey.java" forge-gateway ClientNetworkKeyTest \
+    's/return network == null \? null : hmac\(network\);/return network == null ? null : HexFormat.of().formatHex(network);/'
+mutate "an unset required network key allowed" "$G/shield/ClientNetworkKey.java" forge-gateway ClientNetworkKeyTest \
+    's/if \(required\) \{/if (false) {/'
+mutate "no network key in the token" "$G/auth/AuthorizationFilter.java" forge-gateway AuthorizationFilterTest \
+    's/minter\.mint\(caller, admin, networkKey\.of\(exchange\)\)/minter.mint(caller, admin, null)/'
+
+# W1.3 (2026-11-02; the creations platform design §11, I6, Q95): the spend lanes. The real script's lane check is
+# SpendGuardRedisTest's, which needs Docker; these hold the Java around it, hermetically.
+mutate "a lane's ceiling never sent" "$S/spend/SpendGuard.java" forge-service SpendGuardTest \
+    's/Long\.toString\(laneCap\.dailyMicroUsd\(\)\)\};/"-1"};/'
+mutate "a call without a lane allowed" "$S/spend/SpendGuard.java" forge-service SpendGuardTest \
+    's/if \(laneCap == null\) \{/if (false) {/'
+mutate "a missing lane allowed at startup" "$S/spend/SpendGuard.java" forge-service SpendGuardTest \
+    's/if \(lane == null \|\| lane\.dailyMicroUsd\(\) == null\) \{/if (false) {/'
+mutate "a settlement that leaves the lane" "$S/spend/SpendGuard.java" forge-service SpendGuardSettlementTest \
+    's/adjust\(provider, lane, receipt\.keys\(\), delta, providerCap, detail\)/adjust(provider, lane, receipt.keys().subList(0, 4), delta, providerCap, detail)/'
+
+# W1.4 (2026-11-02; the creations platform design §11, I6, I11, I12, I13): roles, prompt grants and follow-ups. The real
+# grant scripts are RedisGrantStoreTest's, which needs Docker; these hold the Java around them, hermetically.
+A=$S/allowance
+mutate "an anonymous token taken for an account" "$A/Role.java" forge-service RoleTest \
+    's/        if \(caller\.anonymous\(\)\) \{\n            return ANONYMOUS;\n        \}\n//'
+mutate "anonymous prompts charged to early access's lane" "$A/Role.java" forge-service RoleTest \
+    's/ANONYMOUS\(SpendGuard\.LANE_ANONYMOUS, "Free"\)/ANONYMOUS(SpendGuard.LANE_EARLY_ACCESS, "Free")/'
+mutate "an anonymous caller without a network granted" "$A/PromptGrants.java" forge-service PromptGrantsTest \
+    's/case ANONYMOUS -> caller\.ipk\(\) == null \? null : /case ANONYMOUS -> false ? null : /'
+mutate "the network not counted" "$A/PromptGrants.java" forge-service PromptGrantsTest \
+    's/PREFIX \+ "net:" \+ day \+ ":" \+ caller\.ipk\(\)\)/PREFIX + "anon:" + owner)/'
+mutate "a spent day granted anyway" "$A/PromptGrants.java" forge-service PromptGrantsTest \
+    's/        if \(denied >= 0\) \{/        if (false) {/'
+mutate "quota without its reset" "$A/PromptGrants.java" forge-service PromptGrantsTest \
+    's/"Today.s world is made; the next opens at the day.s reset\.", seconds\)/"Today\x27s world is made.", null)/'
+mutate "a follow-up past its budget" "$A/PromptGrants.java" forge-service PromptGrantsTest \
+    's/long limit = kind == Kind\.DIRECTOR \? properties\.directorTurns\(\) : properties\.revisions\(\);/long limit = Long.MAX_VALUE;/'
+mutate "a revision of another prompt joined" "$A/PromptGrants.java" forge-service PromptGrantsTest \
+    's/store\.join\(GRANT \+ grantId, owner, kind\.field, limit, promptHash,/store.join(GRANT + grantId, owner, kind.field, limit, null,/'
+mutate "a prompt never given back" "$A/Grant.java" forge-service PromptGrantsTest \
+    's/if \(!store\.release\(recordKey, indexKey, counters\)\) \{/if (true) {/'
+mutate "an unsafe idea let through" "$A/PromptAdmission.java" forge-service AllowanceRoutesTest \
+    's/        grants\.check\(caller\);\n        checkSafety\(text, route\);/        grants.check(caller);/'
+mutate "the safety check before the allowance" "$A/PromptAdmission.java" forge-service AllowanceRoutesTest \
+    's/        grants\.check\(caller\);\n        checkSafety\(text, route\);/        checkSafety(text, route);/'
+mutate "a Director turn unchecked inside its prompt" "$A/PromptAdmission.java" forge-service AllowanceRoutesTest \
+    's/        checkSafety\(turn, "direct"\);\n//'
+mutate "a plan not admitted" "$S/loop/LoopHandler.java" forge-service AllowanceRoutesTest \
+    's/return admit\(\(\) -> admission\.entry\(caller, id, plan\.prompt\(\), "plan"\)\)\.flatMap/return admit(() -> null).flatMap/'
+mutate "a turn not admitted" "$S/agent/AgentHandler.java" forge-service AgentRoutesTest \
+    's/\? admission\.entry\(caller, turnId, turn\.prompt\(\), "turn"\)/? null/'
+
+# W1.5 (2026-11-02; the creations platform design §11, I12, Q99): Azure AI Content Safety fails closed. No verdict is
+# no call; each category refuses at its threshold; the recorded verdicts never run outside the local and test profiles.
+C=$S/safety
+mutate "content safety failing open on an error status" "$C/AzureContentSafety.java" forge-service AzureContentSafetyTest \
+    's/throw unavailable\("status " \+ e\.getStatusCode\(\)\.value\(\)\);/return new Verdict(true, Map.of());/'
+mutate "content safety with no deadline" "$C/AzureContentSafety.java" forge-service AzureContentSafetyTest \
+    's/\n                    \.timeout\(timeout\)//'
+mutate "a verdict on a partial answer" "$C/AzureContentSafety.java" forge-service AzureContentSafetyTest \
+    's/if \(!severities\.keySet\(\)\.containsAll\(CATEGORIES\)\) \{/if (false) {/'
+mutate "a threshold one level late" "$C/AzureContentSafety.java" forge-service AzureContentSafetyTest \
+    's/severities\.get\(c\) < refuseAt\.get\(c\)/severities.get(c) <= refuseAt.get(c)/'
+mutate "content safety starting without its key" "$C/AzureContentSafety.java" forge-service AzureContentSafetyTest \
+    's/if \(endpoint\.isEmpty\(\) \|\| key\.isEmpty\(\)\) \{/if (endpoint.isEmpty()) {/'
+mutate "the recorded verdicts in a deployment" "$C/RecordedContentSafety.java" forge-service ContentSafetyProfilesTest \
+    's/\@Profile\(\{"local", "test"\}\)/\@Profile({"local", "test", "prod"})/'
+
 echo "$ran mutation(s)${DRY:+, a dry run}"
 exit $status

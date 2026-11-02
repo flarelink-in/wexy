@@ -115,7 +115,8 @@ public class InternalTokenFilter implements WebFilter, Ordered {
                 claims.getSubject(),
                 Boolean.TRUE.equals(claims.getBooleanClaim(InternalToken.CLAIM_ANONYMOUS)),
                 Boolean.TRUE.equals(claims.getBooleanClaim(InternalToken.CLAIM_ADMIN)),
-                claims.getStringClaim(InternalToken.CLAIM_PROVIDER));
+                claims.getStringClaim(InternalToken.CLAIM_PROVIDER),
+                claims.getStringClaim(InternalToken.CLAIM_IPK));
     }
 
     private static boolean isPublicRead(ServerHttpRequest request) {

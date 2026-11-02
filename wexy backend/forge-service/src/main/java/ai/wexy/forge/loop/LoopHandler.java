@@ -1,6 +1,9 @@
 package ai.wexy.forge.loop;
 
 import ai.wexy.common.ErrorCode;
+import ai.wexy.forge.allowance.Grant;
+import ai.wexy.forge.allowance.PromptAdmission;
+import ai.wexy.forge.allowance.Role;
 import ai.wexy.forge.error.ForgeException;
 import ai.wexy.forge.identity.Caller;
 import ai.wexy.forge.models.ModelCatalog;
@@ -34,6 +37,7 @@ import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.SignalType;
+import reactor.core.scheduler.Schedulers;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -44,6 +48,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -51,7 +56,11 @@ import java.util.regex.Pattern;
 
 /**
  * The loop's endpoints (forge-loop design §5.1, §7, §10): {@code plan}, {@code author},
- * {@code repair} and {@code direct} call a model; {@code outcomes} records what a browser found.
+ * {@code repair} and {@code direct} call a model; {@code outcomes} records what a browser found. Since W1 (the creations
+ * platform design §11) a plan is an entry request: the caller's allowance, the idea's content safety and one prompt
+ * grant come first ({@link PromptAdmission}), before any record or charge; its authors and repairs run inside it, since
+ * they name it; a Director turn names its plan to run inside it too. The grant is spent at the first allowed charge
+ * and given back when none was (a refusal, a fault, a cancel before the call).
  *
  * <p>Each model call, in order:
  * <ol>
@@ -96,9 +105,11 @@ public class LoopHandler {
     private final ModelCatalog catalog;
     private final LoopProperties loop;
     private final MeterRegistry meters;
+    private final PromptAdmission admission;
 
     public LoopHandler(PromptBuilder prompts, MeteredModelClient models, GenerationStore store, OutcomeStore outcomes,
-                       JsonSchemas schemas, ModelCatalog catalog, LoopProperties loop, MeterRegistry meters) {
+                       JsonSchemas schemas, ModelCatalog catalog, LoopProperties loop, MeterRegistry meters, PromptAdmission admission) {
+        this.admission = admission;
         this.prompts = prompts;
         this.models = models;
         this.store = store;
@@ -129,8 +140,12 @@ public class LoopHandler {
                 .switchIfEmpty(noBody())
                 .flatMap(body -> {
                     PlanRequest plan = body.validated(loop.caps());
-                    Prompt prompt = prompts.plan(plan.prompt(), plan.style(), plan.seconds());
-                    return stream(Generation.Kind.PLAN, null, null, "planner", prompt, json(plan), caller);
+                    String id = Ulid.next(Instant.now());
+                    // W1: an entry request, admitted before any record or charge; its authors and repairs name it.
+                    return admit(() -> admission.entry(caller, id, plan.prompt(), "plan")).flatMap(grant -> {
+                        Prompt prompt = prompts.plan(plan.prompt(), plan.style(), plan.seconds());
+                        return stream(id, Generation.Kind.PLAN, null, null, "planner", prompt, json(plan), caller, grant.orElse(null));
+                    });
                 });
     }
 
@@ -190,10 +205,14 @@ public class LoopHandler {
                 .switchIfEmpty(noBody())
                 .flatMap(body -> {
                     DirectRequest direct = body.validated(loop.caps());
-                    Prompt prompt = prompts.direct(direct.spec(), direct.turn());
-                    String input = JSON.createObjectNode().put("turn", direct.turn())
-                            .put("specSha256", sha256(direct.spec().toString())).toString();
-                    return answer("director", prompt, input, caller);
+                    String id = Ulid.next(Instant.now());
+                    // W1: the instruction is checked every time; a turn naming its plan runs inside that plan's prompt.
+                    return admit(() -> admission.director(caller, direct.planId(), id, direct.turn())).flatMap(grant -> {
+                        Prompt prompt = prompts.direct(direct.spec(), direct.turn());
+                        String input = JSON.createObjectNode().put("turn", direct.turn())
+                                .put("specSha256", sha256(direct.spec().toString())).toString();
+                        return answer(id, "director", prompt, input, caller, grant.orElse(null));
+                    });
                 });
     }
 
@@ -248,11 +267,25 @@ public class LoopHandler {
         return Optional.empty();
     }
 
+    /**
+     * The admission, off the event loop (Redis, content safety): its grant, or empty for a follow-up inside its prompt;
+     * a refusal errors with its envelope's code.
+     */
+    private static Mono<Optional<Grant>> admit(Callable<Grant> admit) {
+        return Mono.fromCallable(() -> Optional.ofNullable(admit.call())).subscribeOn(Schedulers.boundedElastic());
+    }
+
     /** A streamed call: the charge, then the events as text/event-stream. */
     private Mono<ServerResponse> stream(Generation.Kind kind, String parentId, String fn, String role, Prompt prompt,
                                         String input, Caller caller) {
-        Call call = begin(kind, parentId, fn, role, prompt, input, caller);
-        return charge(call, caller)
+        return stream(Ulid.next(Instant.now()), kind, parentId, fn, role, prompt, input, caller, null);
+    }
+
+    /** As above, for the generation `id`, under `grant` when it is an entry request's (null for a follow-up). */
+    private Mono<ServerResponse> stream(String id, Generation.Kind kind, String parentId, String fn, String role, Prompt prompt,
+                                        String input, Caller caller, Grant grant) {
+        Call call = begin(id, kind, parentId, fn, role, prompt, input, caller);
+        return charge(call, caller, grant)
                 .flatMap(metered -> ServerResponse.ok()
                         .contentType(MediaType.TEXT_EVENT_STREAM)
                         .header(HttpHeaders.CACHE_CONTROL, "no-store")
@@ -266,9 +299,9 @@ public class LoopHandler {
      * A call answered as one JSON document: the charge, the whole answer collected and judged as a
      * stream's would be, then {@code 200} with the document, or the terminal error as an envelope.
      */
-    private Mono<ServerResponse> answer(String role, Prompt prompt, String input, Caller caller) {
-        Call call = begin(Generation.Kind.DIRECT, null, null, role, prompt, input, caller);
-        return charge(call, caller)
+    private Mono<ServerResponse> answer(String id, String role, Prompt prompt, String input, Caller caller, Grant grant) {
+        Call call = begin(id, Generation.Kind.DIRECT, null, null, role, prompt, input, caller);
+        return charge(call, caller, grant)
                 .flatMap(metered -> events(call, metered).last().flatMap(terminal -> switch (terminal) {
                     case SseEvent.Done ignored -> ServerResponse.ok()
                             .contentType(MediaType.APPLICATION_JSON)
@@ -281,9 +314,8 @@ public class LoopHandler {
                 .doOnCancel(call::cancelled);
     }
 
-    private Call begin(Generation.Kind kind, String parentId, String fn, String role, Prompt prompt, String input, Caller caller) {
+    private Call begin(String id, Generation.Kind kind, String parentId, String fn, String role, Prompt prompt, String input, Caller caller) {
         Instant now = Instant.now();
-        String id = Ulid.next(now);
         Generation g = store.begin(Generation.started(id, kind, parentId, role, catalog.role(role).model(),
                 prompt.templateId(), prompt.hostVersion(), fn, input, source(caller), caller.uid(), now));
         return new Call(g, prompt);
@@ -294,13 +326,16 @@ public class LoopHandler {
      * way before the envelope goes out. The listener keeps the record honest when the client has
      * gone before the meter answered.
      */
-    private Mono<MeteredModelClient.Metered> charge(Call call, Caller caller) {
+    private Mono<MeteredModelClient.Metered> charge(Call call, Caller caller, Grant grant) {
         return Mono.defer(() -> {
                     MeteredModelClient.CallOptions options = new MeteredModelClient.CallOptions(null,
-                            responseFormat(call.prompt), safetyId(caller));
-                    return models.charge(call.g.role(), call.prompt.messages(), options, call.detail(), call);
+                            responseFormat(call.prompt), safetyId(caller), Role.of(caller).lane());
+                    return models.charge(call.g.role(), call.prompt.messages(), options, call.detail(), spending(call, grant));
                 })
+                // A cancel before the meter answered: no call follows, so the prompt goes back (W1).
+                .doOnCancel(() -> giveBack(grant))
                 .onErrorResume(error -> {
+                    giveBack(grant);
                     boolean refused = error instanceof ForgeException f
                             && (f.code() == ErrorCode.BUDGET || f.code() == ErrorCode.PAUSED);
                     call.finish(refused ? Generation.Status.DENIED : Generation.Status.ERROR);
@@ -308,6 +343,41 @@ public class LoopHandler {
                             error instanceof ForgeException f ? f.code().code() : error.getClass().getSimpleName());
                     return Mono.error(error);
                 });
+    }
+
+    /**
+     * The charge listener of an entry request's call (W1): the record told first, as before; then the grant spent when
+     * the meter allowed the call, which is dispatched now, or given back when it did not. On the metering thread, which
+     * may block. A follow-up's call has no grant of its own.
+     */
+    private static MeteredModelClient.ChargeListener spending(Call call, Grant grant) {
+        if (grant == null) {
+            return call;
+        }
+        return new MeteredModelClient.ChargeListener() {
+            @Override
+            public void charged(MeteredModelClient.Reservation reservation) {
+                call.charged(reservation);
+                if (reservation.allowed()) {
+                    grant.spent();
+                } else {
+                    grant.release();
+                }
+            }
+
+            @Override
+            public void failed(Throwable error) {
+                call.failed(error);
+                grant.release();
+            }
+        };
+    }
+
+    /** The grant given back, off the event loop (Redis): no model call was dispatched for it. At most once (Grant). */
+    private static void giveBack(Grant grant) {
+        if (grant != null) {
+            Schedulers.boundedElastic().schedule(grant::release);
+        }
     }
 
     /** The events of one paid call, which finish its generation exactly once. */

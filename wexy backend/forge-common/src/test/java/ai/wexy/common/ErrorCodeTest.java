@@ -18,13 +18,19 @@ class ErrorCodeTest {
         assertThat(codes).hasSize(ErrorCode.values().length);
     }
 
-    /** Backend architecture §12, with the five rows added on 2026-10-26. A change here is a contract change. */
+    /**
+     * Backend architecture §12, with the five rows added on 2026-10-26, and W1's content-refused and
+     * quota (2026-11-02, the creations platform design §10). A change here is a contract change: the
+     * frontend's test/errors.test.mjs pins the same table.
+     */
     @Test
     void theSetIsExactlyTheContract() {
         assertThat(Arrays.stream(ErrorCode.values()).map(ErrorCode::code))
                 .containsExactlyInAnyOrder("bad-request", "auth", "appcheck", "account-required", "forbidden",
-                        "not-found", "too-large", "rate", "internal", "upstream", "budget", "paused",
-                        "unavailable", "timeout");
+                        "not-found", "too-large", "content-refused", "rate", "quota", "internal", "upstream",
+                        "budget", "paused", "unavailable", "timeout");
+        assertThat(ErrorCode.CONTENT_REFUSED.status()).isEqualTo(422);
+        assertThat(ErrorCode.QUOTA.status()).isEqualTo(429);
     }
 
     @Test
@@ -45,5 +51,9 @@ class ErrorCodeTest {
         assertThat(ErrorCode.forStatus(405)).isEqualTo(ErrorCode.BAD_REQUEST);
         assertThat(ErrorCode.forStatus(500)).isEqualTo(ErrorCode.INTERNAL);
         assertThat(ErrorCode.forStatus(599)).isEqualTo(ErrorCode.INTERNAL);
+        // W1: a bare 429 is a rate bucket, never the allowance (whose reset only forge knows); a bare 422 is a bad
+        // request, never a content refusal.
+        assertThat(ErrorCode.forStatus(429)).isEqualTo(ErrorCode.RATE);
+        assertThat(ErrorCode.forStatus(422)).isEqualTo(ErrorCode.BAD_REQUEST);
     }
 }

@@ -2,6 +2,7 @@ package ai.wexy.forge.models;
 
 import ai.wexy.forge.spend.InMemorySpendLedger;
 import ai.wexy.forge.spend.SpendGuard;
+import ai.wexy.forge.spend.SpendLanes;
 import ai.wexy.forge.spend.SpendProperties;
 import ai.wexy.forge.upstream.ChatMessage;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -35,7 +36,7 @@ class ModelCatalogTest {
         ObjectProvider<StringRedisTemplate> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(template);
         return new SpendGuard(provider, new SpendProperties(null, new SpendProperties.Cap(10L, 10L),
-                Map.of("meta-spark", new SpendProperties.Cap(10L, 10L))), new SimpleMeterRegistry());
+                Map.of("meta-spark", new SpendProperties.Cap(10L, 10L)), SpendLanes.open()), new SimpleMeterRegistry());
     }
 
     private static ModelCatalog catalog(Map<String, ModelProperties.Role> roles, Map<String, ModelProperties.Price> prices) {

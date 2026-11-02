@@ -4,6 +4,7 @@ import ai.wexy.forge.engine.EngineBundle;
 import ai.wexy.forge.error.ForgeException;
 import ai.wexy.forge.models.ModelCatalog;
 import ai.wexy.forge.schemas.JsonSchemas;
+import ai.wexy.forge.spend.SpendGuard;
 import ai.wexy.forge.templates.Prompt;
 import ai.wexy.forge.templates.PromptBuilder;
 import ai.wexy.forge.upstream.ChatChunk;
@@ -181,7 +182,7 @@ public class PaperProbe {
         Map<String, Object> format = Map.of("type", "json_schema", "json_schema",
                 Map.of("name", "paper_action_v1", "schema", schema, "strict", strict));
         MeteredModelClient.Metered metered = models.prepare(ROLE, prompt.messages(),
-                new MeteredModelClient.CallOptions(null, format), "paper:" + purpose);
+                new MeteredModelClient.CallOptions(null, format, null, SpendGuard.LANE_ADMIN), "paper:" + purpose);
         log.info("paper: asking {} ({}strict; up to {} output tokens, {} reserved)", purpose, strict ? "" : "not ",
                 metered.maxOutputTokens(), cents(metered.chargedMicroUsd()));
 

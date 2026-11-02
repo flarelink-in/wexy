@@ -1,0 +1,7 @@
+# Recorded content-safety refusals (W1): what the local and test profiles refuse, in place of Azure AI Content Safety
+# (RecordedContentSafety). One a line: the category, the severity Azure's four levels would give it, then the phrase,
+# refused wherever a prompt holds it, ignoring case. Every other text is allowed. The studio's allowance drive and the
+# route tests send these; no real idea needs them.
+Violence 6 a bloody massacre of villagers
+Sexual 4 an explicit nude scene
+Hate 6 [recorded unsafe: hate]

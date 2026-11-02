@@ -20,3 +20,6 @@ wexy:
     jwks-uri: ${WEXY_GATEWAY_URL:http://forge-gateway:8400}/.well-known/jwks.json
   loop:
     strict-schemas: true
+  allowance:
+    # W1: startup stops without WEXY_UID_HMAC_KEY (UidKey), since no caller could be counted.
+    uid-key-required: true
