@@ -72,6 +72,8 @@ export const COPY = {
     /** The account control and its dialogs (W1; the creations platform companion §9, §12). The world stays in every one. */
     account: {
         signIn: 'Sign in with Google',
+        /** The header's Sign in on phones, whose header has room for it and Make video only; its accessible name stays signIn. */
+        signInShort: 'Sign in',
         signOut: 'Sign out',
         signedIn: 'Signed in with Google',
         notNow: 'Not now',

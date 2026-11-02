@@ -20,24 +20,33 @@ export type LimitKind = 'allowance' | 'quota';
 export class AccountControl {
     readonly el: HTMLElement;
     private readonly chip = h('span', { class: 'account-chip', role: 'status', hidden: true });
+    /**
+     * The chip's words as a line under the idea box, for phones (the user's choice, 2026-11-02): their header has room
+     * for Sign in and Make video only. The studio places it; the CSS shows one of the two, so one is announced.
+     */
+    readonly line = h('p', { class: 'account-line', role: 'status', hidden: true });
     private readonly who = h('span', { class: 'account-who', hidden: true }, COPY.account.signedIn);
-    private readonly signInBtn = h('button', { type: 'button', class: 'btn btn-sm' }, COPY.account.signIn);
+    private readonly signInBtn = h('button', { type: 'button', class: 'btn btn-sm', 'aria-label': COPY.account.signIn },
+        h('span', { class: 'acct-long' }, COPY.account.signIn), h('span', { class: 'acct-short' }, COPY.account.signInShort));
     private readonly signOutBtn = h('button', { type: 'button', class: 'btn btn-sm btn-quiet', hidden: true }, COPY.account.signOut);
     private readonly dialog = new AccountDialog();
     private readonly off: () => void;
     /** A world is being made: no identity change until it is done. */
     private building = false;
-    /** A sign-in or sign-out is under way. */
+    /** A sign-in, a sign-out or a collision's sign-in is under way. */
     private working = false;
     private reads = 0;
     private readonly session: AccountSession;
     private readonly api: Api;
     private readonly say: (text: string) => void;
+    private readonly onChanging: (changing: boolean) => void;
 
-    constructor(session: AccountSession, api: Api, say: (text: string) => void) {
+    /** `onChanging` hears when an account change starts and ends, so the studio can hold Create meanwhile. */
+    constructor(session: AccountSession, api: Api, say: (text: string) => void, onChanging: (changing: boolean) => void = () => {}) {
         this.session = session;
         this.api = api;
         this.say = say;
+        this.onChanging = onChanging;
         this.el = h('div', { class: 'account', 'aria-label': 'Account' }, this.chip, this.who, this.signInBtn, this.signOutBtn);
         this.signInBtn.addEventListener('click', () => void this.signIn());
         this.signOutBtn.addEventListener('click', () => void this.signOut());
@@ -77,38 +86,49 @@ export class AccountControl {
         this.render(this.session.current);
     }
 
+    /** An account change is under way: a live world must not start until it ends (its calls are one identity's). */
+    get changing(): boolean {
+        return this.working;
+    }
+
     dispose(): void {
         this.off();
         this.dialog.el.remove();
+        this.line.remove();
     }
 
-    private async signIn(): Promise<void> {
-        if (this.working || this.building) return;
-        this.working = true;
-        this.render(this.session.current);
-        try {
-            await this.settle(await this.session.linkGoogle());
-        } catch {
-            this.say(COPY.account.failed);
-        } finally {
-            this.working = false;
-            this.render(this.session.current);
-        }
+    private signIn(): Promise<void> {
+        return this.act(async () => this.settle(await this.session.linkGoogle()));
     }
 
-    private async signOut(): Promise<void> {
-        if (this.working || this.building) return;
-        this.working = true;
-        this.render(this.session.current);
-        try {
+    private signOut(): Promise<void> {
+        return this.act(async () => {
             await this.session.signOut();
             this.say(COPY.account.signedOut);
+        });
+    }
+
+    /**
+     * One account change at a time, never while a world is being made (the W1 review, 2026-11-02): Sign in, Sign out and
+     * a collision's sign-in all run here, so none switches the identity under a world's calls; Create waits on
+     * {@link changing} the other way round.
+     */
+    private async act(change: () => Promise<void>): Promise<void> {
+        if (this.working || this.building) return;
+        this.setWorking(true);
+        try {
+            await change();
         } catch {
             this.say(COPY.account.failed);
         } finally {
-            this.working = false;
-            this.render(this.session.current);
+            this.setWorking(false);
         }
+    }
+
+    private setWorking(working: boolean): void {
+        this.working = working;
+        this.render(this.session.current);
+        this.onChanging(working);
     }
 
     /** What a sign-in came to: a collision asks the creator; a cancel says nothing; the rest is said in a toast. */
@@ -129,8 +149,7 @@ export class AccountControl {
                 this.dialog.open(COPY.account.collisionTitle, COPY.account.collisionBody, [
                     {
                         label: COPY.account.collisionGo,
-                        run: () => void this.session.signInExisting(outcome.collision)
-                            .then(next => this.settle(next), () => this.say(COPY.account.failed)),
+                        run: () => void this.act(async () => this.settle(await this.session.signInExisting(outcome.collision))),
                     },
                     { label: COPY.account.cancel, quiet: true },
                 ]);
@@ -142,22 +161,27 @@ export class AccountControl {
         const { kind } = this.session.current;
         if (kind !== 'anonymous' && kind !== 'google') {
             this.chip.hidden = true;
+            this.line.hidden = true;
             return;
         }
         const read = ++this.reads;
         const answer = await this.session.guard(() => readAllowance(this.api)).catch(() => null);
         if (answer === STALE || read !== this.reads) return;
-        this.chip.textContent = chipText(answer);
-        this.chip.hidden = false;
+        const text = chipText(answer);
+        for (const el of [this.chip, this.line]) {
+            el.textContent = text;
+            el.hidden = false;
+        }
+        // The whole text on hover too, should a narrow header cut it.
+        this.chip.title = text;
     }
 
+    /** The buttons for `state`. The chip and its phone line are readAllowance's alone, which every change of account reaches. */
     private render(state: SessionState): void {
         const google = state.kind === 'google';
-        const known = state.kind === 'anonymous' || google;
         this.who.hidden = !google;
         this.signInBtn.hidden = google;
         this.signOutBtn.hidden = !google;
-        if (!known) this.chip.hidden = true;
         this.signInBtn.disabled = this.working || this.building;
         this.signOutBtn.disabled = this.working || this.building;
     }

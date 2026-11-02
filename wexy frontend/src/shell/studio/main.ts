@@ -238,11 +238,14 @@ class Studio {
         if (api && params.get('source') !== 'mock') this.live = createLiveClient(api);
         // The account control (W1), for the live backend only: a playground example spends nothing and asks no one in.
         if (api && this.live && identity?.account) {
-            this.accountControl = new AccountControl(new AccountSession(identity.account), api, text => this.showToast(text, null));
+            this.accountControl = new AccountControl(new AccountSession(identity.account), api, text => this.showToast(text, null),
+                changing => { this.forgeBtn.disabled = this.busy || !this.viewport || changing; });
             $('#btn-snapshot').before(this.accountControl.el);
         }
         const agent = params.get('agent') === '1';
         this.mountLeft();
+        // On phones the allowance chip reads as a line under the idea box, not in the header (studio.css).
+        if (this.accountControl) this.prompt.parentElement?.after(this.accountControl.line);
         this.mountRight();
         $('#timeline-slot').replaceWith(this.timeline.el);
         this.mountEmpty();
@@ -666,6 +669,9 @@ class Studio {
         const prompt = this.prompt.value.trim();
         if (!prompt) { this.prompt.focus(); return; }
         const client = source === 'mock' || !this.live ? this.mock : this.live;
+        // A live world's calls are one identity's: while Sign in, Sign out or a collision's sign-in is under way, Create
+        // (the button or its shortcut) waits (the W1 review, 2026-11-02).
+        if (client === this.live && this.accountControl?.changing) return;
         this.abort?.abort();
         const ac = new AbortController();
         this.abort = ac;
@@ -1031,7 +1037,7 @@ class Studio {
     private setBusy(busy: boolean): void {
         this.busy = busy;
         this.accountControl?.setBusy(busy);
-        this.forgeBtn.disabled = busy || !this.viewport;
+        this.forgeBtn.disabled = busy || !this.viewport || !!this.accountControl?.changing;
         this.forgeBtn.classList.toggle('is-busy', busy);
         this.forgeBtn.querySelector('span')!.textContent = busy ? 'Creating…' : 'Create world';
         this.setBuilding(busy);

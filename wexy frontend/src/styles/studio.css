@@ -39,13 +39,18 @@
 /* The account control (W1): the allowance chip as the server says it, and Sign in or Sign out. Ink only: the accent is
    Create's and the export's (design guidelines §1). */
 .account { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+/* A block box with its line as tall as the chip, not a flex box: an ellipsis never shows in a flex container, so a long
+   chip was cut mid-time at 1280 px ("…next world at Tue 5:3"). 340 px holds the longest English chip whole. */
 .account-chip {
-    display: inline-flex; align-items: center; height: 28px; padding: 0 11px; border-radius: var(--pill);
+    display: inline-block; height: 28px; padding: 0 11px; border-radius: var(--pill);
     border: 1px solid var(--line-2); background: var(--panel); color: var(--text-2);
-    font: 500 12px/1 var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px;
+    font: 500 12px/26px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 340px;
 }
 .account-who { font-size: 12px; color: var(--text-3-strong); white-space: nowrap; }
 .account [hidden] { display: none; }
+/* Sign in's short label, and the chip's line under the idea box: phones only (below). */
+.acct-short, .account-line { display: none; }
+.account-line { margin: 8px 2px 0; font: 500 12px/1.4 var(--mono); color: var(--text-2); }
 
 /* The account's dialogs: a refusal's sign-in, the day's reset, a link collision. */
 .account-dialog {
@@ -648,9 +653,12 @@
 @media (max-width: 560px) {
     .topbar { gap: 8px; padding: 0 8px 0 12px; }
     .brand-sub, #btn-snapshot, .gpu-pill { display: none; }
-    /* W1: the chip and its action stay; "Signed in with Google" gives way, Sign out says it. */
-    .account-who { display: none; }
-    .account-chip { max-width: 150px; padding: 0 9px; }
+    /* W1, phones (the user's choice, 2026-11-02): the header holds the brand, Sign in and Make video only, so it fits
+       at 320 px. Sign in says so in two words, "Signed in with Google" gives way (Sign out says it), and the chip
+       reads as a line under the idea box. With the chip in the header the page was 516 px wide at any phone width. */
+    .account-who, .account-chip, .account .acct-long { display: none; }
+    .account .acct-short { display: inline; }
+    .account-line:not([hidden]) { display: block; }
     /* The HUD: the title gives way on one line with its source; the reassurance chip takes the camera hint's row
        (`.hud .hud-cam`: `.hud > div` would outrank a bare `.hud-cam`). */
     .hud .hud-cam { display: none; }
