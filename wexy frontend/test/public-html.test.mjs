@@ -19,7 +19,10 @@ test('public HTML replaces metadata once and preserves the existing landing body
     }
     assert.equal((html.match(/<title>/g) || []).length, 1);
     assert.ok(html.includes('href="https://wexy.ai/"'));
-    assert.ok(html.includes('content="https://wexy.ai/showcase/kerr-black-hole.webp"'));
+    assert.ok(html.includes('<meta property="og:image" content="https://wexy.ai/icon-full.png">'));
+    assert.ok(html.includes('<meta name="twitter:image" content="https://wexy.ai/icon-full.png">'));
+    assert.ok(html.includes('<meta property="og:image:alt" content="Wexy — worlds, not videos">'));
+    assert.ok(existsSync(new URL('../public/icon-full.png', import.meta.url)));
     assert.ok(html.includes('<h1 id="hero-title">'));
 });
 
@@ -37,6 +40,8 @@ test('queries never poison canonical URLs; dev HTML is noindex and environment-s
     assert.ok(!prod.body.includes('evil.test'));
     const dev = respond('/', 'dev');
     assert.ok(dev.body.includes('href="https://dev.wexy.ai/"'));
+    assert.ok(dev.body.includes('<meta property="og:image" content="https://dev.wexy.ai/icon-full.png">'));
+    assert.ok(dev.body.includes('<meta name="twitter:image" content="https://dev.wexy.ai/icon-full.png">'));
     assert.ok(dev.body.includes('content="noindex, nofollow"'));
     assert.equal(dev.headers['X-Robots-Tag'], 'noindex, nofollow');
     assert.equal(prod.headers['X-Robots-Tag'], undefined);

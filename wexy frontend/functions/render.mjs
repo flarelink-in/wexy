@@ -41,7 +41,7 @@ export function renderHome(template, site) {
     <meta property="og:description" content="${escapeHtml(DESCRIPTION)}">
     <meta property="og:url" content="${escapeHtml(url)}">
     <meta property="og:image" content="${escapeHtml(image)}">
-    <meta property="og:image:alt" content="A black hole rendered with Wexy">
+    <meta property="og:image:alt" content="Wexy — worlds, not videos">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Wexy Studio">
     <meta name="twitter:description" content="${escapeHtml(DESCRIPTION)}">

@@ -1,7 +1,7 @@
 # Wexy
 
 <p align="center">
-  <img src="./wexy%20frontend/public/icon_full.svg" alt="Wexy — worlds, not videos" width="800">
+  <img src="./wexy%20frontend/public/icon-full.png" alt="Wexy — worlds, not videos" width="800">
 </p>
 
 **Describe a world. Watch it run on your graphics card. Film it.**
