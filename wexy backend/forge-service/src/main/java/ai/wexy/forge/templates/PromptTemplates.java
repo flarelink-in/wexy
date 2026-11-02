@@ -70,7 +70,7 @@ public class PromptTemplates {
             "director", Set.of("world", "turn"),
             "paper", Set.of("documents", "request"),
             "agent", Set.of("budgets", "style", "seconds", "request", "base"),
-            "module.author", Set.of("request", "design", "module", "kind", "nodes", "preamble", "entries", "epilogue"),
+            "module.author", Set.of("request", "design", "module", "kind", "nodes", "preamble", "entries", "epilogue", "note"),
             "module.repair", Set.of("request", "design", "module", "kind", "nodes", "preamble", "entries", "epilogue", "code", "findings"));
 
     static final Pattern PLACEHOLDER = Pattern.compile("\\{\\{([A-Za-z]+)}}");
@@ -209,7 +209,8 @@ public class PromptTemplates {
                 // agent-action.v2 (EA3.6): a program is adapter nodes, so the template lists the adapters it may use.
                 fill.put("adapters", AdapterManifest.load(json).describe());
                 fill.put("example", exampleProgram(resources, json));
-                // agent.v5 (Q84 revised 2026-11-02): the candidate's module budget, which the program check holds.
+                // agent.v5 (Q84 revised 2026-11-02): the candidate's module budget, which the program check holds; agent.v6
+                // (EA6.3) states it too.
                 fill.put("maxModules", String.valueOf(AgentTurn.MAX_MODULES));
             }
         } else if (name.startsWith("module.")) {

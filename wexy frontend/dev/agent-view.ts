@@ -25,6 +25,10 @@
 //          once the stage is ready; a press hands the stage the sealed candidate and its verdicts, shows the Run while it
 //          lasts, then a refusal in the developer's words, or the world on the stage with its numbers; markup in a reason
 //          shows as text; a new write moves the turn the stage's Run is bound to
+//   EA-VR11a (EA6.2) the review of the stage over a real candidate session and a stand-in stage and capture, no GPU: its
+//          frames named, its findings as labelled checkboxes with model-written names as text, "Improve it" only with
+//          words or a finding and then one revision citing exactly them, "Looks right" spending nothing, a busy stage
+//          said in both voices, the panel within 320 px
 
 import '../src/styles/base.css';
 import '../src/styles/studio.css';
@@ -34,6 +38,9 @@ import { createApi } from '../src/forge-client/http';
 import { createModuleClient, type ModuleClient } from '../src/forge-client/module-client';
 import type { Reviser } from '../src/loop/candidate';
 import { COPY } from '../src/loop/copy';
+import type { StageWorld } from '../src/loop/review';
+import type { EnginePort } from '../src/exec/engine-port';
+import type { AgentRuntime } from '../src/exec/world-runtime';
 import { createReviser } from '../src/loop/reviser';
 import type { ModuleCompiler } from '../src/contract/adapters/bodies';
 import { AgentPanel } from '../src/shell/studio/agent-view';
@@ -207,7 +214,7 @@ async function endings(): Promise<void> {
     const shown = v.programText ?? '';
     check('EA-V1 handed-off: the program is its adapter nodes, each config shown parsed, under the contract and adapters it was checked by',
         /"adapterId": "ng\.buffer\.storage"/.test(shown) && /"layout": "instance14"/.test(shown) && /"effect": "Tonemap"/.test(shown)
-        && !shown.includes('\\"layout\\"') && /agent-action\.v2, as this build/.test(v.meta ?? '') && /3c7775588fb8…, as this build/.test(v.meta ?? ''),
+        && !shown.includes('\\"layout\\"') && /agent-action\.v3, as this build/.test(v.meta ?? '') && /3c7775588fb8…, as this build/.test(v.meta ?? ''),
         { program: shown.slice(0, 600), meta: v.meta });
 
     v = await ending(askedWire, 'asked');
@@ -240,7 +247,7 @@ async function endings(): Promise<void> {
     v = await ending(errorBudgetWire, 'error-budget');
     check('EA-V1 a later charge refused: failed, the code and where, the first call\'s reservation held', v.phase === 'failed' && v.success === 'false'
         && v.reason === 'budget in the stream: Live creation has reached its spending limit for now.'
-        && v.calls[0].includes('? in / ? out · $0.1562 held, no usage came'), v);
+        && v.calls[0].includes('? in / ? out · $0.1606 held, no usage came'), v);
 
     v = await ending(errorUpstreamWire, 'error-upstream');
     check('EA-V1 answers off the schema twice: failed, as upstream', v.phase === 'failed'
@@ -438,8 +445,8 @@ async function candidates(): Promise<void> {
         v.phase === 'static-verified' && v.status === 'Static-verified: checked, not compiled' && /^id\(C\) [0-9a-f]{12}…$/.test(v.id ?? '')
         && v.modules.length === 1 && place.module === 'place' && place.phase === 'passed' && /^place · compute · passed · 1 call · body [0-9a-f]{12}…$/.test(place.head)
         && place.body === RECORDED_BODY && place.verdicts.length === 1 && place.verdicts[0].startsWith('lint pass (host, current)')
-        && v.budget === 'Q_C: 4 of 34 calls · authors 1/12 · repairs 0/10 · revisions 0/1' && v.jobs.length === 1
-        && /^job-1 place author: ok · \$0\.01\d\d · [^·]+ · module\.author\.v1$/.test(v.jobs[0])
+        && v.budget === 'Q_C: 4 of 34 calls · authors 1/12 · repairs 0/10 · revisions 0/3' && v.jobs.length === 1
+        && /^job-1 place author: ok · \$0\.01\d\d · [^·]+ · module\.author\.v2$/.test(v.jobs[0])
         && v.evidence === 'Evidence 5 records' && requests.length === 1 && requests[0].purpose === 'author', v);
     candidateButton(p, 'Download bundle').click();
     const bundle = saved.length === 1 ? JSON.parse(saved[0].text) : null;
@@ -473,7 +480,7 @@ async function candidates(): Promise<void> {
     v = lookCandidate(retry);
     check('EA-V8 an unusable answer is called again within Q_C, and the second is checked and sealed', v.phase === 'static-verified'
         && v.jobs.length === 2 && v.jobs[0].includes('author: unusable') && v.jobs[0].includes('upstream: The model wrote nothing for this part.')
-        && v.jobs[1].includes('author: ok') && v.budget === 'Q_C: 5 of 34 calls · authors 2/12 · repairs 0/10 · revisions 0/1', v);
+        && v.jobs[1].includes('author: ok') && v.budget === 'Q_C: 5 of 34 calls · authors 2/12 · repairs 0/10 · revisions 0/3', v);
     const refused = candidatePanel(liveClient(() => stream(handedOffWire).response),
         moduleClient(() => new Response(moduleDeniedJson, { status: 503, headers: { 'Content-Type': 'application/json' } })), 'candidate: refused');
     await refused.run();
@@ -482,7 +489,7 @@ async function candidates(): Promise<void> {
     v = lookCandidate(refused);
     check('EA-V8 a refusal before the stream: failed, the creator\'s sentence and the developer\'s words, the call counted unknown', v.phase === 'failed'
         && v.status === 'Failed: no candidate' && v.note === COPY.failures.budget && v.reason === 'host budget: Live creation has reached its spending limit for now.'
-        && v.jobs.length === 1 && v.jobs[0].includes('author: refused · charge unknown') && v.budget === 'Q_C: 4 of 34 calls, 1 unknown · authors 1/12 · repairs 0/10 · revisions 0/1'
+        && v.jobs.length === 1 && v.jobs[0].includes('author: refused · charge unknown') && v.budget === 'Q_C: 4 of 34 calls, 1 unknown · authors 1/12 · repairs 0/10 · revisions 0/3'
         && v.enabled['Write the modules again'] === true && v.id === null, v);
 
     // EA-V9: markup in a body (a comment, which the lint passes) is text.
@@ -555,10 +562,10 @@ async function candidates(): Promise<void> {
     await until(() => settled(revising), 5_000);
     const r = lookCandidate(revising);
     check('EA-V11 a program the browser refuses is revised: the revision\'s turn shows beside the hand-off\'s, each call with its charge, model and template',
-        r.phase === 'static-verified' && r.budget === 'Q_C: 5 of 34 calls · authors 1/12 · repairs 0/10 · revisions 1/1' && r.turns.length === 2
-        && r.turns[0].role === 'hand-off' && r.turns[0].head === 'turn-1 hand-off: handed-off · 3 calls · $0.1380 · muse-spark-1.3 · agent.v5'
+        r.phase === 'static-verified' && r.budget === 'Q_C: 5 of 34 calls · authors 1/12 · repairs 0/10 · revisions 1/3' && r.turns.length === 2
+        && r.turns[0].role === 'hand-off' && r.turns[0].head === 'turn-1 hand-off: handed-off · 3 calls · $0.1380 · muse-spark-1.3 · agent.v6'
         && r.turns[0].calls.length === 3 && r.turns[1].role === 'revision'
-        && r.turns[1].head === 'turn-1 program revision: handed-off · 1 call · $0.0460 · muse-spark-1.3 · agent.v5'
+        && r.turns[1].head === 'turn-1 program revision: handed-off · 1 call · $0.0460 · muse-spark-1.3 · agent.v6'
         && JSON.stringify(r.turns[1].calls) === JSON.stringify(['1 revise: $0.0460 · gen-1']) && r.jobs.length === 1 && r.jobs[0].includes('place author: ok'), r);
     candidateButton(revising, 'Download bundle').click();
     const revisedBundle = revisedSaved.length === 1 ? JSON.parse(revisedSaved[0].text) : null;
@@ -566,8 +573,8 @@ async function candidates(): Promise<void> {
     const records = revisedBundle ? revisedBundle.calls.turns.reduce((n: number, t: { calls: unknown[] }) => n + t.calls.length, 0) + revisedBundle.calls.jobs.length : -1;
     check('EA-V11 the downloaded bundle holds the revision\'s turn: its call, charge, model and template; each call Q_C settled has its record',
         revisedBundle?.format === 'wexy-candidate-bundle.v2' && revision?.role === 'revision' && revision.status === 'handed-off' && revision.model === 'muse-spark-1.3'
-        && revision.promptVersion === 'agent.v5' && revision.charge === 'known' && revision.calls.length === 1 && revision.calls[0].purpose === 'revise'
-        && revision.calls[0].costMicroUsd === 46_000 && revisedBundle.versions.templates.includes('agent.v5') && records === revisedBundle.calls.budget.calls.settled,
+        && revision.promptVersion === 'agent.v6' && revision.charge === 'known' && revision.calls.length === 1 && revision.calls[0].purpose === 'revise'
+        && revision.calls[0].costMicroUsd === 46_000 && revisedBundle.versions.templates.includes('agent.v6') && records === revisedBundle.calls.budget.calls.settled,
         { turns: revisedBundle?.calls?.turns, templates: revisedBundle?.versions?.templates, records });
 }
 
@@ -645,6 +652,172 @@ async function running(): Promise<void> {
         && installed.enabled, { refused, marked, installed });
 }
 
+// ---- EA6.2: the review of the stage, over a stage and a capture the harness stands in (no GPU) -----------------------
+
+/** The castle's boxes as written (bounds.test.mjs), its hill named with markup: a node id is the model's text. */
+const MARKED = '<img src=x onerror="window.__ran__=2">';
+const CASTLE = { batches: [
+    { node: MARKED, box: { min: [-234, -54, -234] as [number, number, number], max: [234, 50, 234] as [number, number, number] }, instances: 1, sampled: 1 },
+    { node: 'batchtower', box: { min: [-7.9, -2.9, -7.9] as [number, number, number], max: [7.9, 13.9, 7.9] as [number, number, number] }, instances: 6, sampled: 6 },
+    { node: 'batchroof', box: { min: [-8, 6.3, -8] as [number, number, number], max: [8, 14.7, 8] as [number, number, number] }, instances: 6, sampled: 6 },
+] };
+const FRAMED = { target: [0, 5.5, 0] as [number, number, number], distance: 23, azimuth: 0.6, polar: 1.15, fov: 45 };
+
+/** A captured pair as the studio's capture gives it: a scene's pixels, a JPEG-shaped body, its hash. */
+async function capturedPair(shade: number) {
+    const rgba = new Uint8Array(768 * 432 * 4);
+    for (let y = 0; y < 432; y++) for (let x = 0; x < 768; x++) rgba.set(x > 256 && x < 512 && y > 100 ? [180, 120 + shade, 60, 255] : y > 300 ? [70, 70, 70, 255] : [40, 60, 120, 255], (y * 768 + x) * 4);
+    const frame = async (view: 'framed' | 'side', i: number) => {
+        const jpeg = new Uint8Array(2048);
+        jpeg.set([0xff, 0xd8, 0xff, i, shade]);
+        return {
+            view, camera: view === 'framed' ? FRAMED : { ...FRAMED, azimuth: FRAMED.azimuth + Math.PI / 2, polar: Math.PI / 2 }, describes: `The world, the ${view} view.`,
+            renderOrdinal: i, sourceWidth: 1280, sourceHeight: 720, width: 768, height: 432, content: { x: 0, y: 0, width: 768, height: 432 }, rgba, jpeg, quality: 0.85,
+            sha256: hex(await crypto.subtle.digest('SHA-256', jpeg)),
+        };
+    };
+    return [await frame('framed', 1), await frame('side', 2)];
+}
+
+/**
+ * EA-VR11a (EA6.2, no GPU): the review panel over a real candidate session (the recorded hand-off, its module written by
+ * the recorded answer) and a stand-in stage and capture: two frames named by their view, size and hash; the host's
+ * findings as labelled checkboxes, model-written names in them as text; "Improve it" offered only with words or a finding,
+ * one revision citing exactly what was kept; the improved candidate awaiting Run; "Looks right" on the next review; a busy
+ * stage said in both voices; the panel inside 320 px with no horizontal overflow.
+ */
+async function reviewing(): Promise<void> {
+    // Loaded only now: the review reads the camera's geometry (src/runtime/camera-path.ts), which EA-V5 keeps off the turn.
+    const [{ ReviewPanel }, { StageReviews }] = await Promise.all([import('../src/shell/studio/review-view'), import('../src/loop/review')]);
+    const revisions: Parameters<Reviser>[0][] = [];
+    // The castle's own kind of correction: the program's sizes halved, no module written again.
+    const revise: Reviser = async request => {
+        revisions.push(structuredClone(request));
+        const nodes = request.program.nodes.map(n => {
+            if (n.adapterId !== 'ng.geometry.primitive') return n;
+            const c = JSON.parse(n.config) as { size?: number };
+            return { ...n, config: JSON.stringify({ ...c, size: (c.size ?? 1) / 2 }) };
+        });
+        return { status: 'handed-off', turnId: 'turn-review', design: request.design, program: { nodes }, repairs: [], calls: 1 };
+    };
+    const p = candidatePanel(liveClient(() => stream(handedOffWire).response), moduleClient(r => stream(echoed(moduleAuthorWire, r)).response), 'review', [], revise);
+    await p.run();
+    candidateButton(p, 'Write the modules').click();
+    await until(() => settled(p), 5_000);
+    const session = (p.candidate as CandidatePanel).session;
+    const first = session.snapshot!;
+    let world: StageWorld | null = null;
+    let busy: string | null = null;
+    let view: InstanceType<typeof ReviewPanel> | null = null;
+    const reviews = new StageReviews({
+        stage: () => world,
+        capture: async () => ({
+            outcome: { ok: true, tick: 240, seconds: 4, frames: await capturedPair(world?.epoch ?? 0), missing: [], temporal: [], bounds: CASTLE, boundsError: null, policy: 'ea6-capture.v1' },
+            missing: [], framed: FRAMED, aspect: 16 / 9, prepared: null,
+        }),
+        session: () => session,
+        generation: () => 1,
+        busy: () => busy,
+        onChange: () => view?.render(),
+        onDrop: ids => view?.dropped(ids),
+    });
+    view = new ReviewPanel(reviews);
+    const narrow = document.createElement('div');
+    narrow.style.width = '320px';
+    narrow.dataset.case = 'review: 320 px';
+    narrow.append(view.el);
+    panels.append(narrow);
+    const el = view.el;
+    const q = <T extends Element>(s: string) => el.querySelector<T>(s);
+    const button = (label: string) => [...el.querySelectorAll<HTMLButtonElement>('button')].find(b => (b.textContent ?? '').startsWith(label))!;
+    const empty = { status: q('.rev-status')!.textContent, verdict: q<HTMLElement>('.rev-verdict')!.hidden, frames: el.querySelectorAll('.rev-frame').length };
+
+    world = { epoch: 1, candidate: first.id, graph: first.x.hash, gpu: 'a stand-in GPU', probe: { warnings: [], width: 1920, height: 1080 }, unboxed: [] };
+    reviews.installed(world);
+    await until(() => reviews.latest?.status === 'ready');
+    const figures = [...el.querySelectorAll<HTMLElement>('.rev-frame')].map(f => ({ alt: f.querySelector('img')?.alt, src: f.querySelector('img')?.src.startsWith('blob:'), caption: f.querySelector('figcaption')?.textContent }));
+    const boxes = [...el.querySelectorAll<HTMLInputElement>('.rev-findings input[type=checkbox]')];
+    const findings = boxes.map(b => ({ checked: b.checked, tab: b.tabIndex, label: b.closest('label')?.textContent ?? '' }));
+    const words = q<HTMLTextAreaElement>('.rev-words')!;
+    check('EA-VR11a no world, no review: the panel says so and offers nothing; once one is on the stage, its two frames, each named by its view, tick, size and hash',
+        empty.status?.startsWith('No agent world on the stage yet') === true && empty.verdict && empty.frames === 0
+        && figures.length === 2 && figures.every(f => f.src && /Tick 240, 4\.00 s\.$/.test(f.alt ?? '') && /1280×720 fitted into 768×432 · JPEG 0\.85 · 2\.0 kB · sha256 [0-9a-f]{12}…$/.test(f.caption ?? ''))
+        && figures[0].caption?.startsWith('Framed view') === true && figures[1].caption?.startsWith('Side view, level') === true
+        && (q('.rev-status')!.textContent ?? '').includes(`in attempt ${session.state!.attempt}`), { empty, figures, status: q('.rev-status')?.textContent });
+    check('EA-VR11a the host\'s findings are labelled, keyboard-reachable checkboxes, checked at first; a model-written name in one is text, never markup',
+        findings.length === 2 && findings.every(f => f.checked && f.tab === 0) && findings[0].label.includes(`EA_SCALE ${MARKED} spans 468 × 104 × 468 units`)
+        && findings[1].label.startsWith(' EA_FRAME the framed view\'s camera is inside') && !el.querySelector('.rev-findings img') && !(window as unknown as { __ran__?: number }).__ran__
+        && q<HTMLLabelElement>(`label[for="${words.id}"]`) !== null && !button('Improve it').disabled && !button('Looks right').disabled, { findings });
+
+    // Nothing kept and nothing said: no improvement; a quick word: one, citing exactly that.
+    for (const b of boxes) b.click();
+    const none = { disabled: button('Improve it').disabled, why: q('.rev-why')!.textContent };
+    button('floating').click();
+    const said = { value: words.value, disabled: button('Improve it').disabled, count: q('.rev-count')!.textContent };
+    button('Improve it').click();
+    await until(() => reviews.latest?.status === 'awaiting-run', 5_000);
+    const improved = reviews.latest!;
+    check('EA-VR11a "Improve it" waits for words or a finding; then one program revision citing exactly them, and the improved candidate awaits Run',
+        none.disabled && none.why === 'Say what should change, or keep a finding checked.' && said.value === 'floating' && !said.disabled && said.count === '8/400'
+        // The creator's words, then the host's own line on the notes the attempt can still answer (the EA6.3 review).
+        && revisions.length === 1 && revisions[0].findings.length === 2 && revisions[0].findings[0].code === 'creator' && revisions[0].findings[0].message === 'floating'
+        && revisions[0].findings[1].code === 'EA_REPAIR_BUDGET'
+        && improved.improvedTo === session.snapshot?.id && improved.improvedTo !== first.id && q('.cand-phase')!.textContent === 'Improved: awaiting Run'
+        && (q('.rev-status')!.textContent ?? '').includes('Run on this GPU puts it on the stage') && words.value === '',
+        { none, said, revisions: revisions.map(r => r.findings), status: q('.rev-status')?.textContent, budget: q('.cand-budget')?.textContent });
+
+    // Run puts it on the stage: its review, and the creator's "Looks right", which spends nothing.
+    const spent = JSON.stringify(session.state!.budget);
+    world = { ...world, epoch: 2, candidate: improved.improvedTo!, graph: session.snapshot!.x.hash };
+    reviews.installed(world);
+    await until(() => reviews.latest?.status === 'ready' && reviews.latest.epoch === 2);
+    button('Looks right').click();
+    const approved = { phase: q('.cand-phase')!.textContent, verdict: q<HTMLElement>('.rev-verdict')!.hidden };
+    check('EA-VR11a "Looks right" on the improved world\'s review: the creator\'s pass recorded in its attempt, nothing spent',
+        approved.phase === 'Looks right' && JSON.stringify(session.state!.budget) === spent
+        && session.state!.evidence.some(e => e.phase === 'visual' && e.verdict === 'pass' && e.producedBy === 'creator' && e.subject.candidate === improved.improvedTo)
+        && (q('.cand-budget')!.textContent ?? '').startsWith('visual rounds 1 of 2 · calls'), { approved, budget: q('.cand-budget')?.textContent });
+
+    // A stage held by a film: the capture refused in both voices, nothing captured.
+    busy = 'a film is being made';
+    const before = reviews.records.length;
+    button('Capture again').click();
+    await sleep(20);
+    const refused = { note: q('.cand-note')!.textContent, reason: q('.cand-reason')!.textContent, records: reviews.records.length };
+    check('EA-VR11a a busy stage is not captured: the creator\'s sentence and the developer\'s words', refused.records === before
+        && refused.note === COPY.review.busy && refused.reason === 'EA_REVIEW_BUSY a film is being made', refused);
+    check('EA-VR11a the panel fits 320 px with no horizontal overflow', narrow.scrollWidth <= 320 && el.scrollWidth <= el.clientWidth + 1,
+        { narrow: narrow.scrollWidth, panel: [el.scrollWidth, el.clientWidth] });
+
+    // A readback refused while the section's checkpoint is still settling (as a device's scopes settle, after a macrotask):
+    // the capture says so, and no rejection is ever unhandled in the page (the outside review of 11-02 night: the one
+    // breakage Node could not see).
+    const { captureInstalled } = await import('../src/exec/review-capture');
+    const unhandled: string[] = [];
+    const onUnhandled = (e: PromiseRejectionEvent) => { unhandled.push(String(e.reason)); e.preventDefault(); };
+    window.addEventListener('unhandledrejection', onUnhandled);
+    const stubPort = {
+        canvasFormat: 'bgra8unorm', width: 64, height: 36,
+        offscreenTarget: () => ({ label: 'target' }), destroyTarget: () => {}, redirectOutput: () => {}, render: () => {},
+        readTarget: () => Promise.reject(new Error('mapAsync refused')),
+        checkpoint: async (work: () => void) => {
+            try { work(); } catch (e) { return String(e); }
+            await sleep(50);
+            return null;
+        },
+    } as unknown as EnginePort;
+    const stubRuntime = { steps: 3, simTime: 0.05, isPaused: false, redirectOutput: () => {}, view: () => {}, draw: () => [], meshBatches: () => [] } as unknown as AgentRuntime;
+    const stubX = { resources: [], operations: [], schedule: { frame: [] } } as unknown as Parameters<typeof captureInstalled>[0]['x'];
+    const refusedRead = await captureInstalled({
+        port: stubPort, runtime: stubRuntime, x: stubX, views: [{ name: 'framed', camera: FRAMED, describes: 'a stand-in' }], restoreHeadCamera: () => {},
+        hold: () => () => {}, stale: () => null, encode: async () => new Uint8Array([0xff, 0xd8, 0xff, 0]),
+    });
+    await sleep(100);
+    window.removeEventListener('unhandledrejection', onUnhandled);
+    check('EA-VR11a a readback refused while the capture\'s checkpoint settles is said, and never an unhandled rejection in the page',
+        !refusedRead.ok && refusedRead.message === 'EA_CAPTURE read: mapAsync refused' && unhandled.length === 0, { outcome: refusedRead, unhandled });
+}
+
 async function run(): Promise<void> {
     const world = document.getElementById('world')!.outerHTML;
     trap.armed = true;
@@ -662,6 +835,7 @@ async function run(): Promise<void> {
     const forbidden = loaded.filter(n => /\/src\/(runtime|verify|capture)\//.test(n) || /null-graph|mediabunny|firebase/.test(n));
     check('EA-V5 no runtime, verifier, capture, engine or Firebase module was loaded', forbidden.length === 0 && loaded.some(n => n.endsWith('/src/shell/studio/agent-view.ts'))
         && loaded.some(n => n.endsWith('/src/shell/studio/candidate-view.ts')), { forbidden, loaded: loaded.length });
+    await reviewing();
 }
 
 const out = window as unknown as { __AV__?: unknown };

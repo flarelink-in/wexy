@@ -126,7 +126,7 @@ public class AgentHandler {
         } catch (RuntimeException e) {
             log.error("agent turn {} failed", turnId, e);
             outcome = new AgentOutcome(AgentOutcome.Status.FAILED, ErrorCode.INTERNAL.code(), "Something went wrong on our side.",
-                    null, null, null, 0, 0);
+                    null, null, null, null, 0, 0);
         }
         log.info("AGENT TURN {} {} calls={} cost={} code={}", turnId, outcome.status(), outcome.calls(), outcome.costMicroUsd(),
                 outcome.code());

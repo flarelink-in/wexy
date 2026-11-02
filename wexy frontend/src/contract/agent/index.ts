@@ -1,15 +1,17 @@
-// agent-action.v2 (the backend's agent-loop design §5.2; the engine-adapters design §16, EA3.6): the action the
-// engine-aware agent answers with, its program made of adapter nodes, embedded byte for byte from the backend's
-// forge-service/src/main/resources/schemas, as host h1's files are. The backend owns it; test/agent-contract.test.mjs
-// pins its hash and compares it with the backend's copy when that repository is on this disk. The browser holds a
-// hand-off's design and program to the very schema the server held the model's answer to, so the two verdicts cannot
-// drift (the engine-aware design §13, "One source for shared rules"). The schema keeps to Meta's strict subset, so a
-// small validator covers it; a keyword it does not know is refused when the module loads, rather than passed unchecked.
-// v1, whose program named engine calls, is refused at this boundary, never read as v2 (agent-stream.ts).
+// agent-action.v3 (the backend's agent-loop design §5.2; the engine-adapters design §16, EA3.6; the visual-review
+// design §8.2, EA6.3): the action the engine-aware agent answers with, its program made of adapter nodes, and since v3 a
+// revision's notes to the modules whose code must change (`revision.moduleRepairs`), embedded byte for byte from the
+// backend's forge-service/src/main/resources/schemas, as host h1's files are. The backend owns it;
+// test/agent-contract.test.mjs pins its hash and compares it with the backend's copy when that repository is on this
+// disk. The browser holds a hand-off's design, program and notes to the very schema the server held the model's answer
+// to, so the two verdicts cannot drift (the engine-aware design §13, "One source for shared rules"). The schema keeps to
+// Meta's strict subset, so a small validator covers it; a keyword it does not know is refused when the module loads,
+// rather than passed unchecked. Another version (v1's engine calls, v2 before the notes) is refused at this boundary,
+// never read as this one (agent-stream.ts).
 
 import type { AdapterNode } from '../adapters';
 import { deepFreeze } from '../engine/frozen';
-import schemaText from './agent-action.v2.json?raw';
+import schemaText from './agent-action.v3.json?raw';
 
 /** S, the high-level design: the request understood, the techniques chosen, what success looks like. */
 export interface SolutionDesign {
@@ -37,6 +39,15 @@ export interface WorldProgram {
     nodes: AdapterNode[];
 }
 
+/**
+ * A revision's note to one module (EA6.3, `revision.moduleRepairs`): a module its program names, and what its code must
+ * do differently. The browser repairs a body it keeps with the note, and writes a module it authors with it.
+ */
+export interface ModuleRepair {
+    module: string;
+    message: string;
+}
+
 type Schema = { readonly [keyword: string]: unknown };
 
 /** What the strict subset uses here; `title` and `description` only annotate. */
@@ -60,7 +71,7 @@ export function checkStrictSubset(node: Schema, at = ''): void {
 }
 
 /** The action contract this build reads; a turn's meta must name it (agent-stream.ts). */
-export const AGENT_ACTION_VERSION = 'agent-action.v2';
+export const AGENT_ACTION_VERSION = 'agent-action.v3';
 /** The schema's text as embedded, line ends normalized to LF, for the hash the tests pin. */
 export const AGENT_ACTION_TEXT = schemaText.replace(/\r\n/g, '\n');
 export const AGENT_ACTION: Schema = deepFreeze(JSON.parse(AGENT_ACTION_TEXT) as Schema);
@@ -76,6 +87,17 @@ function part(name: 'design' | 'program'): Schema {
 
 const DESIGN = part('design');
 const PROGRAM = part('program');
+
+/** The notes' own schema: the array under the revision's object branch (agent-action.v3). */
+const REPAIRS: Schema = (() => {
+    const revision = ((AGENT_ACTION.properties as Record<string, Schema>).revision.anyOf as Schema[] | undefined)?.find(s => s.type === 'object');
+    const repairs = (revision?.properties as Record<string, Schema> | undefined)?.moduleRepairs;
+    if (!repairs || repairs.type !== 'array') throw new Error(`${AGENT_ACTION_VERSION}: revision has no moduleRepairs list.`);
+    return repairs;
+})();
+
+/** The most notes a revision carries, as the schema bounds them. */
+export const MAX_MODULE_REPAIRS = REPAIRS.maxItems as number;
 
 function jsonType(v: unknown): string {
     if (v === null) return 'null';
@@ -179,4 +201,22 @@ export function parseDesign(value: unknown): Parsed<SolutionDesign> {
 export function parseProgram(value: unknown): Parsed<WorldProgram> {
     const problems = schemaProblems(PROGRAM, value, '/program');
     return problems.length ? { ok: false, problems } : { ok: true, value: value as WorldProgram };
+}
+
+/**
+ * A revision's notes as the schema has them, and as the backend's check holds them, which the schema cannot say: each
+ * module named once and each note saying something (the visual-review design §8.2). The whole list or nothing: a bad
+ * note is never dropped while the rest are taken.
+ */
+export function parseRepairs(value: unknown): Parsed<ModuleRepair[]> {
+    const problems = schemaProblems(REPAIRS, value, '/repairs');
+    if (problems.length) return { ok: false, problems };
+    const seen = new Set<string>();
+    for (const [i, r] of (value as ModuleRepair[]).entries()) {
+        if (!r.module.trim()) problems.push(`/repairs/${i}/module: names no module`);
+        else if (seen.has(r.module)) problems.push(`/repairs/${i}/module: ${r.module.slice(0, 40)} has a note already`);
+        seen.add(r.module);
+        if (!r.message.trim()) problems.push(`/repairs/${i}/message: says nothing`);
+    }
+    return problems.length ? { ok: false, problems } : { ok: true, value: value as ModuleRepair[] };
 }

@@ -236,9 +236,27 @@ class AgentWireTest {
 
         String wire = streamed(body.toString());
 
-        assertThat(events(wire)).containsExactly("meta", "call", "usage", "check", "design", "program", "done");
-        assertThat(wire).contains("\"purpose\":\"revise\"").contains("\"status\":\"handed-off\"").contains("placeBlocks");
+        // A revision says which modules' code must change, after its program (EA6.3): here none.
+        assertThat(events(wire)).containsExactly("meta", "call", "usage", "check", "design", "program", "repairs", "done");
+        assertThat(wire).contains("\"purpose\":\"revise\"").contains("\"status\":\"handed-off\"").contains("placeBlocks")
+                .contains("event:repairs\ndata:{\"repairs\":[]}\n");
         pin("revised.sse", wire);
+    }
+
+    /** EA6.3 (agent-action.v3): a revision whose notes name a module, handed off after its program. */
+    @Test
+    void aTurnThatRevisesABaseHandsOffItsNotesToModules() throws Exception {
+        start();
+        answers(AgentRoutesTest.USAGE, AgentLoopTest.noted("place", "Lower every block by 2 units, so they stand on the ground.").toString());
+        ObjectNode body = (ObjectNode) JSON.readTree(BODY);
+        body.set("base", AgentLoopTest.baseJson());
+
+        String wire = streamed(body.toString());
+
+        assertThat(events(wire)).containsExactly("meta", "call", "usage", "check", "design", "program", "repairs", "done");
+        assertThat(wire).contains("event:repairs\ndata:{\"repairs\":[{\"module\":\"place\",\"message\":\"Lower every block by 2 units, so they stand on"
+                + " the ground.\"}]}\n");
+        pin("revised-notes.sse", wire);
     }
 
     @Test

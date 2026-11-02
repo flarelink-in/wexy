@@ -20,7 +20,7 @@ import java.util.Map;
  *
  * <p>Nothing in it is taken on the browser's word. It is checked here, before any record or charge: its keys, exactly;
  * its size, so a revision's first prompt fits the turn's prompt bytes beside the template; the versions the browser
- * built it under, which must be this server's; the design and the program against {@code agent-action.v2}, as a revise
+ * built it under, which must be this server's; the design and the program against {@code agent-action.v3}, as a revise
  * carries them; the program through the host's own check, which it must pass as a hand-off does (a base no turn could
  * have handed off is refused, not revised); and the findings, 1 to 32 of a closed shape, each capped. The findings are
  * the browser's words about its own checks, which this server cannot run (only the browser has X): data, quoted to the
@@ -95,7 +95,7 @@ public record AgentBase(JsonNode design, JsonNode program, List<BaseFinding> fin
         action.putNull("modules").putNull("revision").putNull("question").putNull("finish");
         List<String> problems = schemas.validate(JsonSchemas.AGENT_ACTION, action);
         if (!problems.isEmpty()) {
-            throw ModuleRequest.bad("base does not fit agent-action.v2: " + ModuleRequest.clip(problems.get(0)));
+            throw ModuleRequest.bad("base does not fit " + JsonSchemas.AGENT_ACTION + ": " + ModuleRequest.clip(problems.get(0)));
         }
         List<Finding> failing = check.check(action).stream().filter(Finding::fails).toList();
         if (!failing.isEmpty()) {
@@ -127,9 +127,12 @@ public record AgentBase(JsonNode design, JsonNode program, List<BaseFinding> fin
         return List.copyOf(out);
     }
 
-    /** A non-empty string within its cap, or null. */
+    /**
+     * A non-empty string within its cap, or null. The cap is in code points, as the browser cuts a finding (the
+     * independent review of EA6.3): a creator's or a model's emoji is one character, and never half of one.
+     */
     private static String text(JsonNode node, String key, int max) {
         JsonNode v = node.path(key);
-        return v.isTextual() && !v.asText().isEmpty() && v.asText().length() <= max ? v.asText() : null;
+        return v.isTextual() && !v.asText().isEmpty() && ModuleRequest.codePoints(v.asText()) <= max ? v.asText() : null;
     }
 }

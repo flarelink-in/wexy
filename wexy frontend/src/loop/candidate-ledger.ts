@@ -25,22 +25,31 @@ export interface CandidateLimits {
     /** Program revisions, and the calls each may make (a turn of its own). */
     revisions: number;
     revisionCalls: number;
+    /**
+     * Visual rounds (EA6, B_v): the creator's "Improve it" presses an attempt accepts, each a program revision answering
+     * what they saw. Not calls: each round's calls count in the rest of Q_C like any other.
+     */
+    visualRounds: number;
 }
 
 /**
  * Q84, revised 2026-11-02 (the user: "12 modules, 34 calls", after the black hole starter, about eight modules, was
- * stopped at four): at most 12 modules and 12 authors, 4 calls at once, 2 repairs a module and 10 in all, 1 program
- * revision of at most 6 calls, and 34 calls an attempt, the turn's 6 included: 6 + 12 + 10 + 6. Independent ceilings,
- * not a promise that every graph can finish. The backend holds a turn's program to the same 12 modules
- * (`AgentTurn.MAX_MODULES`) and paces the module route at an attempt's 22 module calls (`AgentTurn.MODULE_CALLS`, the
- * authors and repairs here). Decided first 2026-10-31: 4 modules, 2 at once, 3 repairs, 19 calls.
+ * stopped at four): at most 12 modules and 12 authors, 4 calls at once, 2 repairs a module and 10 in all, program
+ * revisions of at most 6 calls each, and 34 calls an attempt, the turn's 6 included. Independent ceilings, not a promise
+ * that every graph can finish. The backend holds a turn's program to the same 12 modules (`AgentTurn.MAX_MODULES`) and
+ * paces the module route at an attempt's 22 module calls (`AgentTurn.MODULE_CALLS`, the authors and repairs here).
+ * Decided first 2026-10-31: 4 modules, 2 at once, 3 repairs, 19 calls.
+ *
+ * Q110, decided 2026-11-02 night (the user: "revision limit can be raised but max cap as is"): 3 program revisions, up
+ * from 1, and 2 visual rounds an attempt (visual-review-design.md §8.3), the 34 calls kept as the cap on everything. Three
+ * revisions are ceilings, not three turns: 6 + 12 + 10 + 3 × 6 = 46 is past 34, so the calls refuse first.
  */
 export const Q_C: CandidateLimits = Object.freeze({
-    calls: 34, modules: 12, authors: 12, concurrent: 4, repairs: 10, repairsPerModule: 2, revisions: 1, revisionCalls: 6,
+    calls: 34, modules: 12, authors: 12, concurrent: 4, repairs: 10, repairsPerModule: 2, revisions: 3, revisionCalls: 6, visualRounds: 2,
 });
 
 /** A budget a refusal names. `concurrent` is the scheduler's bound: wait for a call to end, never an exhaustion. */
-export type Budget = 'calls' | 'modules' | 'authors' | 'repairs' | 'repairs-per-module' | 'revisions' | 'concurrent';
+export type Budget = 'calls' | 'modules' | 'authors' | 'repairs' | 'repairs-per-module' | 'revisions' | 'concurrent' | 'visual-rounds';
 
 export type CallKind = 'author' | 'repair' | 'revision';
 
@@ -69,6 +78,8 @@ export interface LedgerState {
     /** Each module's repairs, by its id. */
     moduleRepairs: Readonly<Record<string, number>>;
     revisions: number;
+    /** Visual rounds accepted (EA6): a dispatched round stays counted whatever came of it. */
+    visualRounds: number;
     /** Module calls in flight. */
     inFlight: number;
 }
@@ -90,6 +101,7 @@ export class Ledger {
     private repairs = 0;
     private readonly moduleRepairs = new Map<string, number>();
     private revisions = 0;
+    private visualRounds = 0;
     private readonly open = new Map<number, Open>();
     private next = 1;
 
@@ -141,6 +153,22 @@ export class Ledger {
         return { ok: true, reservation: this.hold('revision', null, this.limits.revisionCalls) };
     }
 
+    /**
+     * A visual round (EA6, B_v), taken at once with the creator's press, or the budget that refuses it. A round is not a
+     * call; its revision reserves its own allowance. A limit absent from older limits is none (the safe direction).
+     */
+    reserveVisualRound(): { ok: true } | { ok: false; budget: 'visual-rounds'; used: number; limit: number } {
+        const limit = this.limits.visualRounds ?? 0;
+        if (this.visualRounds + 1 > limit) return { ok: false, budget: 'visual-rounds', used: this.visualRounds, limit };
+        this.visualRounds++;
+        return { ok: true };
+    }
+
+    /** Gives a visual round back: only for a round whose revision was never dispatched (the caller's word). */
+    returnVisualRound(): void {
+        this.visualRounds = Math.max(0, this.visualRounds - 1);
+    }
+
     /** The request has gone: its slot is spent, whatever the server charges. */
     dispatched(r: Reservation): void {
         const o = this.open.get(r.id);
@@ -183,6 +211,7 @@ export class Ledger {
             repairs: this.repairs,
             moduleRepairs: Object.freeze(Object.fromEntries(this.moduleRepairs)),
             revisions: this.revisions,
+            visualRounds: this.visualRounds,
             inFlight: this.inFlight,
         };
     }

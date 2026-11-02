@@ -23,8 +23,9 @@ import java.util.TreeSet;
 /**
  * The JSON the models answer with, and the schemas both sides validate it against (forge-loop
  * design §5.4, Q27): {@code scene-draft.v1} for the planner, {@code edit-plan.v1} for the director,
- * {@code agent-action.v2} for the agent loop (its program made of adapter nodes since EA3.6; v1's file stays
- * for the retired v1 check's test, and is not loaded), in {@code resources/schemas/}. The same text goes to Meta as {@code response_format}, so each
+ * {@code agent-action.v3} for the agent loop (its program made of adapter nodes since EA3.6, v2; a revision's notes to
+ * its modules since EA6.3, v3; v1's and v2's files stay as deployed, and are not loaded), in {@code resources/schemas/}.
+ * The same text goes to Meta as {@code response_format}, so each
  * schema must stay inside Meta's strict subset (§4.1); startup refuses one that leaves it, because
  * Meta would answer {@code 400} to every call that sent it with {@code strict: true}.
  *
@@ -37,8 +38,11 @@ public class JsonSchemas {
 
     public static final String SCENE_DRAFT = "scene-draft.v1";
     public static final String EDIT_PLAN = "edit-plan.v1";
-    /** The agent loop's action (the agent-loop design §5.2; v2 since EA3.6, the frontend's engine-adapters design §16). */
-    public static final String AGENT_ACTION = "agent-action.v2";
+    /**
+     * The agent loop's action (the agent-loop design §5.2; v2 since EA3.6, the frontend's engine-adapters design §16; v3
+     * since EA6.3, the frontend's visual-review design §8.2: {@code revision.moduleRepairs}).
+     */
+    public static final String AGENT_ACTION = "agent-action.v3";
 
     /** Meta's limit on nesting (§4.1). */
     static final int MAX_DEPTH = 10;

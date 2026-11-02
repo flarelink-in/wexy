@@ -203,9 +203,9 @@ class AgentRoutesTest {
 
         assertThat(names(events)).containsExactly("meta", "call", "usage", "tools", "call", "usage", "check", "design", "program", "done");
         JsonNode meta = data(events, "meta");
-        assertThat(meta.path("promptVersion").asText()).isEqualTo("agent.v5");
-        // EA3.6: the action's contract and the adapter manifest its program was checked against.
-        assertThat(meta.path("actionSchema").asText()).isEqualTo("agent-action.v2");
+        assertThat(meta.path("promptVersion").asText()).isEqualTo("agent.v6");
+        // EA3.6: the action's contract and the adapter manifest its program was checked against (v3 since EA6.3).
+        assertThat(meta.path("actionSchema").asText()).isEqualTo("agent-action.v3");
         assertThat(meta.path("manifestHash").asText()).isEqualTo(AdapterManifest.HASH);
         assertThat(meta.path("model").asText()).isEqualTo("m-1");
         assertThat(meta.path("bundleHash").asText()).matches("[0-9a-f]{64}");
@@ -214,12 +214,12 @@ class AgentRoutesTest {
         assertThat(data(events, "tools").path("results")).hasSize(2);
         assertThat(fake.chatRequests()).isEqualTo(2);
         assertThat(fake.requests()).filteredOn(r -> r.path().endsWith("/chat/completions"))
-                .allMatch(r -> r.body().contains("agent_action_v2") && r.body().contains("\"strict\":true"));
+                .allMatch(r -> r.body().contains("agent_action_v3") && r.body().contains("\"strict\":true"));
 
         List<Generation> calls = agentCalls();
         assertThat(calls).hasSize(2).allMatch(g -> g.status() == Generation.Status.OK && g.role().equals("agent")
                 && g.parentId().equals(meta.path("turnId").asText()) && g.uid().equals("uid-agent"));
-        assertThat(calls).extracting(Generation::promptVersion).containsOnly("agent.v5");
+        assertThat(calls).extracting(Generation::promptVersion).containsOnly("agent.v6");
         assertThat(ledger.reservations()).isEqualTo(2);
     }
 
@@ -385,17 +385,20 @@ class AgentRoutesTest {
 
         List<ServerSentEvent<String>> events = stream(revision(base -> { }));
 
-        assertThat(names(events)).containsExactly("meta", "call", "usage", "check", "design", "program", "done");
-        assertThat(data(events, "meta").path("promptVersion").asText()).isEqualTo("agent.v5");
+        // A revision says which modules' code must change, after its program (EA6.3): here none.
+        assertThat(names(events)).containsExactly("meta", "call", "usage", "check", "design", "program", "repairs", "done");
+        assertThat(data(events, "repairs").path("repairs").isArray()).isTrue();
+        assertThat(data(events, "repairs").path("repairs")).isEmpty();
+        assertThat(data(events, "meta").path("promptVersion").asText()).isEqualTo("agent.v6");
         assertThat(data(events, "call").path("purpose").asText()).isEqualTo("revise");
         assertThat(data(events, "design").path("design")).isEqualTo(AgentLoopTest.baseJson().path("design"));
         assertThat(data(events, "done").path("status").asText()).isEqualTo("handed-off");
         // The model was sent R and then the base, as data: its program and the browser's finding.
         assertThat(fake.requests()).filteredOn(r -> r.path().endsWith("/chat/completions")).singleElement()
-                .matches(r -> r.body().contains("This turn revises a program the browser refused.") && r.body().contains("step cannot be an entry"));
+                .matches(r -> r.body().contains("This turn revises a program an earlier turn handed off.") && r.body().contains("step cannot be an entry"));
         // One record, the turn's request with its base as the input.
         assertThat(agentCalls()).singleElement().matches(g -> g.status() == Generation.Status.OK && g.input().contains("\"base\"")
-                && g.promptVersion().equals("agent.v5"));
+                && g.promptVersion().equals("agent.v6"));
     }
 
     @Test
@@ -411,8 +414,8 @@ class AgentRoutesTest {
         refused(revision(b -> ((ObjectNode) b.path("versions")).put("manifest", "0".repeat(64))), 400,
                 "base.versions.manifest is \"" + "0".repeat(64) + "\"; this server speaks " + AdapterManifest.HASH);
         refused(revision(b -> ((ObjectNode) b.path("versions")).put("actionSchema", "agent-action.v1")), 400,
-                "base.versions.actionSchema is \"agent-action.v1\"; this server speaks agent-action.v2");
-        refused(revision(b -> ((ObjectNode) b.path("design")).put("mood", "sepia")), 400, "base does not fit agent-action.v2");
+                "base.versions.actionSchema is \"agent-action.v1\"; this server speaks agent-action.v3");
+        refused(revision(b -> ((ObjectNode) b.path("design")).put("mood", "sepia")), 400, "base does not fit agent-action.v3");
         refused(revision(b -> ProgramCheckTest.remove(b, "place")), 400, "base.program does not pass the host's check, so no turn could have "
                 + "handed it off: buffer-producer at /program/nodes/0");
         refused(revision(b -> b.putArray("findings")), 400, "base.findings is 1 to 32 findings");
@@ -423,6 +426,8 @@ class AgentRoutesTest {
             }
         }), 400, "base.findings is 1 to 32 findings");
         refused(revision(b -> ((ObjectNode) b.path("findings").get(0)).put("message", "x".repeat(401))), 400, "A finding of base.findings has an id");
+        refused(revision(b -> ((ObjectNode) b.path("findings").get(0)).put("message", new String(Character.toChars(0x1F3F0)).repeat(401))), 400,
+                "A finding of base.findings has an id");
         refused(revision(b -> ((ObjectNode) b.path("findings").get(0)).put("severity", "error")), 400,
                 "a finding of base.findings takes exactly id, code, path, message; not severity");
         refused(revision(b -> b.put("padding", "x".repeat(70_000))), 413, "base is at most 65536 bytes as JSON");
@@ -430,6 +435,18 @@ class AgentRoutesTest {
         assertThat(fake.requests()).filteredOn(r -> r.path().endsWith("/chat/completions")).isEmpty();
         assertThat(ledger.untouched()).isTrue();
         assertThat(agentCalls()).isEmpty();
+    }
+
+    /** A base finding's bound is in code points, as the browser cuts it (the independent review of EA6.3): 400 emoji are taken. */
+    @Test
+    void aBaseFindingIsBoundInCodePoints() throws Exception {
+        start(5_000_000L);
+        answers(USAGE, AgentLoopTest.valid("revise"));
+
+        List<ServerSentEvent<String>> events = stream(revision(b -> ((ObjectNode) b.path("findings").get(0))
+                .put("message", new String(Character.toChars(0x1F3F0)).repeat(400))));
+
+        assertThat(data(events, "done").path("status").asText()).isEqualTo("handed-off");
     }
 
     /** One bad base: refused with this status, its envelope's message holding this text. */

@@ -4,18 +4,21 @@
 // four statuses (§15.1, gate B1). Every event is parsed at the boundary, unknown in and a typed event out (coding
 // principles §2), and held to the order the backend's loop emits it:
 //   meta; then for each call n = 1, 2, …: `call` n, its `usage` n unless the call ended the turn, then at most one of
-//   `tools` n, `check` n (a passing check is followed by `design`, `program` and `done handed-off`) or `question`
-//   (followed by `done asked`); and exactly one terminal, `done` or `error`.
+//   `tools` n, `check` n (a passing check is followed by `design`, `program`, in a revision turn `repairs`, and
+//   `done handed-off`) or `question` (followed by `done asked`); and exactly one terminal, `done` or `error`.
 // Events are correlated by `n`, the one id every call's events carry (`call` has no generation id; its `usage` has).
 // An event this reader does not know is skipped, as h1's reader skips one, but it still counts against the turn's caps:
 // its characters, its events and each event's own. meta's `bundleHash` must be the engine bundle this build embeds (I2),
-// its `actionSchema` the action contract this build reads (agent-action.v2; a server before EA3.6 names none, and speaks
+// its `actionSchema` the action contract this build reads (agent-action.v3; a server before EA3.6 names none, and speaks
 // v1), and its `manifestHash` the adapter manifest this build embeds, or the stream is cancelled at once, before any
 // design or program is read; the server, seeing the client go, ends the turn (A8). A broken contract is a developer's
 // error, said loudly (coding principles §4).
+// `repairs` (EA6.3; the visual-review design §8.2) is a revision's notes to the modules whose code must change, the whole
+// list held to the schema and to one note a module: a revision turn always hands it off, empty when there are none, and
+// a first turn never does, so neither a missing list nor a stray one is read into silence.
 
 import { ADAPTER_MANIFEST_HASH } from '../contract/adapters';
-import { AGENT_ACTION, AGENT_ACTION_VERSION, parseDesign, parseProgram, type SolutionDesign, type WorldProgram } from '../contract/agent';
+import { AGENT_ACTION, AGENT_ACTION_VERSION, parseDesign, parseProgram, parseRepairs, type ModuleRepair, type SolutionDesign, type WorldProgram } from '../contract/agent';
 import { ERROR_STATUS, ForgeError, isErrorCode } from './errors';
 import { abortable, parseEventStream } from './sse';
 
@@ -91,6 +94,7 @@ export type AgentEvent =
     | { type: 'check'; check: AgentCheck }
     | { type: 'design'; design: SolutionDesign }
     | { type: 'program'; program: WorldProgram }
+    | { type: 'repairs'; repairs: ModuleRepair[] }
     | { type: 'question'; text: string };
 
 /** One call as its events told it. */
@@ -112,8 +116,11 @@ interface TurnBase {
 }
 
 export type AgentTurnResult = TurnBase & (
-    /** The server's pure check passed this design and program. Nothing has built or rendered them: that is EA3. */
-    | { status: 'handed-off'; design: SolutionDesign; program: WorldProgram }
+    /**
+     * The server's pure check passed this design and program. Nothing has built or rendered them: that is EA3. `repairs`
+     * is a revision's notes to its modules (EA6.3), empty when it has none, and always empty in a first turn.
+     */
+    | { status: 'handed-off'; design: SolutionDesign; program: WorldProgram; repairs: ModuleRepair[] }
     /** The model asked one question. In EA2 the turn ends there: nothing resumes it. */
     | { status: 'asked'; question: string }
     /** A budget refused the next call, or the turn's time ran out; the diagnostic when the reason starts with one. */
@@ -179,13 +186,19 @@ export const AGENT_STREAM_LIMITS: AgentStreamLimits = {
     events: 256,
     eventChars: {
         meta: 1_024, call: 256, usage: 512, tools: 16_384, check: AGENT_EVENT_CHARS, design: AGENT_EVENT_CHARS,
-        program: AGENT_EVENT_CHARS, question: 4_096, done: 4_096, error: 4_096, other: 4_096,
+        // Twelve notes of a 40-character module and a 300-character message, every character escaped (six each) at most.
+        program: AGENT_EVENT_CHARS, repairs: 32_768, question: 4_096, done: 4_096, error: 4_096, other: 4_096,
     },
 };
 
 export interface AgentStreamOptions {
     /** The engine bundle this build embeds (src/contract/engine/bundle.json): a turn that quotes another is refused. */
     bundleHash: string;
+    /**
+     * Whether the turn revises a base (EA4.4): its hand-off then carries `repairs` after its program (EA6.3), and a first
+     * turn's never does.
+     */
+    revision?: boolean;
     /** The adapter manifest this build embeds, ADAPTER_MANIFEST_HASH unless a test names another. */
     manifestHash?: string;
     /** Stops the read: the body is cancelled, and the read rejects with the signal's reason. */
@@ -194,7 +207,7 @@ export interface AgentStreamOptions {
 }
 
 /** Where the turn is, between events: what may come next follows from it. */
-type Phase = 'meta' | 'opened' | 'calling' | 'answered' | 'acted' | 'passed' | 'designed' | 'programmed' | 'asked';
+type Phase = 'meta' | 'opened' | 'calling' | 'answered' | 'acted' | 'passed' | 'designed' | 'programmed' | 'repaired' | 'asked';
 
 const PURPOSE = /^[a-z][a-z-]{0,39}$/;
 const ID = /^[\w-]{1,64}$/;
@@ -235,7 +248,9 @@ export async function readAgentStream(res: Response, onEvent: (event: AgentEvent
     const calls: AgentCallRecord[] = [];
     let design: SolutionDesign | null = null;
     let program: WorldProgram | null = null;
+    let repairs: ModuleRepair[] | null = null;
     let question: string | null = null;
+    const revision = options.revision === true;
     let total = 0;
     let count = 0;
     const current = () => calls[calls.length - 1];
@@ -329,6 +344,16 @@ export async function readAgentStream(res: Response, onEvent: (event: AgentEvent
                     emit({ type: 'program', program });
                     break;
                 }
+                case 'repairs': {
+                    expect('repairs', ['programmed']);
+                    if (!revision) throw broken(res, 'a first turn handed off repairs: it has no code to repair');
+                    const parsed = parseRepairs(field(res, json(res, data), 'repairs'));
+                    if (!parsed.ok) throw broken(res, `the repairs leave ${AGENT_ACTION_VERSION}: ${parsed.problems.slice(0, 3).join('; ')}`);
+                    repairs = deepFreeze(parsed.value);
+                    phase = 'repaired';
+                    emit({ type: 'repairs', repairs });
+                    break;
+                }
                 case 'question': {
                     expect('question', ['answered']);
                     question = text(res, json(res, data), 'text', QUESTION_MAX);
@@ -338,7 +363,7 @@ export async function readAgentStream(res: Response, onEvent: (event: AgentEvent
                 }
                 case 'done':
                     // What was checked is what is returned: frozen, so no callback or caller can change it after.
-                    return deepFreeze(done(res, data, phase, meta!, calls, design, program, question));
+                    return deepFreeze(done(res, data, phase, meta!, calls, design, program, repairs, question, revision));
                 default:
                     // An event this reader does not know yet: additive by contract, so it is skipped (and was counted).
                     break;
@@ -352,7 +377,7 @@ export async function readAgentStream(res: Response, onEvent: (event: AgentEvent
 }
 
 function done(res: Response, data: string, phase: Phase, meta: AgentMeta, calls: AgentCallRecord[],
-    design: SolutionDesign | null, program: WorldProgram | null, question: string | null): AgentTurnResult {
+    design: SolutionDesign | null, program: WorldProgram | null, repairs: ModuleRepair[] | null, question: string | null, revision: boolean): AgentTurnResult {
     const d = json(res, data);
     const status = field(res, d, 'status');
     const reason = field(res, d, 'reason');
@@ -372,9 +397,10 @@ function done(res: Response, data: string, phase: Phase, meta: AgentMeta, calls:
     };
     switch (status) {
         case 'handed-off':
-            if (phase !== 'programmed') throw broken(res, `done handed-off came while the turn was ${phase}, before a checked design and program`);
+            if (phase === 'programmed' && revision) throw broken(res, 'done handed-off came before the revision\'s repairs');
+            if (phase !== 'programmed' && phase !== 'repaired') throw broken(res, `done handed-off came while the turn was ${phase}, before a checked design and program`);
             noReason();
-            return { ...base, status: 'handed-off', design: design!, program: program! };
+            return { ...base, status: 'handed-off', design: design!, program: program!, repairs: repairs ?? [] };
         case 'asked':
             if (phase !== 'asked') throw broken(res, `done asked came while the turn was ${phase}, with no question`);
             noReason();

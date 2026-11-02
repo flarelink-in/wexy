@@ -29,19 +29,27 @@ import java.util.regex.Pattern;
  *
  * <p>Everything is checked here, before any record or charge: the fields, exactly; the sizes (the request, the
  * interface, the previous body, the findings); the versions the browser was built against, which must be this
- * server's; R within the planner's caps and S against {@code agent-action.v2}; each supplied node against its adapter
+ * server's; R within the planner's caps and S against {@code agent-action.v3}; each supplied node against its adapter
  * on its own, since a slice of a program has inputs whose nodes were left out (the browser checks the whole program);
  * exactly one of them owning the module, of the kind the interface says, naming the entries it says; and a repair's
  * previous body, whose hash must be its own. The server cannot derive the interface (only the browser has X), so the
  * interface is the client's data, quoted to the model as data; it can spend only the caller's own budget, and the
  * browser checks every body against its own copy. What the caller may do with a turn is the handler's to check.
+ *
+ * <p>An author call may carry a {@code note} (EA6.3; the frontend's visual-review design §8.2): what a program revision's
+ * {@code revision.moduleRepairs} asked of this module, which the revision added or rewired, so its body is written with
+ * the note once. A repair's note is one of its findings, so a repair's {@code note} is null. Either way the note is the
+ * client's data, quoted to the model as data.
  */
 public record ModuleRequest(String turnId, String jobId, JsonNode subject, JsonNode versions, String purpose, AgentRequest request,
                             JsonNode design, JsonNode nodes, String module, String kind, JsonNode iface, List<String> entries,
-                            Previous previous) {
+                            Previous previous, String note) {
 
     /** The fields of a request: no other is taken. */
-    static final List<String> FIELDS = List.of("turnId", "jobId", "subject", "versions", "purpose", "request", "design", "nodes", "module", "previous");
+    static final List<String> FIELDS = List.of("turnId", "jobId", "subject", "versions", "purpose", "request", "design", "nodes", "module", "previous",
+            "note");
+    /** A note's characters at most, as code points: the action's {@code revision.moduleRepairs[].message} (agent-action.v3). */
+    static final int NOTE_CHARS = 300;
     /** The frontend's ABI (`interfaces.ts`, ABI_VERSION) and body checker (`bodies.ts`, BODY_CHECKER); its tests pin both here. */
     public static final String ABI = "ea-abi.v2";
     public static final String CHECKER = "ea4-body.v1";
@@ -153,7 +161,7 @@ public record ModuleRequest(String turnId, String jobId, JsonNode subject, JsonN
         action.putNull("program").putNull("modules").putNull("revision").putNull("question").putNull("finish");
         List<String> designProblems = schemas.validate(JsonSchemas.AGENT_ACTION, action);
         if (!designProblems.isEmpty()) {
-            throw bad("design does not fit agent-action.v2: " + clip(designProblems.get(0)));
+            throw bad("design does not fit " + JsonSchemas.AGENT_ACTION + ": " + clip(designProblems.get(0)));
         }
 
         JsonNode moduleNode = body.path("module");
@@ -215,7 +223,38 @@ public record ModuleRequest(String turnId, String jobId, JsonNode subject, JsonN
                 throw bad("A repair's subject.codeHash is its previous body's.");
             }
         }
-        return new ModuleRequest(turnId, jobId, subject, versions, purpose, request, design, nodes, module, kind, iface, entries, previous);
+        return new ModuleRequest(turnId, jobId, subject, versions, purpose, request, design, nodes, module, kind, iface, entries, previous,
+                checkedNote(body.path("note"), purpose));
+    }
+
+    /** An author's note from a program revision, or null; a repair's is always null, since its note is one of its findings. */
+    private static String checkedNote(JsonNode note, String purpose) {
+        if (note.isNull()) {
+            return null;
+        }
+        if (!"author".equals(purpose)) {
+            throw bad("A repair's note is one of its findings: note is null.");
+        }
+        String text = note.isTextual() ? note.asText() : null;
+        if (text == null || blank(text) || codePoints(text) > NOTE_CHARS) {
+            throw bad("note is null, or what a program revision asks of this module's code: 1 to " + NOTE_CHARS + " characters.");
+        }
+        return text;
+    }
+
+    /**
+     * Whether a model's or a client's text says nothing: every character white space as either side counts it. Java's
+     * {@code isBlank} keeps the non-breaking spaces (U+00A0, U+2007, U+202F) and the BOM (U+FEFF), which the browser's
+     * {@code trim} drops, so a note of them passed here and broke the browser's reader (the independent review of EA6.3).
+     * This is a superset of the browser's rule: whatever it calls blank, this does.
+     */
+    static boolean blank(String text) {
+        return text.codePoints().allMatch(c -> Character.isWhitespace(c) || Character.isSpaceChar(c) || c == 0xFEFF);
+    }
+
+    /** A string's length in code points, as the action's schema and the browser count it: an emoji is one. */
+    static int codePoints(String text) {
+        return text.codePointCount(0, text.length());
     }
 
     /**
@@ -355,7 +394,8 @@ public record ModuleRequest(String turnId, String jobId, JsonNode subject, JsonN
         for (JsonNode f : list) {
             Set<String> keys = new HashSet<>();
             f.fieldNames().forEachRemaining(keys::add);
-            if (!f.isObject() || !FINDING_KEYS.containsAll(keys) || !f.path("message").isTextual() || f.path("message").asText().length() > FINDING_CHARS
+            // A message's bound is in code points, as the browser cuts it (the independent review of EA6.3).
+            if (!f.isObject() || !FINDING_KEYS.containsAll(keys) || !f.path("message").isTextual() || codePoints(f.path("message").asText()) > FINDING_CHARS
                     || !f.path("code").isTextual() || f.path("code").asText().length() > 40
                     || !(f.path("line").isMissingNode() || f.path("line").isNull() || f.path("line").isInt())) {
                 throw bad("A finding has a code (at most 40 characters), a message of at most " + FINDING_CHARS + ", a line or null, and only "

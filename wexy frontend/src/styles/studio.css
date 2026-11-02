@@ -211,6 +211,36 @@
 .cand-job.is-broken, .cand-job.is-refused, .cand-turn.is-broken .cand-turn-head, .cand-turn.is-refused .cand-turn-head { color: var(--err); }
 .cand-turn-calls { list-style: none; margin: 2px 0 0; padding: 0 0 0 10px; }
 
+/* the review of the stage (EA6, Developer view): two frames, the host's findings, the creator's answers */
+.rev-status, .rev-why { margin: 0; font-size: 12px; line-height: 1.55; color: var(--text-2); overflow-wrap: anywhere; }
+.rev-why { font-size: 11.5px; color: var(--text-3-strong); }
+.rev-frames { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 8px; }
+.rev-frames:empty { display: none; }
+.rev-frame { margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.rev-frame img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: var(--radius-xs); background: #000; }
+.rev-frame figcaption { font: 10.5px/1.45 var(--mono); color: var(--text-3-strong); overflow-wrap: anywhere; }
+.rev-missing { display: grid; place-items: center; aspect-ratio: 16 / 9; padding: 8px; border: 1px dashed var(--line-2); border-radius: var(--radius-xs); font-size: 11.5px; text-align: center; color: var(--text-3-strong); }
+.rev-gaps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.rev-gap { font-size: 11.5px; line-height: 1.5; color: var(--warn); overflow-wrap: anywhere; }
+.rev-gap.is-note { color: var(--text-3-strong); }
+.rev-findings-box { margin: 0; padding: 6px 9px 8px; min-width: 0; border: 1px solid var(--line); border-radius: var(--radius-xs); background: var(--bg-2); }
+.rev-findings-box legend { padding: 0 4px; font-size: 11.5px; font-weight: 600; color: var(--text); }
+.rev-hint { margin: 0 0 6px; font-size: 11px; line-height: 1.5; color: var(--text-3-strong); overflow-wrap: anywhere; }
+.rev-findings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.rev-finding { font-size: 11.5px; line-height: 1.5; color: var(--text-2); overflow-wrap: anywhere; }
+.rev-finding label { display: block; cursor: pointer; }
+.rev-finding .cand-finding-code { color: var(--warn); }
+.rev-finding.is-none { color: var(--text-3-strong); }
+.rev-check { margin: 0 4px 0 0; vertical-align: -2px; accent-color: var(--accent); }
+.rev-check:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
+.rev-verdict { display: flex; flex-direction: column; gap: 6px; }
+.rev-label { font-size: 11.5px; font-weight: 600; color: var(--text); }
+.rev-words { width: 100%; min-width: 0; resize: vertical; padding: 7px 9px; border: 1px solid var(--line-2); border-radius: var(--radius-xs); background: var(--bg-2); font-size: 12.5px; line-height: 1.5; }
+.rev-words-foot { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.rev-chips { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.rev-chip { height: 24px; padding: 0 9px; font-size: 11px; }
+.rev-count { font: 11px var(--mono); color: var(--text-3-strong); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
 /* journey: the plain-language progress */
 .journey { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .journey .panel-head { margin-bottom: 0; }
@@ -614,6 +644,10 @@
     #panel-spec, #panel-wgsl { min-height: 520px; }
     .doc { display: none; }
     .gpu-pill { max-width: 160px; }
+    /* Developer view's panels in one column (11-02 night, EA-VR11): a column sized by its content takes the widest line
+       that cannot wrap, so a panel's subtitle or id that never wraps made a 320 px page 353 to 371 px wide. They wrap. */
+    .cand-head, .cand-status { flex-wrap: wrap; }
+    .cand-head .panel-sub, .cand-id { white-space: normal; overflow-wrap: anywhere; }
 }
 /* Upright screens: a taller world that stays in view while the controls scroll beneath it, so a slider's change is
    seen as it happens. It lets go while the idea is typed, so the keyboard and the idea share the screen. */

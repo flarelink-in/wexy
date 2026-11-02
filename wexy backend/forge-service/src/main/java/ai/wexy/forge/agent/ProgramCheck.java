@@ -17,7 +17,7 @@ import java.util.TreeSet;
 
 /**
  * The pure check of a proposal (the agent-loop design §8; the tool the frontend's design calls {@code validate_program}),
- * on {@code agent-action.v2} since EA3.6: its design against K and H in the engine bundle, its program's adapter nodes
+ * on {@code agent-action.v2} since EA3.6 (v3 since EA6.3): its design against K and H in the engine bundle, its program's adapter nodes
  * against the embedded adapter manifest. It judges:
  * <ul>
  *   <li>the design's names: every technique's symbol an export of its family, no family Wexy cannot run (a host family
@@ -38,7 +38,8 @@ import java.util.TreeSet;
  *       modules, held at the module past it, so the turn trims the program before the browser would stop it.</li>
  * </ul>
  * Paths are JSON pointers into the action ({@code /program/nodes/3/config/entry}). v1's rules over raw engine calls
- * retired with the contract they read ({@link RawCallCheck}).
+ * retired with the contract they read ({@link RawCallCheck}). A revision's notes to its modules ({@code agent-action.v3},
+ * EA6.3) are checked apart, by {@link #repairs}, since only a revision turn has bodies to repair.
  */
 public final class ProgramCheck {
 
@@ -73,7 +74,61 @@ public final class ProgramCheck {
         return findings.stream().noneMatch(Finding::fails);
     }
 
-    /** Every finding for one proposal (an {@code agent-action.v2} with its design and program): the design's, then the program's. */
+    /**
+     * The modules a program names, each once, in its nodes' order: every compute stage's, custom batch's and fullscreen
+     * pass's {@code config.module}. Null when its nodes fail their own check, so no module can be told (its findings say why).
+     */
+    public Set<String> modules(JsonNode program) {
+        NodeCheck.Result checked = nodes.checked(program.path("nodes"));
+        if (!checked.findings().isEmpty()) {
+            return null;
+        }
+        Set<String> out = new LinkedHashSet<>();
+        for (NodeCheck.Node n : checked.nodes()) {
+            if (ENTRIES.containsKey(n.adapter().id())) {
+                out.add(n.config().path("module").asText());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * A revision's notes to its modules, {@code revision.moduleRepairs} ({@code agent-action.v3}; the frontend's
+     * visual-review design §8.2), against the program the revision hands off: each names a module of it, once, and says
+     * what its code must do differently. The whole list is judged, and one bad note fails the proposal, never dropped
+     * while the rest go on: the turn's own revision answers it. Whether the module's interface changed is the browser's
+     * to tell (it derives them): a body it keeps is repaired with its note, a module it writes is written with it.
+     *
+     * @param listed  the notes, as the schema took them
+     * @param modules the modules the revised program names ({@link #modules})
+     * @param base    the modules of the program the turn revises, to say why a dropped one cannot be repaired
+     */
+    public static List<Finding> repairs(JsonNode listed, Set<String> modules, Set<String> base) {
+        List<Finding> out = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (int i = 0; i < listed.size(); i++) {
+            JsonNode r = listed.get(i);
+            String at = "/revision/moduleRepairs/" + i;
+            String module = r.path("module").asText("");
+            // Blank as the browser counts it too (ModuleRequest.blank): a note of non-breaking spaces says nothing.
+            if (ModuleRequest.blank(r.path("message").asText(""))) {
+                out.add(Finding.fail("repair-note", at + "/message", "the note to " + (ModuleRequest.blank(module) ? "this module" : module)
+                        + " says nothing: say what its code must do differently, or leave the module out"));
+            }
+            if (ModuleRequest.blank(module)) {
+                out.add(Finding.fail("repair-target", at + "/module", "a note names the module whose code must change, as its node's config names it"));
+            } else if (!seen.add(module)) {
+                out.add(Finding.fail("repair-twice", at + "/module", module + " has two notes: give it one, with everything its code must change"));
+            } else if (!modules.contains(module)) {
+                out.add(Finding.fail("repair-target", at + "/module", base.contains(module)
+                        ? "the revised program no longer names module " + module + ", so there is no code of it to change: drop the note, or keep the module"
+                        : "no node of the revised program names module " + module + ": a note names a module of the program, as its node's config names it"));
+            }
+        }
+        return out;
+    }
+
+    /** Every finding for one proposal (an {@code agent-action.v3} with its design and program): the design's, then the program's. */
     public List<Finding> check(JsonNode action) {
         List<Finding> out = new ArrayList<>();
         JsonNode design = action.path("design");

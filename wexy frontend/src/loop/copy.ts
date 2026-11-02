@@ -73,6 +73,23 @@ export const COPY = {
         stream: 'We couldn\'t finish writing this version; your current world is unchanged.',
         budget: 'We reached this attempt\'s limit; your last checked world is still available.',
         refused: 'Something went wrong preparing this world.',
+        /** A revision's notes named a part its program does not have (EA6.3, visual-review-design.md §11): nothing applied. */
+        planRefused: 'This change could not be applied safely; your current world is unchanged.',
+    },
+    /**
+     * The review of the world on the stage (visual-review-design.md §11; Q110, 11-02: the creator's button is "Improve it").
+     * Whatever happens to a review, the world stays on the stage.
+     */
+    review: {
+        captureFailed: 'We could not take a look at this world; it is still on the stage.',
+        unavailable: 'This world cannot be captured for review yet; you can still view it on the stage.',
+        tooLarge: 'These review images are too large; capture them again before sending.',
+        stale: 'The world changed while that feedback was being prepared.',
+        budget: 'We reached this world\'s limit for improvements; it is still on the stage.',
+        noSession: 'This saved world can be reviewed here, but it has no active session to improve it.',
+        busy: 'The stage is busy right now; capture it again in a moment.',
+        improving: 'An improvement is already under way; this world stays on the stage.',
+        notApplied: 'This improvement could not be applied; the previous world is still on the stage.',
     },
     /** An edit that failed after repairs keeps the world (design guidelines §4). */
     editFailed: 'That change didn\'t work on your device. Your world is as it was.',

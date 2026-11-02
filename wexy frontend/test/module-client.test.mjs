@@ -2,7 +2,7 @@
 // (src/forge-client/module-stream.ts) and its client (module-client.ts), on the backend's own wire: the recordings its
 // ModuleRoutesTest writes (test/fixtures/module-wire). Every recorded way a call ends; then each recording broken the
 // ways a network, a proxy or a bug could break it: another job's echo, out of order, a done whose hash is not the deltas',
-// cut, oversized; then the client's request (exactly ten fields, a fresh single-use App Check token, never sent twice),
+// cut, oversized; then the client's request (exactly eleven fields, a fresh single-use App Check token, never sent twice),
 // its cancel and its deadline; then the wire's own helpers. No backend runs, no GPU, no call.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -15,7 +15,7 @@ import { unfence } from '../src/contract/unfence.ts';
 import { ForgeError } from '../src/forge-client/errors.ts';
 import { createApi } from '../src/forge-client/http.ts';
 import {
-    MODULE_DEADLINE_MS, MODULE_VERSIONS, PREVIOUS_CAPS, cappedPrevious, createModuleClient, moduleNodes, wireInterface,
+    MODULE_DEADLINE_MS, MODULE_VERSIONS, OMITTED_CODE, PREVIOUS_CAPS, cappedPrevious, createModuleClient, moduleNodes, wireInterface,
 } from '../src/forge-client/module-client.ts';
 import { MODULE_STREAM_LIMITS, ModuleStreamError, readModuleStream } from '../src/forge-client/module-stream.ts';
 
@@ -80,7 +80,7 @@ test('EA-W11 every recorded way a module call ends reads to its outcome: the who
     assert.deepEqual(author.seen.filter(e => e.type === 'delta').map(e => e.chars), [deltas[0].length, deltas[0].length + deltas[1].length, deltas.join('').length]);
     const meta = author.outcome.meta;
     assert.deepEqual({ ...meta, subject: { ...meta.subject }, versions: { ...meta.versions } }, {
-        ...JOB, generationId: 'gen-1', model: 'm-1', source: 'live', role: 'module', promptVersion: 'module.author.v1',
+        ...JOB, generationId: 'gen-1', model: 'm-1', source: 'live', role: 'module', promptVersion: 'module.author.v2',
     });
     assert.ok(Object.isFrozen(author.outcome) && Object.isFrozen(meta) && Object.isFrozen(meta.subject), 'what was checked cannot change after');
 
@@ -208,18 +208,19 @@ function fakeFetch(...answers) {
 }
 
 /** A request body for the recorded job, with a caller's extra field that must never be sent. */
-function callBody(job = JOB, previous = null) {
+function callBody(job = JOB, previous = null, note = null) {
     return {
         turnId: job.turnId, jobId: job.jobId, subject: job.subject, versions: job.versions, purpose: job.purpose,
         request: { prompt: 'make minecraft 1870s film style', style: 'cinematic', seconds: 12, note: 'not sent' },
         design: { intent: 'blocks' }, nodes: [{ id: 'place', adapterId: 'ng.compute.stage', adapterVersion: 1, config: '{}', inputs: [] }],
         module: { id: job.module, kind: 'compute', interface: { interfaceHash: job.interfaceHash, abi: 'ea-abi.v2' }, extra: true },
         previous,
+        note,
         unexpected: 'not sent',
     };
 }
 
-test('EA-W14 a module call is one POST of exactly the ten fields, signed in, with a fresh single-use App Check token; a refusal is the envelope\'s', async () => {
+test('EA-W14 a module call is one POST of exactly the eleven fields, signed in, with a fresh single-use App Check token; a refusal is the envelope\'s', async () => {
     const identity = fakeIdentity();
     const { fetchImpl, requests } = fakeFetch(res(wire('author.sse')));
     const outcome = await createModuleClient(createApi(CONFIG, identity, fetchImpl)).call(callBody(), () => {}, new AbortController().signal);
@@ -232,17 +233,24 @@ test('EA-W14 a module call is one POST of exactly the ten fields, signed in, wit
     assert.deepEqual(identity.calls, ['auth', 'appcheck single-use']);
     const sent = JSON.parse(r.body);
     // The backend's ModuleRequest.FIELDS, exactly: a caller's own field is never sent (the server refuses any).
-    assert.deepEqual(Object.keys(sent).sort(), ['design', 'jobId', 'module', 'nodes', 'previous', 'purpose', 'request', 'subject', 'turnId', 'versions']);
+    assert.deepEqual(Object.keys(sent).sort(), ['design', 'jobId', 'module', 'nodes', 'note', 'previous', 'purpose', 'request', 'subject', 'turnId', 'versions']);
     assert.deepEqual(sent.request, { prompt: 'make minecraft 1870s film style', style: 'cinematic', seconds: 12 });
     assert.deepEqual(Object.keys(sent.module).sort(), ['id', 'interface', 'kind']);
     assert.equal(sent.previous, null);
+    assert.equal(sent.note, null);
+
+    // EA6.3: an author carries a program revision's note to its module; a repair never does (its note is a finding).
+    const noted = fakeFetch(res(wire('author.sse')));
+    await createModuleClient(createApi(CONFIG, fakeIdentity(), noted.fetchImpl)).call(callBody(JOB, null, 'Lower every block by 2 units.'), () => {}, new AbortController().signal);
+    assert.equal(JSON.parse(noted.requests[0].body).note, 'Lower every block by 2 units.');
 
     // A repair's previous body is cut to the backend's caps before it goes.
     const findings = Array.from({ length: 40 }, (_, i) => ({ id: `ev-1.f${i + 1}`, rung: 'L1', code: 'c'.repeat(50), path: null, line: i + 1, severity: 'error', message: 'm'.repeat(500) }));
     const repairJob = jobOf('repair.sse');
     const capped = fakeFetch(res(wire('repair.sse')));
     await createModuleClient(createApi(CONFIG, fakeIdentity(), capped.fetchImpl))
-        .call(callBody(repairJob, { body: 'fn placeBlocks(index: u32) {}', codeHash: repairJob.subject.codeHash, evidenceIds: Array.from({ length: 40 }, (_, i) => `ev-${i}`), findings }), () => {}, new AbortController().signal);
+        .call(callBody(repairJob, { body: 'fn placeBlocks(index: u32) {}', codeHash: repairJob.subject.codeHash, evidenceIds: Array.from({ length: 40 }, (_, i) => `ev-${i}`), findings }, 'Lower it.'), () => {}, new AbortController().signal);
+    assert.equal(JSON.parse(capped.requests[0].body).note, null, "a repair's note is one of its findings");
     const previous = JSON.parse(capped.requests[0].body).previous;
     assert.equal(previous.findings.length, PREVIOUS_CAPS.findings);
     assert.equal(previous.evidenceIds.length, PREVIOUS_CAPS.evidenceIds);
@@ -297,4 +305,31 @@ test('EA-W16 the wire\'s helpers: this build\'s pins, the interface\'s projectio
     // cappedPrevious keeps what is within the caps as it is.
     const small = { body: 'b', codeHash: 'h', evidenceIds: ['ev-1'], findings: [{ id: 'ev-1.f1', rung: 'L1', code: 'call', path: null, line: 6, severity: 'error', message: 'calls noise2' }] };
     assert.deepEqual(cappedPrevious(small), small);
+});
+
+test('EA-W17 a repair\'s findings past the backend\'s 32 keep a revision\'s note and say how many were cut (the outside review of EA6.3)', () => {
+    const error = (i) => ({ id: `ev-1.f${i}`, rung: 'L1', code: 'call', path: null, line: i, severity: 'error', message: `error ${i}` });
+    const note = { id: 'ev-9.f1', rung: 'note', code: 'EA_REVISION_NOTE', path: null, line: null, severity: 'warning', message: 'Lower every block by 2 units.' };
+    const previous = (findings) => ({ body: 'fn placeBlocks(index: u32) {}', codeHash: 'a'.repeat(64), evidenceIds: ['ev-1', 'ev-9'], findings });
+    // 40 errors and the note, last: the note first, then 30 errors, then the host's own line for the 10 cut.
+    const capped = cappedPrevious(previous([...Array.from({ length: 40 }, (_, i) => error(i + 1)), note])).findings;
+    assert.equal(capped.length, PREVIOUS_CAPS.findings);
+    assert.deepEqual(capped[0], note, 'the change the repair was asked to make is never the one cut');
+    assert.deepEqual(capped.slice(1, 31).map(f => f.line), Array.from({ length: 30 }, (_, i) => i + 1), 'the rest in the order given');
+    assert.deepEqual([capped[31].code, capped[31].rung, capped[31].severity, capped[31].line], [OMITTED_CODE, 'host', 'warning', null]);
+    assert.match(capped[31].message, /^10 more of what the checks found are not listed: a request carries at most 32\./);
+    // At the cap exactly, nothing is cut and nothing is said; under it, the note still leads.
+    const at = cappedPrevious(previous([...Array.from({ length: 31 }, (_, i) => error(i + 1)), note])).findings;
+    assert.deepEqual([at.length, at[0].code, at.some(f => f.code === OMITTED_CODE)], [32, 'EA_REVISION_NOTE', false]);
+    // One past the cap: the line that says so takes a place too, so two are cut, never one.
+    const over = cappedPrevious(previous([...Array.from({ length: 33 }, (_, i) => error(i + 1))])).findings;
+    assert.deepEqual([over.length, over.at(-2).line, over.at(-1).message], [32, 31, '2 more of what the checks found are not listed: a request carries at most 32. Answer what is listed; the whole body is checked again after.']);
+    assert.equal(cappedPrevious(previous(Array.from({ length: 32 }, (_, i) => error(i + 1)))).findings.at(-1).line, 32, 'exactly 32: none cut');
+    // Counted in code points, as the backend counts them (the independent review of EA6.3): a note of emoji whole, and a
+    // longer message cut between characters, never inside one.
+    const castles = 'The revision asks (a model\'s instruction, not a check\'s finding): Lower it. ' + '\u{1F3F0}'.repeat(290);
+    const wide = cappedPrevious(previous([{ ...note, message: castles }])).findings[0].message;
+    assert.equal(wide, castles, 'whole: 366 code points, 656 UTF-16 units');
+    const cut = cappedPrevious(previous([{ ...note, message: '\u{1F3F0}'.repeat(500) }])).findings[0].message;
+    assert.deepEqual([[...cut].length, cut.length, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(cut)], [400, 800, false]);
 });

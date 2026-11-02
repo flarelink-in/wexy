@@ -23,6 +23,18 @@
 // changes; a late answer may settle the ledger's accounting, never content (P10). Nothing here admits, renders or
 // touches the Head, and it reaches a device only through the compiler it is handed: the snapshot and its L3 verdicts go
 // to EA5's authority.
+//
+// EA6 (visual-review-design.md §5, §8; Q110 decided 11-02): a review of the world on the stage is recorded here only
+// while the candidate it looked at is still this session's sealed one (`review`), and the creator's "Improve it" is one
+// visual round (`improve`): their words and the host's findings they chose, answered by a program revision, its round
+// and its revision's allowance reserved at the press, before anything reopens. A visual verdict never moves a technical
+// one (P4).
+//
+// EA6.3 (visual-review-design.md §8.2; Q111 (a)): a program revision may carry notes to the modules whose code must
+// change (`repairs`, agent-action.v3), which a program cannot reach. Once its program is resolved and its interfaces
+// derived, the whole plan is held to them, then each note goes where its module is: a body this candidate keeps (its
+// interface unchanged) is repaired with the note as its finding, about that very body; a module to be written is
+// authored with the note, once. A note to a module the program does not name refuses the plan whole, before any call.
 
 import { checkBody, compileBody, BODY_CHECKER, type CheckedBody, type CompiledBody, type ModuleCompiler } from '../contract/adapters/bodies';
 import { canonicalJson } from '../contract/adapters/canonical';
@@ -30,7 +42,8 @@ import { checkGraph } from '../contract/adapters/checks';
 import { POLICY_V1 } from '../contract/adapters/graph';
 import { deriveInterfaces, notAuthorable, type ModuleInterface } from '../contract/adapters/interfaces';
 import { programHash, resolveProgram } from '../contract/adapters/resolve';
-import type { SolutionDesign, WorldProgram } from '../contract/agent';
+import { MAX_MODULE_REPAIRS, type ModuleRepair, type SolutionDesign, type WorldProgram } from '../contract/agent';
+import { cutCodePoints } from '../contract/text';
 import { deepFreeze, type DeepReadonly } from '../contract/engine/frozen';
 import type { AgentTurnRequest } from '../forge-client/agent-client';
 import type { AgentEvent, AgentTurnResult } from '../forge-client/agent-stream';
@@ -132,8 +145,24 @@ export interface RevisionRequest {
 }
 
 export type RevisionResult =
-    | { status: 'handed-off'; turnId: string; design: SolutionDesign; program: WorldProgram; calls: number }
+    /** `repairs`: the revision's notes to its modules (EA6.3), empty when it has none. */
+    | { status: 'handed-off'; turnId: string; design: SolutionDesign; program: WorldProgram; repairs: readonly ModuleRepair[]; calls: number }
     | { status: 'asked' | 'declined' | 'exhausted'; reason: string; calls: number | null };
+
+/**
+ * The finding a revision's note becomes for a body the candidate keeps (EA6.3): what the revision asks of the module's
+ * code, a model's instruction and never a check's verdict, which the module's repair answers.
+ */
+export const NOTE_CODE = 'EA_REVISION_NOTE';
+/** The note's own words, after a few that say what it is: 66 and its 300 within the backend's 400 code points a finding. */
+export const noteMessage = (message: string) => `The revision asks (a model's instruction, not a check's finding): ${message}`;
+/**
+ * A revision's note set aside with its program, which the browser then refused: passed, with what that revision
+ * answered, to the revision that answers the refusal, so it may name the note again (the independent review of EA6.3).
+ */
+export const SET_ASIDE_CODE = 'EA_NOTE_SET_ASIDE';
+/** How many notes the attempt can still answer, told to every revision as a finding of the host's own (the same review). */
+export const REPAIR_BUDGET_CODE = 'EA_REPAIR_BUDGET';
 
 /**
  * EA4.4's seam: one revision turn. It rejects when its stream breaks, and then its calls are unknown. Each of the turn's
@@ -192,6 +221,11 @@ export interface ModuleState {
     addressed: string[];
     /** Its body was reused from an earlier revision, with no call. */
     reused: boolean;
+    /**
+     * A program revision's note to it (EA6.3), which its next author call carries, once: until an answer is judged. Null
+     * when it has none; a body the candidate keeps gets its note as a finding instead.
+     */
+    note: string | null;
 }
 
 export type JobStatus = 'running' | 'ok' | 'unusable' | 'refused' | 'broken' | 'cancelled' | 'stale';
@@ -250,7 +284,51 @@ export interface CandidateState {
     endedMs: number | null;
 }
 
-export type Corrected = { ok: true; state: DeepReadonly<CandidateState> } | { ok: false; diagnostic: string };
+/**
+ * What a visual round came to (`improve`): a new sealed candidate, or none, and then whether the session went back to
+ * the candidate the round started from (the one on the stage), so another round may follow within what is left.
+ */
+export interface Round {
+    improved: boolean;
+    /** Why the round ended with no candidate; null when it improved. */
+    stop: CandidateStop | null;
+    restored: boolean;
+}
+
+export type Corrected = { ok: true; state: DeepReadonly<CandidateState>; round?: Round } | { ok: false; diagnostic: string };
+
+/** What a review looked at (EA6): this attempt's sealed candidate, by its id(C). */
+export interface ReviewExpectation {
+    attempt: string;
+    candidate: string;
+}
+
+/**
+ * A review's record (EA6 §5): the host's look at the stage (`render`, by the `device`), or a verdict on it (`visual`, by
+ * the creator or a model). Its findings are warnings unless said otherwise; messages are cut to the backend's 400.
+ */
+export interface ReviewInput {
+    expected: ReviewExpectation;
+    phase: 'render' | 'visual';
+    verdict: Verdict;
+    producedBy: 'device' | 'creator' | 'model';
+    findings?: { code: string; message: string; severity?: 'error' | 'warning' }[];
+    /** The records it stands on: a creator's verdict on the host's findings it chose. */
+    refs?: string[];
+}
+
+export type Reviewed = { ok: true; evidence: CandidateEvidence } | { ok: false; diagnostic: string };
+
+/** The creator's "Improve it" (EA6 §8.1): their words, and the host's findings about the stage they chose, by id. */
+export interface ImproveInput {
+    expected: ReviewExpectation;
+    words: string;
+    findings: readonly string[];
+}
+
+/** The backend's bounds on a revision's findings (AgentBase: MAX_FINDINGS, MESSAGE_CHARS): refused past them, never cut. */
+export const IMPROVE_FINDINGS = 32;
+export const IMPROVE_WORDS = 400;
 
 export interface CandidateSession {
     /** The current attempt's state; null before the first. */
@@ -270,6 +348,19 @@ export interface CandidateSession {
     correct(envelope: Envelope): Promise<Corrected>;
     /** A visual verdict (EA6): recorded as its own evidence; it never moves a technical verdict (P4). */
     visual(input: { verdict: 'pass' | 'fail'; producedBy: 'model' | 'creator'; findings?: { code: string; message: string; path?: string | null }[] }): CandidateEvidence | null;
+    /** Whether a correction here can revise the program: a session with no reviser offers no paid improvement (EA6). */
+    readonly revisable: boolean;
+    /**
+     * A review's record (EA6 §5): kept only while `expected` is still this session's sealed candidate, else
+     * EA_STALE_EVIDENCE and nothing recorded, so an answer that arrives late is never pinned on a newer candidate.
+     */
+    review(input: ReviewInput): Reviewed;
+    /**
+     * The creator's "Improve it" (EA6 §8, Q110): one visual round, a program revision answering their words and the
+     * findings they chose. Its round and its revision's allowance are reserved at once, before anything reopens; refused
+     * before any call when stale, empty, past 32 findings or 400 characters, or out of budget, the candidate unchanged.
+     */
+    improve(input: ImproveInput): Promise<Corrected>;
 }
 
 /** The creator's sentence for a refusal or failure the backend reported. */
@@ -350,6 +441,15 @@ class Attempt {
     /** The snapshot's L3 verdicts, one a body, when L3 judged every one; set with each snapshot, read only beside it. */
     compiled: readonly DeepReadonly<CompiledBody>[] | null = null;
     verified: Snapshot | null = null;
+    /** The turn whose program the last static-verified candidate came from: what a restore goes back to (EA6). */
+    verifiedTurn: string | null = null;
+    /**
+     * A program revision's notes to its modules (EA6.3), waiting for its program's interfaces: applied once, by the
+     * resolve of that revision's turn, and only then. Every handed-off revision leaves one, its notes perhaps none, so a
+     * refused program hands the next revision what it was for. `refs`: the records whose findings the revision answered;
+     * `answered`: those findings, by id.
+     */
+    plan: { turnId: string; repairs: readonly ModuleRepair[]; refs: string[]; answered: string[] } | null = null;
     /** L3 for this attempt, fixed at its start; null: not run. */
     readonly compiler: ModuleCompiler | null;
     /** Each module's L3 verdict on its current body, once it passed. */
@@ -493,7 +593,7 @@ class Attempt {
 function fresh(iface: Interface): ModuleState {
     return {
         module: iface.module, kind: iface.kind, node: iface.node, interfaceHash: iface.interfaceHash, body: null, originalBody: null, codeHash: null,
-        phase: 'waiting', needs: 'author', calls: 0, repairs: 0, checkerVersion: null, evidence: [], addressed: [], reused: false,
+        phase: 'waiting', needs: 'author', calls: 0, repairs: 0, checkerVersion: null, evidence: [], addressed: [], reused: false, note: null,
     };
 }
 
@@ -519,8 +619,13 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
     const exhausted = (a: Attempt, refusal: { budget: Budget; used: number; limit: number }) =>
         a.halt({ scope: 'budget', diagnostic: budgetDiagnostic(refusal), sentence: COPY.candidate.budget }, 'exhausted', now());
 
-    /** Where a failing graph-level record goes: a program revision, if there is one and Q_C allows it; else the end. */
-    async function routeGraph(a: Attempt, e: CandidateEvidence): Promise<'again' | 'stop'> {
+    /**
+     * Where a failing graph-level record goes: a program revision, if there is one and Q_C allows it; else the end. When
+     * the program refused came from a revision, its `plan` follows it (the independent review of EA6.3): the notes set
+     * aside with that program, first, so the next revision may name them again; then what the browser found; then what
+     * that revision answered (a creator's words among them), so the program's purpose is not lost with it.
+     */
+    async function routeGraph(a: Attempt, e: CandidateEvidence, plan: Attempt['plan'] = null): Promise<'again' | 'stop'> {
         const scope = route(e);
         const first = e.findings.find(f => f.severity === 'error') ?? e.findings[0];
         const said = !first ? `${e.phase} failed` : first.path ? `${first.code} ${first.path}: ${first.message}` : `${first.code}: ${first.message}`;
@@ -528,23 +633,68 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
             a.halt({ scope: 'design', diagnostic: `${said}; EA4 starts no design revision: the creator asks again`, sentence: COPY.candidate.setup }, 'failed', now());
             return 'stop';
         }
-        return revise(a, e.findings.filter(f => f.severity === 'error'), said);
+        const errors = e.findings.filter(f => f.severity === 'error');
+        const { notes, answered } = setAside(a, plan);
+        return revise(a, [...notes, ...errors, ...answered], said);
     }
 
-    /** A program revision answering `findings` (Q82 (a)); with no reviser, the candidate ends here. */
-    async function revise(a: Attempt, findings: readonly EvidenceFinding[], said: string): Promise<'again' | 'stop'> {
+    /**
+     * What a revision whose program the browser refused leaves to the next (the independent review of EA6.3): its notes,
+     * recorded as set aside with that program (the model's, never a verdict), and the findings it answered that the
+     * attempt still holds. Nothing when the program was not a revision's.
+     */
+    function setAside(a: Attempt, plan: Attempt['plan']): { notes: readonly EvidenceFinding[]; answered: readonly EvidenceFinding[] } {
+        if (!plan || plan.turnId !== a.turnId) return { notes: [], answered: [] };
+        const notes = plan.repairs.length === 0 ? [] : a.record({
+            subject: a.subject({}), phase: 'visual', verdict: 'unverified', producedBy: 'model', refs: plan.refs,
+            findings: plan.repairs.map(r => ({ code: SET_ASIDE_CODE, path: null, line: null, severity: 'warning' as const, message: `${r.module}: ${r.message}`, rung: null, place: null })),
+        }, 'history').findings;
+        const answered = plan.answered.map(id => a.store.finding(id)?.finding).filter((f): f is EvidenceFinding => f !== undefined);
+        return { notes, answered };
+    }
+
+    /**
+     * How many notes the attempt can still answer, as a finding of the host's own told to every revision (the independent
+     * review of EA6.3): Q_C's repairs and calls left, and the modules whose repairs are spent. A plan past it is refused
+     * whole, so the model is told before it writes one. Null when a plan of the schema's whole size would fit.
+     */
+    function repairBudget(a: Attempt): { id: string; code: string; path: null; message: string } | null {
+        const { limits, state } = a.ledger;
+        const left = Math.max(0, Math.min(limits.repairs - state.repairs, limits.calls - a.ledger.used));
+        const spent = [...a.modules.values()].filter(m => (state.moduleRepairs[m.module] ?? 0) >= limits.repairsPerModule).map(m => m.module);
+        if (left >= MAX_MODULE_REPAIRS && !spent.length) return null;
+        const named = spent.length > 4 ? `${spent.slice(0, 4).join(', ')} and ${spent.length - 4} more` : spent.join(', ');
+        const none = spent.length ? `, and none for ${named}, whose repairs are spent` : '';
+        return {
+            id: 'q_c.repairs', code: REPAIR_BUDGET_CODE, path: null,
+            message: `This attempt can still repair ${left} module bod${left === 1 ? 'y' : 'ies'} with notes${none}: a plan past that is refused whole, before any of it is done.`,
+        };
+    }
+
+    /**
+     * A program revision answering `findings` (Q82 (a)); with no reviser, the candidate ends here. `reserved`: its
+     * allowance, already taken at the creator's press (EA6's `improve`), so a refused budget never reopened anything.
+     */
+    async function revise(a: Attempt, findings: readonly EvidenceFinding[], said: string, reserved: Reservation | null = null): Promise<'again' | 'stop'> {
         if (!deps.revise) {
+            if (reserved) a.ledger.release(reserved);
             a.halt({ scope: 'program', diagnostic: `${said}; no program revision: this candidate has no reviser`, sentence: COPY.candidate.setup }, 'failed', now());
             return 'stop';
         }
-        const r = a.ledger.reserveRevision();
-        if (!r.ok) {
-            exhausted(a, r);
-            return 'stop';
+        let reservation: Reservation;
+        if (reserved) reservation = reserved;
+        else {
+            const r = a.ledger.reserveRevision();
+            if (!r.ok) {
+                exhausted(a, r);
+                return 'stop';
+            }
+            reservation = r.reservation;
         }
-        const reservation = r.reservation;
         a.phase = 'correcting';
         a.revising = true;
+        // A new revision supersedes any notes still waiting: a plan rides only on the program its own turn handed off.
+        a.plan = null;
         a.ledger.dispatched(reservation);
         // Its turn's record (the EA4.5 review): each call as the turn tells it, shown as it comes, until the attempt
         // closes. Nothing the turn says after a cancel or a newer candidate is kept or shown.
@@ -564,10 +714,13 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
         };
         publish(a);
         let result: RevisionResult;
+        // What the attempt can still answer with notes, the last of at most 32 (the independent review of EA6.3).
+        const budget = repairBudget(a);
+        const sent = findings.slice(0, budget ? 31 : 32).map(f => ({ id: f.id, code: f.code, path: f.path, message: cutCodePoints(f.message, 400) }));
         try {
             result = await deps.revise({
                 turnId: a.turnId, request: a.request, design: a.design, program: a.program, subject: a.subject({}),
-                findings: findings.slice(0, 32).map(f => ({ id: f.id, code: f.code, path: f.path, message: f.message.slice(0, 400) })),
+                findings: budget ? [...sent, budget] : sent,
             }, AbortSignal.any([a.controller.signal, a.work.signal]), observe);
         } catch (error) {
             // A revision whose end was not seen keeps its whole reservation, unknown (the design §8); its turn's charge
@@ -609,11 +762,26 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
         a.program = deepFreeze(structuredClone(result.program)) as WorldProgram;
         a.turnId = result.turnId;
         a.revision++;
+        // Its notes to modules wait for that program's interfaces (EA6.3): the resolve of this very turn applies them, once.
+        // With what it answered, so a program the browser refuses passes both to the next revision (the review, finding 1).
+        a.plan = {
+            turnId: result.turnId,
+            repairs: deepFreeze(result.repairs.map(r => ({ module: r.module, message: r.message }))),
+            refs: [...new Set(findings.map(f => f.id.slice(0, f.id.lastIndexOf('.'))))],
+            answered: findings.map(f => f.id),
+        };
         return 'again';
     }
 
-    /** W → X, its checks, its interfaces; then each module reused or waiting for its author. */
+    /**
+     * W → X, its checks, its interfaces; then each module reused or waiting for its author; then the notes of the
+     * revision that handed W off, if it carried any (EA6.3). They are taken here, at the start, so a resolve that stops
+     * on the way drops them with its program: no later resolve (a restore's, another revision's) ever applies them. When
+     * the browser refuses W, they go to the revision that answers the refusal, as findings it may name again.
+     */
     async function resolving(a: Attempt): Promise<'ready' | 'again' | 'stop'> {
+        const plan = a.plan;
+        a.plan = null;
         a.phase = 'resolving';
         a.snapshot = null;
         a.graphEvidence = [];
@@ -631,7 +799,7 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
                 subject: a.subject({}), phase: 'resolve', verdict: 'fail', producedBy: 'host',
                 findings: r.diagnostics.map(d => ({ code: d.code, path: d.path, line: null, severity: 'error' as const, message: d.message, rung: null, place: null })),
             }, 'graph');
-            return routeGraph(a, e);
+            return routeGraph(a, e, plan);
         }
         const x = r.graph;
         a.graph = x.hash;
@@ -643,7 +811,7 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
             subject: a.subject({}), phase: 'check', verdict: checked.ok ? 'pass' : 'fail', producedBy: 'host',
             findings: checked.findings.map(f => ({ code: f.check, path: f.path, line: null, severity: f.severity, message: f.message, rung: null, place: null })),
         }, 'graph');
-        if (!checked.ok) return routeGraph(a, ce);
+        if (!checked.ok) return routeGraph(a, ce, plan);
         const derived = await deriveInterfaces(x);
         if (!a.live()) return 'stop';
         // Custom lighting stays gated until the host's lighting contract exists (the design §6): no call is spent on it.
@@ -654,7 +822,7 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
                 ? gated.map(g => ({ code: 'EA_CAPABILITY_UNSUPPORTED', path: g.i.paths[0] ?? null, line: null, severity: 'error' as const, message: g.why, rung: null, place: null }))
                 : derived.diagnostics.map(d => ({ code: d.code, path: d.path, line: null, severity: 'error' as const, message: d.message, rung: null, place: null })),
         }, 'graph');
-        if (ie.verdict === 'fail' || !derived.ok) return routeGraph(a, ie);
+        if (ie.verdict === 'fail' || !derived.ok) return routeGraph(a, ie, plan);
         if (derived.interfaces.length > a.ledger.limits.modules) {
             exhausted(a, { budget: 'modules', used: derived.interfaces.length, limit: a.ledger.limits.modules });
             return 'stop';
@@ -686,7 +854,99 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
             await judge(a, m, body, { programHash: a.programHash, graph: a.graph, interfaceHash: m.interfaceHash, codeHash: m.codeHash }, null);
             if (!a.live()) return 'stop';
         }
-        return 'ready';
+        return admit(a, plan) ? 'ready' : 'stop';
+    }
+
+    /**
+     * What this resolve's module work may start, once its program's interfaces are derived and every kept body judged
+     * (EA6.3; the design §8.2, §8.3; the outside review of 11-02 night).
+     *
+     * A program revision's notes first: the whole plan held to the interfaces. A note to a module the program does not
+     * name, or a second note to one module, refuses the plan whole, before any call: nothing of it is applied.
+     *
+     * Then Q_C, once the attempt has revised its program: the known work (the authors its new interfaces need, the
+     * repairs its rechecks and its notes need, each module's own repairs) must fit what is left before any of it starts,
+     * so no call is paid for on a candidate Q_C already cannot finish, whichever module comes first. A shortfall of the
+     * program's own work stops the attempt as the scheduler would have, only before anything was spent; one that only
+     * the notes cause refuses the plan. A first resolve keeps the scheduler's own refusals: its authors are bounded by
+     * the module cap.
+     *
+     * Then each note is recorded, linked to the records the revision answered, and routed: a body the candidate keeps (its
+     * interface unchanged) is repaired with the note as its finding, about that very body; a module whose body is to be
+     * written (new, or its interface changed) is authored with it, once. False when the attempt stopped.
+     */
+    function admit(a: Attempt, taken: Attempt['plan']): boolean {
+        // Only the program its own turn handed off (the resolve that took it follows that revision at once).
+        const plan = taken && taken.turnId === a.turnId ? taken : null;
+        if (plan) {
+            const named = new Set<string>();
+            for (const [i, r] of plan.repairs.entries()) {
+                const why = !a.modules.has(r.module) ? `${r.module.slice(0, 40)} is not a module of the revised program`
+                    : named.has(r.module) ? `${r.module.slice(0, 40)} has a note already` : null;
+                if (why) {
+                    a.halt({ scope: 'program', diagnostic: `EA_RESOLVE moduleRepairs[${i}]: ${why}; plan refused`, sentence: COPY.candidate.planRefused }, 'failed', now());
+                    return false;
+                }
+                named.add(r.module);
+            }
+        }
+        const kept = (m: ModuleState) => m.body !== null && m.codeHash !== null;
+        const ms = [...a.modules.values()];
+        const authors = ms.filter(m => m.needs === 'author').length;
+        const repairing = ms.filter(m => m.needs === 'repair');
+        // The repair calls the plan adds: a kept body's note, unless its module needs a repair already (the note joins it).
+        const added = plan ? plan.repairs.map(r => a.modules.get(r.module)!).filter(m => kept(m) && m.needs !== 'repair') : [];
+        if (a.turns.length > 1) {
+            const own = shortfall(a, authors, repairing);
+            if (own) {
+                a.halt({ scope: 'budget', diagnostic: `${budgetDiagnostic(own)}${own.module ? ` (${own.module})` : ''}`, sentence: COPY.candidate.budget }, 'exhausted', now());
+                return false;
+            }
+            const short = shortfall(a, authors, [...repairing, ...added]);
+            if (short) {
+                const of = short.module ? ` (${short.module})` : '';
+                const more = `${added.length} more repair${added.length === 1 ? '' : 's'}`;
+                a.halt({
+                    scope: 'budget', diagnostic: `${budgetDiagnostic(short)}${of}: the plan needs ${more}; plan refused`, sentence: COPY.candidate.budget,
+                }, 'exhausted', now());
+                return false;
+            }
+        }
+        if (!plan) return true;
+        for (const r of plan.repairs) {
+            const m = a.modules.get(r.module)!;
+            const keeps = kept(m);
+            const e = a.record({
+                subject: a.subject({ module: m.module, interfaceHash: m.interfaceHash, codeHash: keeps ? m.codeHash : null }), phase: 'visual',
+                verdict: 'unverified', producedBy: 'model', refs: plan.refs,
+                findings: [{ code: NOTE_CODE, path: null, line: null, severity: 'warning', message: noteMessage(r.message), rung: 'note', place: null }],
+            }, 'history');
+            if (keeps) {
+                // Its repair answers the note beside whatever its own check found (a recheck under another checker).
+                m.addressed = m.needs === 'repair' ? [...m.addressed, e.findings[0].id] : [e.findings[0].id];
+                m.needs = 'repair';
+                m.phase = 'waiting';
+            } else {
+                m.note = r.message;
+            }
+        }
+        publish(a);
+        return true;
+    }
+
+    /**
+     * The first of Q_C's budgets that cannot hold `authors` author calls and a repair for each of `repairing`, beside
+     * what the attempt has spent and holds: the authors, each module's repairs, the repairs, then the calls. Null when all
+     * of them fit. The numbers are the ledger's own, as the scheduler's refusal would give them.
+     */
+    function shortfall(a: Attempt, authors: number, repairing: readonly ModuleState[]): { budget: Budget; used: number; limit: number; module?: string } | null {
+        const { limits, state } = a.ledger;
+        if (state.authors + authors > limits.authors) return { budget: 'authors', used: state.authors, limit: limits.authors };
+        const spent = repairing.find(m => (state.moduleRepairs[m.module] ?? 0) + 1 > limits.repairsPerModule);
+        if (spent) return { budget: 'repairs-per-module', used: state.moduleRepairs[spent.module] ?? 0, limit: limits.repairsPerModule, module: spent.module };
+        if (state.repairs + repairing.length > limits.repairs) return { budget: 'repairs', used: state.repairs, limit: limits.repairs };
+        if (a.ledger.used + authors + repairing.length > limits.calls) return { budget: 'calls', used: a.ledger.used, limit: limits.calls };
+        return null;
     }
 
     /** A body's checks: L1, L2 once, the final L1 decides; then L3 when a compiler is given. Applies only while current. */
@@ -777,6 +1037,8 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
                 nodes: moduleNodes(a.program, iface.node),
                 module: { id: m.module, kind: iface.kind, interface: wireInterface(iface) },
                 previous,
+                // A revision's note to a module it adds or rewires goes with its author (EA6.3); a repair's is a finding.
+                note: kind === 'author' ? m.note : null,
             };
             a.ledger.dispatched(reservation);
             let outcome: ModuleOutcome;
@@ -835,6 +1097,8 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
                 return;
             }
             record.status = 'ok';
+            // The note was written with once (EA6.3): what this body gets judged on now is the checks', not the note again.
+            if (kind === 'author') m.note = null;
             await judge(a, m, outcome.answer, inputs, jobId);
         } catch (error) {
             if (record.status === 'running') {
@@ -848,8 +1112,10 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
     /** A repair's previous body: exactly as judged, with the findings it answers and their records. */
     function previousOf(a: Attempt, m: ModuleState): ModuleCallBody['previous'] {
         const held = m.addressed.map(id => a.store.finding(id)).filter((h): h is NonNullable<typeof h> => h !== null);
-        // Errors first: the backend keeps at most 32, and a repair answers what failed before what only warned.
-        held.sort((p, q) => (p.finding.severity === q.finding.severity ? 0 : p.finding.severity === 'error' ? -1 : 1));
+        // A revision's note first (EA6.3: never the one the backend's 32 leave out), then errors, then warnings: a repair
+        // answers what failed before what only warned.
+        const rank = (f: EvidenceFinding) => (f.rung === 'note' ? 0 : f.severity === 'error' ? 1 : 2);
+        held.sort((p, q) => rank(p.finding) - rank(q.finding));
         const findings: WireFinding[] = held.map(({ finding: f }) => ({
             id: f.id, rung: f.rung ?? 'L1', code: f.code, path: f.path, line: f.line, severity: f.severity, message: f.message,
         }));
@@ -936,12 +1202,13 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
         a.compiled = a.compiler && verdicts.every(v => v !== undefined) ? Object.freeze(verdicts as DeepReadonly<CompiledBody>[]) : null;
         a.snapshot = sealed.snapshot;
         a.verified = sealed.snapshot;
+        a.verifiedTurn = a.turnId;
         a.phase = 'static-verified';
         a.endedMs = now();
     }
 
     /** Runs an attempt from `step` to its end, and leaves nothing running behind it. */
-    async function drive(a: Attempt, step: 'resolve' | 'modules' | { revise: readonly EvidenceFinding[]; said: string }): Promise<void> {
+    async function drive(a: Attempt, step: 'resolve' | 'modules' | { revise: readonly EvidenceFinding[]; said: string; reserved?: Reservation }): Promise<void> {
         a.running = true;
         // A fresh controller for this run's calls: an earlier stop aborted the last one, and must not abort these.
         a.work = new AbortController();
@@ -949,7 +1216,7 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
             let next = step;
             for (;;) {
                 if (typeof next === 'object') {
-                    if (await revise(a, next.revise, next.said) === 'stop') return;
+                    if (await revise(a, next.revise, next.said, next.reserved ?? null) === 'stop') return;
                     next = 'resolve';
                 }
                 if (next === 'resolve') {
@@ -1036,7 +1303,129 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
             publish(a);
             return e;
         },
+        get revisable() {
+            return deps.revise !== undefined;
+        },
+        review(input) {
+            const a = current;
+            if (!a || a.closed) return { ok: false, diagnostic: 'EA_REVIEW_UNAVAILABLE no candidate in this session' };
+            const why = expectation(a, input.expected);
+            if (why) return { ok: false, diagnostic: why };
+            // The host's look is the device's; a verdict is the creator's or a model's (P4: neither is a technical one).
+            const fits = input.phase === 'render' ? input.producedBy === 'device' : input.producedBy !== 'device';
+            if (!fits) return { ok: false, diagnostic: `a ${input.phase} record is not the ${input.producedBy}'s to make` };
+            try {
+                const e = a.record({
+                    subject: a.subject({ candidate: a.snapshot!.id }), phase: input.phase, verdict: input.verdict, producedBy: input.producedBy, refs: input.refs,
+                    findings: (input.findings ?? []).map(f => ({
+                        code: f.code.slice(0, 40), path: null, line: null, severity: f.severity ?? 'warning', message: f.message.slice(0, IMPROVE_WORDS), rung: null, place: null,
+                    })),
+                }, 'history');
+                publish(a);
+                return { ok: true, evidence: e };
+            } catch (error) {
+                return { ok: false, diagnostic: message(error) };
+            }
+        },
+        async improve(input) {
+            const a = current;
+            if (!a || a.closed) return { ok: false, diagnostic: 'EA_REVIEW_UNAVAILABLE no candidate in this session' };
+            if (!deps.revise) return { ok: false, diagnostic: 'EA_REVIEW_UNAVAILABLE no program revision here: this session has no reviser' };
+            if (a.running) return { ok: false, diagnostic: 'the candidate is still running: an improvement waits until it settles' };
+            const why = expectation(a, input.expected);
+            if (why) return { ok: false, diagnostic: why };
+            const sealed = a.snapshot!;
+            const words = input.words.trim();
+            if (!words && !input.findings.length) return { ok: false, diagnostic: 'an improvement answers the creator\'s words or a finding they chose: there are neither' };
+            if (words.length > IMPROVE_WORDS) return { ok: false, diagnostic: `the creator's words are at most ${IMPROVE_WORDS} characters: these are ${words.length}` };
+            const cited = input.findings.length + (words ? 1 : 0);
+            if (cited > IMPROVE_FINDINGS) return { ok: false, diagnostic: `an improvement cites at most ${IMPROVE_FINDINGS} findings, the revision's bound: this one cites ${cited}` };
+            // The host's findings it chose: held now, the host's look at this very candidate, each once.
+            const chosen: { record: CandidateEvidence; finding: EvidenceFinding }[] = [];
+            for (const id of input.findings) {
+                const held = a.store.finding(id);
+                if (!held) return { ok: false, diagnostic: stale('a finding this attempt holds', id) };
+                if (held.record.phase !== 'render') return { ok: false, diagnostic: `${id} is not one of the host's findings about the stage (${held.record.phase})` };
+                if (held.record.subject.candidate !== sealed.id) return { ok: false, diagnostic: stale(`id(C) ${short(sealed.id)}`, `a finding about ${short(held.record.subject.candidate)} (${id})`) };
+                if (chosen.some(c => c.finding.id === id)) return { ok: false, diagnostic: `a correction cites each finding once: ${id} is cited twice` };
+                chosen.push(held);
+            }
+            // The round and the revision's allowance, both at once and synchronously: a duplicate press finds the attempt
+            // running, and a refusal changes nothing (§8.3). A round whose revision never went out is given back.
+            const round = a.ledger.reserveVisualRound();
+            if (!round.ok) return { ok: false, diagnostic: `EA_REVIEW_BUDGET visual rounds ${round.used} of ${round.limit}` };
+            const r = a.ledger.reserveRevision();
+            if (!r.ok) {
+                a.ledger.returnVisualRound();
+                return { ok: false, diagnostic: budgetDiagnostic(r) };
+            }
+            const giveBack = () => {
+                a.ledger.release(r.reservation);
+                a.ledger.returnVisualRound();
+            };
+            let verdict: CandidateEvidence;
+            try {
+                // The creator's verdict (E_v): their words its one finding, standing on the host's findings they chose.
+                verdict = a.record({
+                    subject: a.subject({ candidate: sealed.id }), phase: 'visual', verdict: 'fail', producedBy: 'creator', refs: [...new Set(chosen.map(c => c.record.id))],
+                    findings: words ? [{ code: 'creator', path: null, line: null, severity: 'error' as const, message: words, rung: null, place: null }] : [],
+                }, 'history');
+            } catch (error) {
+                giveBack();
+                return { ok: false, diagnostic: message(error) };
+            }
+            const envelope: Envelope = {
+                base: { attempt: a.id, revision: a.revision, candidate: sealed.id, programHash: a.programHash ?? '', graph: a.graph },
+                scope: 'program', changes: [], findingsAddressed: [...verdict.findings.map(f => f.id), ...chosen.map(c => c.finding.id)],
+            };
+            const refused = a.verify(envelope);
+            if (refused) {
+                giveBack();
+                publish(a);
+                return { ok: false, diagnostic: refused };
+            }
+            const held = envelope.findingsAddressed.map(id => a.store.finding(id)!);
+            // What a restore puts back: the reuse entries the sealed candidate's bodies passed with, as they are now.
+            const kept = sealed.bodies.map(b => [reuseKey(b.module, b.interfaceHash), a.reuse.get(reuseKey(b.module, b.interfaceHash))] as const);
+            // Accepted: reopened as a correction reopens it; every counter goes on where it was.
+            a.stop = null;
+            a.endedMs = null;
+            a.snapshot = null;
+            const first = held[0].finding;
+            await drive(a, { revise: held.map(h => h.finding), said: `${first.code}: ${first.message}`, reserved: r.reservation });
+            // Read fresh: the round reassigned them (flow analysis still holds the nulls set above).
+            const now = () => ({ snapshot: a.snapshot as Snapshot | null, stop: a.stop as CandidateStop | null, verified: a.verified as Snapshot | null });
+            const after = now();
+            if (after.snapshot && a.phase === 'static-verified' && after.snapshot.id !== sealed.id) return { ok: true, state: a.view(), round: { improved: true, stop: null, restored: false } };
+            // No new candidate (the revision asked or declined, a budget refused, a stream broke): the session goes back to
+            // the candidate the round started from, the one on the stage, with its own bodies and no call, so the creator
+            // may try again within what is left (the outside review of 11-02 night). Every call and the round stay spent.
+            // A cancel is the creator's own stop, and stays one.
+            const stop = after.stop;
+            let restored = false;
+            if (!a.closed && after.verified?.id === sealed.id && kept.every(([, entry]) => entry !== undefined)) {
+                for (const [key, entry] of kept) a.reuse.set(key, entry!);
+                a.program = deepFreeze(structuredClone({ nodes: sealed.program as WorldProgram['nodes'] })) as WorldProgram;
+                a.turnId = a.verifiedTurn ?? a.turnId;
+                a.stop = null;
+                a.endedMs = null;
+                await drive(a, 'resolve');
+                restored = !a.closed && now().snapshot?.id === sealed.id;
+            }
+            return { ok: true, state: a.view(), round: { improved: false, stop, restored } };
+        },
     };
+}
+
+const short = (s: string | null | undefined) => (s === null || s === undefined ? 'none' : s.length > 16 ? s.slice(0, 12) : s);
+const stale = (expected: string, got: string) => `EA_STALE_EVIDENCE expected ${expected}, got ${got}`;
+
+/** Null when a review of `e` may still be recorded here: the same attempt, and its sealed candidate the one reviewed. */
+function expectation(a: Attempt, e: ReviewExpectation): string | null {
+    if (e.attempt !== a.id) return stale(`attempt ${short(a.id)}`, `attempt ${short(e.attempt)}`);
+    const now = a.snapshot?.id ?? null;
+    if (now !== e.candidate) return `EA_STALE_EVIDENCE expected id(C) ${short(now)}, the review is about ${short(e.candidate)}`;
+    return null;
 }
 
 /** The bundle's format: what EA4.5's Developer view downloads (the design §9); v2 holds the turns (the EA4.5 review). */

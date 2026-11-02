@@ -15,7 +15,7 @@ import { programHash, resolveProgram } from '../src/contract/adapters/resolve.ts
 import { createDeviceCompiler } from '../src/exec/device-compiler.ts';
 import { ForgeError } from '../src/forge-client/errors.ts';
 import { MODULE_VERSIONS } from '../src/forge-client/module-client.ts';
-import { candidateBundle, createCandidateSession } from '../src/loop/candidate.ts';
+import { NOTE_CODE, REPAIR_BUDGET_CODE, SET_ASIDE_CODE, candidateBundle, createCandidateSession, noteMessage } from '../src/loop/candidate.ts';
 import { route, verifyEnvelope } from '../src/loop/candidate-evidence.ts';
 import { Ledger, Q_C, budgetDiagnostic } from '../src/loop/candidate-ledger.ts';
 import { COPY } from '../src/loop/copy.ts';
@@ -311,7 +311,7 @@ test('EA-K3 P3, P7: each row of §8\'s routing goes to its scope; a clean candid
 test('EA-K1 P1: a revision re-authors exactly the module whose interface changed; the others are reused with no call; the calls are counted', async () => {
     const changed = motionAt(32);
     assert.deepEqual(invalidated(await interfacesOf(world()), await interfacesOf(changed)), ['motion'], 'EA-U6 says motion');
-    const reviser = fakeReviser([{ status: 'handed-off', turnId: 'turn-2', design: DESIGN, program: { nodes: changed }, calls: 2 }]);
+    const reviser = fakeReviser([{ status: 'handed-off', turnId: 'turn-2', design: DESIGN, program: { nodes: changed }, repairs: [], calls: 2 }]);
     const { s, modules } = session({ revise: reviser.revise });
     const first = await s.start(handOff());
     assert.equal(first.phase, 'static-verified');
@@ -333,7 +333,8 @@ test('EA-K1 P1: a revision re-authors exactly the module whose interface changed
     // The revision carried R and S verbatim, the base W and the finding it answers, subject-bound.
     const rq = reviser.calls[0];
     assert.deepEqual([rq.request, rq.design, rq.program.nodes], [R, DESIGN, world()]);
-    assert.deepEqual(rq.findings.map(f => f.id), [visual.findings[0].id]);
+    // The finding it answers, then the host's own: how many notes the attempt can still answer (the independent review).
+    assert.deepEqual(rq.findings.map(f => f.id), [visual.findings[0].id, 'q_c.repairs']);
     assert.deepEqual([rq.subject.graph, rq.subject.programHash], [first.graph, first.programHash]);
     assert.notEqual(after.graph, first.graph);
     assert.notEqual(after.id, first.id);
@@ -341,7 +342,7 @@ test('EA-K1 P1: a revision re-authors exactly the module whose interface changed
 });
 
 test('EA-K2 P2: a correction citing another candidate\'s evidence, or none this attempt holds, is refused before any call', async () => {
-    const reviser = fakeReviser([{ status: 'handed-off', turnId: 'turn-2', design: DESIGN, program: { nodes: world() }, calls: 1 }]);
+    const reviser = fakeReviser([{ status: 'handed-off', turnId: 'turn-2', design: DESIGN, program: { nodes: world() }, repairs: [], calls: 1 }]);
     const { s, modules } = session({ revise: reviser.revise });
     const first = await s.start(handOff());
     const visual = s.visual({ verdict: 'fail', producedBy: 'model', findings: [{ code: 'too-dark', message: 'the dusk is too dark' }] });
@@ -437,8 +438,9 @@ test('EA-K4 P4: a visual pass on a technically failing candidate is its own verd
 
 test('EA-K5 P5: each budget at B runs and at B+1 refuses before its call, the outcome naming it', async () => {
     const L = (over = {}, turn = 0) => new Ledger({ ...Q_C, ...over }, turn);
-    // Q84, revised 2026-11-02 after the black hole starter (about eight modules) was stopped at four.
-    assert.deepEqual({ ...Q_C }, { calls: 34, modules: 12, authors: 12, concurrent: 4, repairs: 10, repairsPerModule: 2, revisions: 1, revisionCalls: 6 });
+    // Q84, revised 2026-11-02 after the black hole starter (about eight modules) was stopped at four; Q110 (EA6, the same
+    // night): three program revisions and two visual rounds, the 34 calls kept as the cap on everything.
+    assert.deepEqual({ ...Q_C }, { calls: 34, modules: 12, authors: 12, concurrent: 4, repairs: 10, repairsPerModule: 2, revisions: 3, revisionCalls: 6, visualRounds: 2 });
     // calls: 34, the turn's 6 among them.
     const calls = L({ authors: 100, concurrent: 100 }, 6);
     for (let i = 0; i < 28; i++) assert.ok(calls.reserveModule('author', `m${i}`).ok, `call ${7 + i}`);
@@ -463,8 +465,8 @@ test('EA-K5 P5: each budget at B runs and at B+1 refuses before its call, the ou
     concurrent.dispatched(a.reservation);
     concurrent.settle(a.reservation, 1);
     assert.ok(concurrent.reserveModule('author', 'e').ok);
-    // revisions: 1, its whole allowance reserved, never beside a module call.
-    const revisions = L({}, 6);
+    // revisions: 3 (Q110), each its whole allowance reserved, never beside a module call.
+    const revisions = L({ revisions: 1 }, 6);
     const m = revisions.reserveModule('author', 'a');
     assert.deepEqual(revisions.reserveRevision(), { ok: false, budget: 'concurrent', used: 1, limit: 0 }, 'no revision overlaps a module call');
     revisions.dispatched(m.reservation);
@@ -479,6 +481,30 @@ test('EA-K5 P5: each budget at B runs and at B+1 refuses before its call, the ou
     assert.deepEqual(revisions.reserveRevision(), { ok: false, budget: 'revisions', used: 1, limit: 1 });
     assert.deepEqual(L({}, 29).reserveRevision(), { ok: false, budget: 'calls', used: 29, limit: 34 }, 'its six must fit');
     assert.ok(L({}, 28).reserveRevision().ok);
+    // Q_C's own three: at 3 a fourth refuses, and the calls refuse first when three revisions' 18 do not fit.
+    const three = L({}, 6);
+    for (let i = 0; i < 3; i++) {
+        const r = three.reserveRevision();
+        assert.ok(r.ok, `revision ${i + 1}`);
+        three.dispatched(r.reservation);
+        three.settle(r.reservation, 1);
+    }
+    assert.deepEqual(three.reserveRevision(), { ok: false, budget: 'revisions', used: 3, limit: 3 });
+    const tight = L({}, 6 + 12 + 10);
+    const first = tight.reserveRevision();
+    assert.ok(first.ok, 'the turn, every author and every repair, then one revision: 34');
+    tight.dispatched(first.reservation);
+    tight.settle(first.reservation, 6);
+    assert.deepEqual(tight.reserveRevision(), { ok: false, budget: 'calls', used: 34, limit: 34 }, 'three revisions are ceilings, not three turns');
+    // visual rounds (EA6, B_v): 2; a round returned when its revision never went out; an older limits object has none.
+    const rounds = L();
+    assert.deepEqual([rounds.reserveVisualRound(), rounds.reserveVisualRound()], [{ ok: true }, { ok: true }]);
+    assert.deepEqual(rounds.reserveVisualRound(), { ok: false, budget: 'visual-rounds', used: 2, limit: 2 });
+    rounds.returnVisualRound();
+    assert.equal(rounds.state.visualRounds, 1);
+    assert.deepEqual(rounds.reserveVisualRound(), { ok: true });
+    const { visualRounds: _none, ...older } = Q_C;
+    assert.deepEqual(new Ledger(older, 0).reserveVisualRound(), { ok: false, budget: 'visual-rounds', used: 0, limit: 0 }, 'no limit given is no round, the safe direction');
     // Only a reservation never dispatched returns; a dispatched one whose end is not seen is counted, never zero.
     const spent = L();
     const undispatched = spent.reserveModule('author', 'a');
@@ -588,7 +614,7 @@ test('EA-K8 a resolve failure is addressable before X; two bodies failing under 
     assert.deepEqual([record.verdict, record.subject.graph, record.subject.module], ['fail', null, null]);
     assert.match(record.subject.programHash, /^[0-9a-f]{64}$/);
     assert.deepEqual(record.findings.map(f => [f.id, f.code, f.path]), [[`${record.id}.f1`, 'EA_RESOLVE', '/nodes/1/config/elements']]);
-    assert.deepEqual(reviser.calls[0].findings.map(f => f.id), [`${record.id}.f1`]);
+    assert.deepEqual(reviser.calls[0].findings.map(f => f.id), [`${record.id}.f1`, 'q_c.repairs']);
     assert.equal(reviser.calls[0].subject.graph, null);
     assert.deepEqual([end.phase, end.stop.scope], ['failed', 'program']);
     assert.match(end.stop.diagnostic, /^the program revision ended declined: cannot seed the field$/);
@@ -670,7 +696,7 @@ test('EA-K9 the ledger under concurrency and revisions: no oversubscription, no 
     assert.deepEqual(end.jobs.map(j => [j.module, j.status, j.charge]), [['motion', 'cancelled', 'unknown']]);
 
     // A revision after four authors: the module it changes cannot be authored a fifth time.
-    const reviser = fakeReviser([{ status: 'handed-off', turnId: 'turn-2', design: DESIGN, program: { nodes: motionAt(32, four()) }, calls: 2 }]);
+    const reviser = fakeReviser([{ status: 'handed-off', turnId: 'turn-2', design: DESIGN, program: { nodes: motionAt(32, four()) }, repairs: [], calls: 2 }]);
     const fourRun = session({ revise: reviser.revise, limits: { ...Q_C, authors: 4 } });
     const first = await fourRun.s.start(handOff(four()));
     assert.equal(first.phase, 'static-verified');
@@ -697,7 +723,7 @@ test('EA-K9 the ledger under concurrency and revisions: no oversubscription, no 
 test('EA-K10 the checker\'s version, a concurrent result, exact reuse: re-checked with no call, accepted, re-authored when renamed', async () => {
     // The checker's version moves: reused bodies are judged again by the current checker, with no model call.
     const checker = { version: 'ea4-body.v1', check: (iface, answer) => checkBody(iface, answer) };
-    const same = fakeReviser([{ status: 'handed-off', turnId: 'turn-2', design: DESIGN, program: { nodes: world() }, calls: 1 }]);
+    const same = fakeReviser([{ status: 'handed-off', turnId: 'turn-2', design: DESIGN, program: { nodes: world() }, repairs: [], calls: 1 }]);
     const { s, modules } = session({ checker, revise: same.revise });
     const first = await s.start(handOff());
     checker.version = 'ea4-body.v2';
@@ -725,7 +751,7 @@ test('EA-K10 the checker\'s version, a concurrent result, exact reuse: re-checke
 
     // Reuse is exact: a renamed module (the same body would do) is authored again.
     const renamed = world().map(n => (n.id === 'sky' ? { ...n, config: JSON.stringify({ module: 'sky2', fragmentEntry: 'dusk' }) } : n));
-    const rename = fakeReviser([{ status: 'handed-off', turnId: 'turn-2', design: DESIGN, program: { nodes: renamed }, calls: 1 }]);
+    const rename = fakeReviser([{ status: 'handed-off', turnId: 'turn-2', design: DESIGN, program: { nodes: renamed }, repairs: [], calls: 1 }]);
     const third = session({ revise: rename.revise });
     const before = await third.s.start(handOff());
     const v = third.s.visual({ verdict: 'fail', producedBy: 'creator', findings: [{ code: 'rename', message: 'call it sky2' }] });
@@ -777,7 +803,7 @@ test('EA-K13 no module, a revision that changes S or asks, a finding in the host
     const bad = world();
     bad[1] = node('field', 'ng.buffer.storage', { elements: 0, layout: 'f32', strideFloats: 4, pingPong: true, init: 'zero' });
     for (const [label, result, scope, says] of [
-        ['a changed design', { status: 'handed-off', turnId: 'turn-2', design: { ...DESIGN, intent: 'a forest instead' }, program: { nodes: world() }, calls: 3 }, 'design',
+        ['a changed design', { status: 'handed-off', turnId: 'turn-2', design: { ...DESIGN, intent: 'a forest instead' }, program: { nodes: world() }, repairs: [], calls: 3 }, 'design',
             /^the program revision changed the design \(S\), which a program revision may not: no replacement$/],
         ['a question', { status: 'asked', reason: 'Which blocks?', calls: 1 }, 'program', /^the program revision ended asked: Which blocks\?$/],
         ['a refusal', { status: 'declined', reason: 'cannot', calls: 2 }, 'program', /^the program revision ended declined: cannot$/],
@@ -864,7 +890,7 @@ test('EA-D4b EA5.1: the device\'s L3 in the candidate session; its verdicts kept
 
     // A program revision that changes motion's interface: motion compiled again, the others reused with their verdicts,
     // the very objects, so still the device's own.
-    const reviser = fakeReviser([{ status: 'handed-off', turnId: 'turn-2', design: DESIGN, program: { nodes: motionAt(32) }, calls: 1 }]);
+    const reviser = fakeReviser([{ status: 'handed-off', turnId: 'turn-2', design: DESIGN, program: { nodes: motionAt(32) }, repairs: [], calls: 1 }]);
     const revising = session({ compiler, revise: reviser.revise });
     const firstEnd = await revising.s.start(handOff());
     const before = revising.s.compiled;
@@ -910,4 +936,185 @@ test('EA-D4b EA5.1: the device\'s L3 in the candidate session; its verdicts kept
     assert.match(lostEnd.stop.diagnostic, /L3 with no line: L3 could not judge this module on this device: the device was lost \(reset\); no module is accused$/);
     assert.equal(lostRun.modules.calls.filter(c => c.purpose === 'repair').length, 0);
     assert.ok(assembleModule(I.motion, BODIES.motion).source.includes(BODIES.motion), 'the device compiles the assembled module');
+});
+
+// EA-VR4, the machine's half (EA6.3; visual-review-design.md §8.2, Q111 (a)): a program revision's notes to its modules,
+// held whole to the revised program's interfaces, then each routed where its module is. The contract's half (the schema,
+// the reader, the module call's note) is in agent-contract, agent-stream and module-client.
+
+/** A first candidate of the EA-I world, then one program correction citing a creator's words, answered by `result`. */
+async function revisedBy(result, deps = {}) {
+    const reviser = fakeReviser(Array.isArray(result) ? result : [result]);
+    const run = session({ revise: reviser.revise, ...deps });
+    const first = await run.s.start(handOff());
+    assert.equal(first.phase, 'static-verified', JSON.stringify(first.stop));
+    const visual = run.s.visual({ verdict: 'fail', producedBy: 'creator', findings: [{ code: 'creator', message: 'the blocks bunch up under a bright sky' }] });
+    const corrected = await run.s.correct({ base: baseOf(first), scope: 'program', changes: [], findingsAddressed: [visual.findings[0].id] });
+    assert.equal(corrected.ok, true, corrected.diagnostic);
+    return { ...run, reviser, first, visual, end: corrected.state };
+}
+const notesOf = (st) => st.evidence.filter(e => e.findings.some(f => f.code === NOTE_CODE));
+const DARKER = BODIES.sky.replace('0.4 + f', '0.2 + f');
+const handed = (nodes, repairs) => ({ status: 'handed-off', turnId: 'turn-2', design: DESIGN, program: { nodes }, repairs, calls: 1 });
+
+test('EA-VR4c a revision\'s notes go where their modules are: a kept body repaired with its note, about that very body; a rewired module authored with its note, once; the rest reused with no call', async () => {
+    const notes = [{ module: 'motion', message: 'Spread the blocks twice as wide.' }, { module: 'sky', message: 'Darken the sky toward the horizon.' }];
+    const { modules, first, visual, end } = await revisedBy(handed(motionAt(32), notes), { modules: fakeModules({ sky: [BODIES.sky, DARKER] }) });
+    assert.equal(end.phase, 'static-verified', JSON.stringify(end.stop));
+    // motion's interface changed: written again, with its note, once, and not repaired after; sky's body kept: repaired
+    // with its note; water's kept and named by no note: reused, no call.
+    const later = modules.calls.slice(3);
+    assert.deepEqual(later.map(c => [c.module.id, c.purpose, c.note]).sort(), [['motion', 'author', notes[0].message], ['sky', 'repair', null]]);
+    assert.equal(later.find(c => c.module.id === 'motion').previous, null);
+    const sky = first.modules.find(m => m.module === 'sky');
+    const repair = later.find(c => c.purpose === 'repair');
+    assert.deepEqual([repair.previous.body, repair.previous.codeHash, repair.subject.codeHash], [sky.body, sky.codeHash, sky.codeHash], 'about that very body');
+    assert.deepEqual(repair.previous.findings.map(f => [f.code, f.rung, f.severity, f.line, f.message]), [[NOTE_CODE, 'note', 'warning', null, noteMessage(notes[1].message)]]);
+    assert.ok(noteMessage('x'.repeat(300)).length <= 400, 'a note fits the backend\'s finding');
+    // Each note recorded once: the model's instruction, never a verdict, about the module as it now is, linked to what
+    // the revision answered; the kept body's is what its repair cites.
+    const recorded = notesOf(end);
+    assert.deepEqual(recorded.map(e => [e.subject.module, e.phase, e.verdict, e.producedBy, e.refs, e.subject.codeHash]), [
+        ['motion', 'visual', 'unverified', 'model', [visual.id], null],
+        ['sky', 'visual', 'unverified', 'model', [visual.id], sky.codeHash],
+    ]);
+    assert.deepEqual(repair.previous.evidenceIds, [recorded[1].id]);
+    assert.equal(end.modules.find(m => m.module === 'sky').codeHash, sha(DARKER), 'the repaired body is the candidate\'s');
+    assert.deepEqual(end.modules.map(m => [m.module, m.note]), [['motion', null], ['sky', null], ['water', null]], 'a note is written with once');
+    assert.deepEqual([end.budget.authors, end.budget.repairs, end.budget.revisions], [4, 1, 1]);
+});
+
+test('EA-VR4d a plan naming a module the revised program lacks, or one twice, is refused whole before any call; so is one Q_C cannot hold', async () => {
+    for (const [label, result, says] of [
+        ['a module the program does not name', handed(motionAt(32), [{ module: 'nowhere', message: 'Brighter.' }]),
+            /^EA_RESOLVE moduleRepairs\[0\]: nowhere is not a module of the revised program; plan refused$/],
+        ['a module the revision removed', handed(world().filter(n => n.id !== 'water'), [{ module: 'sky', message: 'Darker.' }, { module: 'water', message: 'Calmer.' }]),
+            /^EA_RESOLVE moduleRepairs\[1\]: water is not a module of the revised program; plan refused$/],
+        ['a module twice', handed(world(), [{ module: 'sky', message: 'Darker.' }, { module: 'sky', message: 'Bluer.' }]),
+            /^EA_RESOLVE moduleRepairs\[1\]: sky has a note already; plan refused$/],
+    ]) {
+        const { modules, first, end } = await revisedBy(result);
+        assert.deepEqual([end.phase, end.stop?.scope, end.stop?.sentence], ['failed', 'program', COPY.candidate.planRefused], label);
+        assert.match(end.stop.diagnostic, says, label);
+        assert.equal(modules.calls.length, 3, `${label}: no call after the revision, not even an author its program needs`);
+        assert.equal(notesOf(end).length, 0, `${label}: nothing of the plan applied`);
+        assert.deepEqual(end.verified, first.verified, `${label}: the last checked candidate is still the first`);
+    }
+
+    // Q_C (§8.3): the repairs the notes add must fit what is left, or none goes. Two kept bodies, one repair left.
+    const tight = await revisedBy(handed(world(), [{ module: 'sky', message: 'Darker.' }, { module: 'water', message: 'Calmer.' }]), { limits: { ...Q_C, repairs: 1 } });
+    assert.deepEqual([tight.end.phase, tight.end.stop.scope, tight.end.stop.sentence], ['exhausted', 'budget', COPY.candidate.budget]);
+    assert.equal(tight.end.stop.diagnostic, 'EA_TURN_BUDGET repairs: 0 of 1: the plan needs 2 more repairs; plan refused');
+    assert.equal(tight.modules.calls.length, 3);
+    // A module whose repairs are spent: sky repaired twice already, so its note cannot be answered.
+    const spent = await revisedBy(handed(world(), [{ module: 'sky', message: 'Darker.' }]), { modules: fakeModules({ sky: [FAULT.sky, FAULT.sky, BODIES.sky] }) });
+    assert.equal(spent.first.budget.moduleRepairs.sky, 2);
+    assert.equal(spent.end.stop.diagnostic, 'EA_TURN_BUDGET repairs-per-module: 2 of 2 (sky): the plan needs 1 more repair; plan refused');
+    // The revision had been told, as its last finding (the independent review of EA6.3): it wrote a note sky could not take.
+    assert.deepEqual([spent.reviser.calls[0].findings.at(-1).code, spent.reviser.calls[0].findings.at(-1).message], [REPAIR_BUDGET_CODE,
+        'This attempt can still repair 8 module bodies with notes, and none for sky, whose repairs are spent: a plan past that is refused whole, before any of it is done.']);
+    assert.equal(spent.modules.calls.length, 5, 'its author, its two repairs, the others\' authors, and nothing after');
+});
+
+test('EA-VR4e a plan rides only on the program its own turn handed off: a revision the browser refuses takes its notes with it', async () => {
+    const bad = world();
+    bad[1] = node('field', 'ng.buffer.storage', { elements: 0, layout: 'f32', strideFloats: 4, pingPong: true, init: 'zero' });
+    const { modules, reviser, end } = await revisedBy([
+        { ...handed(bad, [{ module: 'sky', message: 'Darker.' }]) },
+        { ...handed(world(), []), turnId: 'turn-3' },
+    ]);
+    assert.equal(end.phase, 'static-verified', JSON.stringify(end.stop));
+    assert.equal(reviser.calls.length, 2, 'the browser refused the first revision\'s program, and a second revision answered it');
+    assert.equal(modules.calls.length, 3, 'no repair: the notes went with the program that was refused');
+    assert.equal(notesOf(end).length, 0);
+});
+
+test('EA-VR4h a kept body its recheck refuses is repaired once, answering what the check found and the note beside it', async () => {
+    // A checker whose next version refuses sky's first body: the revision's resolve judges every kept body again (EA-K10).
+    const checker = {
+        version: 'checker-1',
+        async check(iface, answer) {
+            const c = await checkBody(iface, answer);
+            if (this.version !== 'checker-2' || answer !== BODIES.sky) return c;
+            // Thirty-two errors: the backend's whole bound, so a note sorted after them would be the one cut.
+            const strict = Array.from({ length: 32 }, (_, i) => ({ code: 'strict', line: 2, severity: 'error', message: `checker-2 refuses this line (${i + 1})`, rung: 'L1' }));
+            return { ...c, ok: false, findings: [...c.findings, ...strict] };
+        },
+    };
+    const reviser = fakeReviser([handed(world(), [{ module: 'sky', message: 'Darken the sky toward the horizon.' }])]);
+    const run = session({ revise: reviser.revise, checker, modules: fakeModules({ sky: [BODIES.sky, DARKER] }) });
+    const first = await run.s.start(handOff());
+    assert.equal(first.phase, 'static-verified');
+    checker.version = 'checker-2';
+    const visual = run.s.visual({ verdict: 'fail', producedBy: 'creator', findings: [{ code: 'creator', message: 'too bright' }] });
+    const corrected = await run.s.correct({ base: baseOf(first), scope: 'program', changes: [], findingsAddressed: [visual.findings[0].id] });
+    const end = corrected.state;
+    assert.equal(end.phase, 'static-verified', JSON.stringify(end.stop));
+    const later = run.modules.calls.slice(3);
+    assert.deepEqual(later.map(c => [c.module.id, c.purpose]), [['sky', 'repair']], 'one repair answers both');
+    const sent = later[0].previous.findings;
+    assert.deepEqual([sent.length, sent[0].code, sent[0].severity], [33, NOTE_CODE, 'warning'], 'the note first, then the check\'s 32');
+    assert.ok(sent.slice(1).every(f => f.code === 'strict' && f.severity === 'error'));
+    assert.equal(end.budget.repairs, 1);
+});
+
+test('EA-VR4i after a revision, its known module work must fit Q_C before any of it starts: no note\'s repair is paid for ahead of an author Q_C refuses, whichever comes first', async () => {
+    // The first attempt writes its three modules with Q_C's last three authors.
+    const renamedSky = world().map(n => (n.id === 'sky' ? { ...n, config: JSON.stringify({ module: 'sky2', fragmentEntry: 'dusk' }) } : n));
+    for (const [label, nodes, noted] of [
+        ['the noted body first (motion), the module to write last (sky2)', renamedSky, 'motion'],
+        ['the module to write first (motion), the noted body last (sky)', motionAt(32), 'sky'],
+    ]) {
+        const { modules, first, end } = await revisedBy(handed(nodes, [{ module: noted, message: 'Darker.' }]), { limits: { ...Q_C, authors: 3 } });
+        assert.equal(first.budget.authors, 3, label);
+        assert.deepEqual([end.phase, end.stop?.scope, end.stop?.diagnostic, end.stop?.sentence], ['exhausted', 'budget', 'EA_TURN_BUDGET authors: 3 of 3', COPY.candidate.budget], label);
+        assert.equal(modules.calls.length, 3, `${label}: nothing after the revision, not even the note's repair`);
+        assert.equal(notesOf(end).length, 0, `${label}: nothing of the plan applied`);
+        assert.deepEqual(end.verified, first.verified, `${label}: the last checked candidate is still the first`);
+    }
+    // A revision's own program past what is left starts nothing either, plan or none: one repair left, two bodies to repair.
+    const strict = {
+        version: 'checker-1',
+        async check(iface, answer) {
+            const c = await checkBody(iface, answer);
+            return this.version === 'checker-2' && answer !== BODIES.motion ? { ...c, ok: false, findings: [...c.findings, { code: 'strict', line: 1, severity: 'error', message: 'refused', rung: 'L1' }] } : c;
+        },
+    };
+    const reviser = fakeReviser([handed(world(), [])]);
+    const run = session({ revise: reviser.revise, checker: strict, limits: { ...Q_C, repairs: 1 } });
+    const first = await run.s.start(handOff());
+    strict.version = 'checker-2';
+    const visual = run.s.visual({ verdict: 'fail', producedBy: 'creator', findings: [{ code: 'creator', message: 'again' }] });
+    const end = (await run.s.correct({ base: baseOf(first), scope: 'program', changes: [], findingsAddressed: [visual.findings[0].id] })).state;
+    assert.deepEqual([end.phase, end.stop?.diagnostic], ['exhausted', 'EA_TURN_BUDGET repairs: 0 of 1']);
+    assert.equal(run.modules.calls.length, 3, 'no repair started for the one of two that would have fit');
+});
+
+test('EA-VR4j a revision whose program the browser refuses hands the next its notes, set aside, and what it was for; the budget is told to each, and left out when it binds nothing', async () => {
+    const bad = world();
+    bad[1] = node('field', 'ng.buffer.storage', { elements: 0, layout: 'f32', strideFloats: 4, pingPong: true, init: 'zero' });
+    const note = { module: 'sky', message: 'Darken the sky toward the horizon.' };
+    const { modules, reviser, visual, end } = await revisedBy([
+        handed(bad, [note]),
+        // The next revision, told of the note, names it again with the program it fixed.
+        { ...handed(world(), [note]), turnId: 'turn-3' },
+    ], { modules: fakeModules({ sky: [BODIES.sky, DARKER] }) });
+    assert.equal(end.phase, 'static-verified', JSON.stringify(end.stop));
+    const second = reviser.calls[1].findings;
+    // The note set aside, first; then what the browser found; then what the first revision answered; the budget last.
+    assert.deepEqual(second.map(f => f.code), [SET_ASIDE_CODE, 'EA_RESOLVE', 'creator', REPAIR_BUDGET_CODE]);
+    assert.equal(second[0].message, 'sky: Darken the sky toward the horizon.');
+    assert.equal(second[2].id, visual.findings[0].id, 'the creator\'s words, as they were');
+    const aside = end.evidence.find(e => e.findings.some(f => f.code === SET_ASIDE_CODE));
+    assert.deepEqual([aside.phase, aside.verdict, aside.producedBy, aside.refs], ['visual', 'unverified', 'model', [visual.id]]);
+    // Named again, it is applied to the program that passed: sky repaired with it, once.
+    assert.deepEqual(modules.calls.slice(3).map(c => [c.module.id, c.purpose, c.previous?.findings[0].code]), [['sky', 'repair', NOTE_CODE]]);
+    assert.equal(end.modules.find(m => m.module === 'sky').codeHash, sha(DARKER));
+
+    // A budget no plan of the schema's size could reach is not said, unless a module can take no note at all.
+    const roomy = await revisedBy(handed(world(), []), { limits: { ...Q_C, repairs: 20, calls: 60 } });
+    assert.ok(roomy.reviser.calls[0].findings.every(f => f.code !== REPAIR_BUDGET_CODE));
+    const roomyButSpent = await revisedBy(handed(world(), []), { limits: { ...Q_C, repairs: 20, calls: 60 }, modules: fakeModules({ sky: [FAULT.sky, FAULT.sky, BODIES.sky] }) });
+    assert.equal(roomyButSpent.reviser.calls[0].findings.at(-1).message,
+        'This attempt can still repair 18 module bodies with notes, and none for sky, whose repairs are spent: a plan past that is refused whole, before any of it is done.');
 });

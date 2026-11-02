@@ -67,7 +67,7 @@ test('EA-MR1 a revision is one turn: the three fields and a base of this build\'
     assert.deepEqual(Object.keys(sent), ['prompt', 'style', 'seconds', 'base']);
     assert.deepEqual({ prompt: sent.prompt, style: sent.style, seconds: sent.seconds }, R, 'R verbatim');
     assert.deepEqual(Object.keys(sent.base), ['versions', 'design', 'program', 'findings']);
-    assert.deepEqual(sent.base.versions, { actionSchema: 'agent-action.v2', bundle: ENGINE_BUNDLE_HASH, manifest: ADAPTER_MANIFEST_HASH });
+    assert.deepEqual(sent.base.versions, { actionSchema: 'agent-action.v3', bundle: ENGINE_BUNDLE_HASH, manifest: ADAPTER_MANIFEST_HASH });
     assert.deepEqual(sent.base.versions, { ...TURN_VERSIONS });
     assert.deepEqual([sent.base.design, sent.base.program], [DESIGN, BASE_PROGRAM], 'S and W as handed off');
     // Cut to the backend's caps (AgentBase), so a base is never refused for a finding's length or their number.
@@ -76,8 +76,8 @@ test('EA-MR1 a revision is one turn: the three fields and a base of this build\'
     assert.deepEqual(sent.base.findings[1], { id: 'x'.repeat(64), code: 'c'.repeat(40), path: `/${'p'.repeat(199)}`, message: 'm'.repeat(400) });
     // The recorded revision: one call, the revise; its hand-off with the revision's own turn id and that call.
     assert.deepEqual(eventData(REVISED, 'call').map(c => c.purpose), ['revise']);
-    assert.deepEqual(eventData(REVISED, 'meta')[0].promptVersion, 'agent.v5');
-    assert.deepEqual(result, { status: 'handed-off', turnId: 'turn-1', design: DESIGN, program: PROGRAM, calls: 1 });
+    assert.deepEqual(eventData(REVISED, 'meta')[0].promptVersion, 'agent.v6');
+    assert.deepEqual(result, { status: 'handed-off', turnId: 'turn-1', design: DESIGN, program: PROGRAM, repairs: [], calls: 1 });
     // A first turn still sends its three fields alone.
     const first = fakeFetch(res(wire('asked.sse')));
     await createAgentClient(createApi(CONFIG, identity(), first.fetchImpl)).turn(R, () => {}, new AbortController().signal);
@@ -161,7 +161,7 @@ test('EA-MR3 a program the browser refuses is revised over the recorded wire, re
     const sent = JSON.parse(requests[0].body);
     assert.deepEqual([sent.prompt, sent.style, sent.seconds], [R.prompt, R.style, R.seconds]);
     assert.deepEqual([sent.base.design, sent.base.program], [DESIGN, BASE_PROGRAM]);
-    assert.deepEqual(sent.base.findings.map(f => [f.id, f.code, f.path]), refusal.findings.map(f => [f.id, f.code, f.path]));
+    assert.deepEqual(sent.base.findings.map(f => [f.id, f.code, f.path]), [...refusal.findings.map(f => [f.id, f.code, f.path]), ['q_c.repairs', 'EA_REPAIR_BUDGET', null]]);
     assert.match(sent.base.findings[0].message, /^step cannot be an entry/);
     // W replaced whole and resolved again; its module authored under the revision's turn, once.
     assert.deepEqual(end.program, PROGRAM);
@@ -206,14 +206,15 @@ test('EA-MR5 the EA4.5 review: the hand-off\'s turn and a revision\'s are kept, 
     assert.equal(end.phase, 'static-verified', JSON.stringify(end.stop));
     assert.deepEqual(end.turns, [
         { role: 'hand-off', turnId: 'turn-0', revision: 0, status: 'handed-off', model: 'muse-spark-1.3', promptVersion: 'agent.v5', charge: 'known', calls: TURN_CALLS, error: null },
-        { role: 'revision', turnId: 'turn-1', revision: 1, status: 'handed-off', model: 'muse-spark-1.3', promptVersion: 'agent.v5', charge: 'known', calls: [revisionCall], error: null },
+        { role: 'revision', turnId: 'turn-1', revision: 1, status: 'handed-off', model: 'muse-spark-1.3', promptVersion: 'agent.v6', charge: 'known', calls: [revisionCall], error: null },
     ]);
     // Q_C reconciles from the records: each call it settled has one, the turns' and the module job's.
     assert.equal(end.turns.reduce((n, t) => n + t.calls.length, 0) + end.jobs.length, end.budget.calls.settled);
     const bundle = candidateBundle(end);
     assert.equal(bundle.format, 'wexy-candidate-bundle.v2');
     assert.deepEqual(bundle.calls.turns, end.turns);
-    assert.deepEqual(bundle.versions.templates, ['agent.v5', 'module.author.v1']);
+    // The hand-off's template (this test's), the revision's as recorded (agent.v6 since EA6.3), the module's (this test's).
+    assert.deepEqual(bundle.versions.templates, ['agent.v5', 'agent.v6', 'module.author.v1']);
     const spent = [...bundle.calls.turns.flatMap(t => t.calls), ...bundle.calls.jobs].reduce((sum, c) => sum + c.costMicroUsd, 0);
     assert.equal(spent, 3 * 46_000 + 46_000 + 1_000, 'the hand-off\'s three calls, the revision\'s one, the author');
 
@@ -223,7 +224,7 @@ test('EA-MR5 the EA4.5 review: the hand-off\'s turn and a revision\'s are kept, 
     assert.deepEqual([failed.phase, failed.budget.calls], ['failed', { settled: 3, reserved: 0, unknown: 6 }]);
     const said = eventData(wire('error-upstream.sse'), 'error')[0].message;
     assert.deepEqual(failed.turns[1], {
-        role: 'revision', turnId: 'turn-1', revision: 1, status: 'broken', model: 'muse-spark-1.3', promptVersion: 'agent.v5', charge: 'unknown',
+        role: 'revision', turnId: 'turn-1', revision: 1, status: 'broken', model: 'muse-spark-1.3', promptVersion: 'agent.v6', charge: 'unknown',
         calls: [{ ...revisionCall, purpose: 'first' }, { ...revisionCall, n: 2, purpose: 'repair', generationId: 'gen-2' }], error: said,
     });
     assert.equal(candidateBundle(failed).calls.turns[1].charge, 'unknown');
@@ -250,7 +251,7 @@ test('EA-MR5 the EA4.5 review: the hand-off\'s turn and a revision\'s are kept, 
             await gate;
             onEvent({ type: 'usage', usage: { n: 1, generationId: 'gen-late', in: 1, out: 1, reasoning: null, cached: null, costMicroUsd: 46_000 } });
             onEvent({ type: 'call', call: { n: 2, purpose: 'repair' } });
-            return { status: 'handed-off', turnId: 'turn-1', design: DESIGN, program: PROGRAM, calls: 2 };
+            return { status: 'handed-off', turnId: 'turn-1', design: DESIGN, program: PROGRAM, repairs: [], calls: 2 };
         };
         const states = [];
         const cancelled = createCandidateSession({ modules: fakeModules(), revise: reviser, attemptId: () => 'attempt-c', now: () => 1_000 }, s => states.push(s));
@@ -318,4 +319,24 @@ test('EA-MR4 the EA4.4 review: a base is cut to the backend\'s bound; the findin
     assert.ok(cut.findings[0].message.length < longFinding(0).message.length && longFinding(0).message.startsWith(cut.findings[0].message));
     assert.deepEqual({ ...cut.findings[0], message: null }, { ...longFinding(0), message: null });
     assert.deepEqual(cut.program, tight);
+});
+
+test('EA-MR6 a revision\'s notes to its modules (EA6.3) reach the machine as its stream had them, checked; a first turn\'s stream with notes is refused', async () => {
+    const notes = eventData(wire('revised-notes.sse'), 'repairs')[0].repairs;
+    assert.deepEqual(notes, [{ module: 'place', message: 'Lower every block by 2 units, so they stand on the ground.' }]);
+    const result = await reviserOver(res(wire('revised-notes.sse'))).revise(request(), new AbortController().signal);
+    assert.deepEqual([result.status, result.repairs], ['handed-off', notes]);
+    // The same stream answering a first turn: no base, so no code to repair, and the reader refuses it.
+    const first = fakeFetch(res(wire('revised-notes.sse')));
+    const refused = await createAgentClient(createApi(CONFIG, identity(), first.fetchImpl)).turn(R, () => {}, new AbortController().signal).catch(e => e);
+    assert.match(String(refused?.message), /a first turn handed off repairs/);
+});
+
+test('EA-MR7 a base finding is cut in code points, as the backend counts it: emoji kept whole, never half of one (the independent review of EA6.3)', async () => {
+    const { revise, requests } = reviserOver(res(REVISED));
+    const castles = { id: 'ev-9.f1', code: 'creator', path: null, message: '\u{1F3F0}'.repeat(450) };
+    await revise(request({ findings: [FINDING, castles] }), new AbortController().signal);
+    const sent = JSON.parse(requests[0].body).base.findings[1].message;
+    assert.deepEqual([[...sent].length, sent.length], [400, 800]);
+    assert.equal(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(sent), false, 'no lone half of a pair');
 });

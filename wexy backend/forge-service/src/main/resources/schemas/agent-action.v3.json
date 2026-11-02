@@ -1,0 +1,537 @@
+{
+  "title": "Wexy agent action, v3",
+  "description": "One action of the engine-aware agent, its program made of adapter nodes (the agent-loop design §5.2; the frontend's engine-adapters design §16), and since v3 a revision's notes to modules whose code must change (the frontend's visual-review design §8.2). Every key is present; a key the kind does not use is null.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "context",
+    "design",
+    "program",
+    "modules",
+    "revision",
+    "question",
+    "finish"
+  ],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": [
+        "need_context",
+        "propose_design",
+        "propose_program",
+        "propose_design_and_program",
+        "propose_modules",
+        "revise",
+        "ask",
+        "finish"
+      ]
+    },
+    "context": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "requests"
+          ],
+          "properties": {
+            "requests": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 6,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "tool",
+                  "docId",
+                  "symbolId",
+                  "query",
+                  "family",
+                  "startLine",
+                  "lineCount",
+                  "why"
+                ],
+                "properties": {
+                  "tool": {
+                    "type": "string",
+                    "enum": [
+                      "read_doc",
+                      "inspect_api",
+                      "search_docs",
+                      "read_example"
+                    ]
+                  },
+                  "docId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 60
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "symbolId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 80
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "query": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 120
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "family": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 40
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "startLine": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lineCount": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 160
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "why": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "design": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "intent",
+            "interpretation",
+            "assumptions",
+            "visualElements",
+            "motion",
+            "animated",
+            "techniques",
+            "resourceFlow",
+            "cameraAndTiming",
+            "controls",
+            "successCriteria",
+            "unresolved"
+          ],
+          "properties": {
+            "intent": {
+              "type": "string",
+              "maxLength": 400,
+              "description": "The creator's idea restated: what is there, and how it moves."
+            },
+            "interpretation": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 400
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How an ambiguous request was read; null when it is plain."
+            },
+            "assumptions": {
+              "type": "array",
+              "maxItems": 8,
+              "items": {
+                "type": "string",
+                "maxLength": 240
+              }
+            },
+            "visualElements": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 12,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "description"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 60
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 300
+                  }
+                }
+              }
+            },
+            "motion": {
+              "type": "string",
+              "maxLength": 400
+            },
+            "techniques": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 12,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "purpose",
+                  "symbols",
+                  "docIds"
+                ],
+                "properties": {
+                  "purpose": {
+                    "type": "string",
+                    "maxLength": 240
+                  },
+                  "symbols": {
+                    "type": "array",
+                    "maxItems": 12,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 80
+                    },
+                    "description": "Engine exports as family:Name."
+                  },
+                  "docIds": {
+                    "type": "array",
+                    "maxItems": 6,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 60
+                    }
+                  }
+                }
+              }
+            },
+            "resourceFlow": {
+              "type": "array",
+              "maxItems": 12,
+              "items": {
+                "type": "string",
+                "maxLength": 240
+              }
+            },
+            "cameraAndTiming": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "controls": {
+              "type": "array",
+              "maxItems": 8,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "effect"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "effect": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                }
+              }
+            },
+            "successCriteria": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": {
+                "type": "string",
+                "maxLength": 240
+              }
+            },
+            "unresolved": {
+              "type": "array",
+              "maxItems": 8,
+              "items": {
+                "type": "string",
+                "maxLength": 300
+              }
+            },
+            "animated": {
+              "type": "boolean",
+              "description": "Whether anything moves besides the host's camera; an animated world needs a node that moves it."
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "program": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "nodes"
+          ],
+          "properties": {
+            "nodes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "description": "The world as adapter nodes, in any order; a node names what feeds it in its inputs.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "adapterId",
+                  "adapterVersion",
+                  "config",
+                  "inputs"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "maxLength": 40,
+                    "description": "Unique in the program: a lower-case letter, then letters, digits, - or _."
+                  },
+                  "adapterId": {
+                    "type": "string",
+                    "enum": [
+                      "ng.buffer.storage",
+                      "ng.compute.stage",
+                      "ng.geometry.primitive",
+                      "ng.material.stock",
+                      "ng.light.rig",
+                      "ng.render.mesh_batch",
+                      "ng.render.custom_batch",
+                      "ng.render.fullscreen",
+                      "ng.post.chain"
+                    ]
+                  },
+                  "adapterVersion": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 99,
+                    "description": "Exactly the adapter's version, as the adapters list it."
+                  },
+                  "config": {
+                    "type": "string",
+                    "maxLength": 4096,
+                    "description": "The adapter's config as JSON text, matching its config schema."
+                  },
+                  "inputs": {
+                    "type": "array",
+                    "maxItems": 16,
+                    "description": "What feeds this node: each of its input ports wired to another node's output.",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "port",
+                        "nodeId",
+                        "output"
+                      ],
+                      "properties": {
+                        "port": {
+                          "type": "string",
+                          "maxLength": 40,
+                          "description": "One of this node's adapter's input ports."
+                        },
+                        "nodeId": {
+                          "type": "string",
+                          "maxLength": 40,
+                          "description": "The id of the node that feeds it."
+                        },
+                        "output": {
+                          "type": "string",
+                          "maxLength": 40,
+                          "description": "That node's output port."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "modules": {
+      "anyOf": [
+        {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "wgsl"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 40
+              },
+              "wgsl": {
+                "type": "string",
+                "maxLength": 12000
+              }
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "revision": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scope",
+            "changes",
+            "moduleRepairs"
+          ],
+          "properties": {
+            "scope": {
+              "type": "string",
+              "enum": [
+                "controls",
+                "modules",
+                "program",
+                "design"
+              ]
+            },
+            "changes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 12,
+              "items": {
+                "type": "string",
+                "maxLength": 300
+              }
+            },
+            "moduleRepairs": {
+              "type": "array",
+              "maxItems": 12,
+              "description": "Modules the revised program keeps from the one it revises, with the same inputs, whose code must change: each named once, with what its code must do differently. Empty when no module's code must change.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "module",
+                  "message"
+                ],
+                "properties": {
+                  "module": {
+                    "type": "string",
+                    "maxLength": 40,
+                    "description": "A module the program names, as its nodes' config names it."
+                  },
+                  "message": {
+                    "type": "string",
+                    "maxLength": 300,
+                    "description": "What the module's code must do differently, in a sentence or two."
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "question": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 400
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "finish": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "summary"
+          ],
+          "properties": {
+            "summary": {
+              "type": "string",
+              "maxLength": 600
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

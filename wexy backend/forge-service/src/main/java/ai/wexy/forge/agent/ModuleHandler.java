@@ -118,7 +118,10 @@ public class ModuleHandler {
                 });
     }
 
-    /** The prompt from R, S, the module's nodes and interface, and for a repair its previous body and findings (P7). */
+    /**
+     * The prompt from R, S, the module's nodes and interface, and for a repair its previous body and findings (P7); for an
+     * author, a program revision's note when it carries one (EA6.3).
+     */
     private Prompt prompt(ModuleRequest m) {
         ObjectNode r = JSON.createObjectNode().put("prompt", m.request().prompt()).put("style", m.request().style()).put("seconds", m.request().seconds());
         List<String> lines = new ArrayList<>();
@@ -133,7 +136,7 @@ public class ModuleHandler {
             }
         }
         return prompts.module(r.toString(), m.design().toString(), m.module(), m.kind(), lines, m.iface().path("preamble").asText(),
-                m.iface().path("epilogue").asText(), signatures, m.previous() == null ? null : m.previous().body(), findings);
+                m.iface().path("epilogue").asText(), signatures, m.previous() == null ? null : m.previous().body(), findings, m.note());
     }
 
     private Mono<ServerResponse> stream(ModuleRequest m, Prompt prompt, Caller caller) {
@@ -153,6 +156,8 @@ public class ModuleHandler {
         ObjectNode input = JSON.createObjectNode().put("turnId", m.turnId()).put("jobId", m.jobId()).put("purpose", m.purpose())
                 .put("module", m.module()).put("interfaceHash", m.iface().path("interfaceHash").asText());
         input.put("previousCodeHash", m.previous() == null ? null : m.previous().codeHash());
+        // Whether a program revision's note came with it (EA6.3): never the note itself, which is the client's text.
+        input.put("note", m.note() != null);
         Generation g = store.begin(Generation.started(Ulid.next(now), Generation.Kind.AGENT, m.turnId(), ROLE, catalog.role(ROLE).model(),
                 prompt.templateId(), ModuleRequest.ABI, m.module(), input.toString(), caller.admin() ? Generation.Source.DEMO : Generation.Source.USER,
                 caller.uid(), now));

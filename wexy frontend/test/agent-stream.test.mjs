@@ -65,8 +65,8 @@ test('EA-S1 every recorded way a turn ends reads to its typed result, each event
         [[1, 'first', 'gen-1', 2, null], [2, 'after-tools', 'gen-2', null, false], [3, 'revise', 'gen-3', null, true]]);
     assert.equal(handedOff.result.calls[1].check.findings[0].code, 'buffer-producer');
     assert.equal(handedOff.result.costMicroUsd, 3 * 46_000);
-    assert.deepEqual(handedOff.result.meta, { turnId: 'turn-1', model: 'muse-spark-1.3', source: 'live', promptVersion: 'agent.v5', bundleHash: ENGINE_BUNDLE_HASH,
-        actionSchema: 'agent-action.v2', manifestHash: ADAPTER_MANIFEST_HASH });
+    assert.deepEqual(handedOff.result.meta, { turnId: 'turn-1', model: 'muse-spark-1.3', source: 'live', promptVersion: 'agent.v6', bundleHash: ENGINE_BUNDLE_HASH,
+        actionSchema: 'agent-action.v3', manifestHash: ADAPTER_MANIFEST_HASH });
     const recorded = Object.fromEntries(events(wire('handed-off.sse')).filter(([e]) => e === 'design' || e === 'program').map(([e, d]) => [e, JSON.parse(d)[e]]));
     assert.deepEqual(handedOff.result.design, recorded.design);
     assert.deepEqual(handedOff.result.program, recorded.program);
@@ -107,7 +107,7 @@ test('EA-S2 the recorded failures are the backend\'s own errors, after everythin
     await readAgentStream(res(wire('error-budget.sse')), e => seen.push(e), { bundleHash: ENGINE_BUNDLE_HASH }).catch(() => {});
     assert.deepEqual(seen.map(e => e.type), ['meta', 'call', 'usage', 'tools']);
     // No usage came for the first call, so its reservation stands as its cost, and its tokens are unknown.
-    assert.deepEqual(seen[2].usage, { n: 1, generationId: 'gen-1', in: null, out: null, reasoning: null, cached: null, costMicroUsd: 156_247 });
+    assert.deepEqual(seen[2].usage, { n: 1, generationId: 'gen-1', in: null, out: null, reasoning: null, cached: null, costMicroUsd: 160_585 });
 
     await refuses(wire('error-upstream.sse'), 'upstream', /missed the action schema after a repair/);
 });
@@ -173,8 +173,8 @@ test('EA-S6 every payload is checked: not JSON, not an object, or a value of the
         [edit(hand, 6, c => ({ ...c, ok: true })), /check.ok is true, but 1 findings fail/],
         [edit(hand, 9, c => ({ ...c, ok: false })), /check.ok is false, but 0 findings fail/],
         [edit(hand, 6, c => ({ ...c, findings: [{ ...c.findings[0], level: 'error' }] })), /a finding's level is "error"/],
-        [edit(hand, 10, d => ({ design: { ...d.design, extra: 1 } })), /the design leaves agent-action.v2: \/design\/extra: is not in the schema/],
-        [edit(hand, 11, p => ({ program: { ...p.program, nodes: [] } })), /the program leaves agent-action.v2: \/program\/nodes: has 0 items, under 1/],
+        [edit(hand, 10, d => ({ design: { ...d.design, extra: 1 } })), /the design leaves agent-action.v3: \/design\/extra: is not in the schema/],
+        [edit(hand, 11, p => ({ program: { ...p.program, nodes: [] } })), /the program leaves agent-action.v3: \/program\/nodes: has 0 items, under 1/],
         [edit(hand, 12, () => ({ status: 'ok', reason: null })), /done.status is "ok"/],
         [edit(hand, 12, () => ({ status: 'handed-off', reason: 'because' })), /done handed-off carries a reason/],
         [edit(revisions, revisions.length - 1, () => ({ status: 'exhausted', reason: null })), /done exhausted needs a reason/],
@@ -443,8 +443,10 @@ test('EA-S19 a turn of another action contract or adapter manifest is refused at
     const v1 = readFileSync(new URL('./fixtures/agent-wire-v1/handed-off.sse', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
         .replace(/"bundleHash":"[0-9a-f]{64}"/, `"bundleHash":"${ENGINE_BUNDLE_HASH}"`);
     const cases = [
-        [v1, 'actionSchema', 'none', /^EA_VERSION_MISMATCH actionSchema none, runtime agent-action\.v2: .*speaks agent-action\.v1/],
-        [editMeta(m => ({ ...m, actionSchema: 'agent-action.v3' })), 'actionSchema', 'agent-action.v3', /^EA_VERSION_MISMATCH actionSchema agent-action\.v3, runtime agent-action\.v2: /],
+        [v1, 'actionSchema', 'none', /^EA_VERSION_MISMATCH actionSchema none, runtime agent-action\.v3: .*speaks agent-action\.v1/],
+        // A server before EA6.3 speaks v2, whose revision carries no notes to modules; one after this build, a contract it cannot read.
+        [editMeta(m => ({ ...m, actionSchema: 'agent-action.v2' })), 'actionSchema', 'agent-action.v2', /^EA_VERSION_MISMATCH actionSchema agent-action\.v2, runtime agent-action\.v3: /],
+        [editMeta(m => ({ ...m, actionSchema: 'agent-action.v4' })), 'actionSchema', 'agent-action.v4', /^EA_VERSION_MISMATCH actionSchema agent-action\.v4, runtime agent-action\.v3: /],
         [editMeta(m => ({ ...m, manifestHash: 'f'.repeat(64) })), 'manifest', 'f'.repeat(64), /^EA_VERSION_MISMATCH manifest ffffffffffff, runtime 3c7775588fb8: /],
         [editMeta(({ manifestHash, ...m }) => m), 'manifest', 'none', /^EA_VERSION_MISMATCH manifest none, runtime 3c7775588fb8: /],
     ];
@@ -462,4 +464,32 @@ test('EA-S19 a turn of another action contract or adapter manifest is refused at
     const other = await read(wire('handed-off.sse'), { manifestHash: 'e'.repeat(64) }).catch(e => e);
     assert.ok(other instanceof AgentVersionError, String(other));
     assert.deepEqual([other.identity, other.client], ['manifest', 'e'.repeat(64)]);
+});
+
+test('EA-S20 a revision hands off its notes to modules after its program, the whole list checked; a first turn never does (EA6.3)', async () => {
+    const none = await read(wire('revised.sse'), { revision: true });
+    assert.equal(none.result.status, 'handed-off');
+    assert.deepEqual(none.seen.map(e => e.type), ['meta', 'call', 'usage', 'check', 'design', 'program', 'repairs']);
+    assert.deepEqual(none.result.repairs, []);
+    const noted = await read(wire('revised-notes.sse'), { revision: true });
+    assert.deepEqual(noted.result.repairs, [{ module: 'place', message: 'Lower every block by 2 units, so they stand on the ground.' }]);
+    assert.deepEqual(noted.seen.at(-1), { type: 'repairs', repairs: noted.result.repairs });
+    assert.ok(Object.isFrozen(noted.result.repairs[0]), 'what was checked cannot change after');
+    // A first turn's hand-off has none: it sends no list, and its result's is empty.
+    assert.deepEqual((await read(wire('handed-off.sse'))).result.repairs, []);
+
+    const revised = events(wire('revised-notes.sse'));
+    const at = revised.findIndex(([e]) => e === 'repairs');
+    const withRepairs = (repairs) => sse(revised.map(([e, d], i) => [e, i === at ? { repairs } : d]));
+    await refuses(wire('revised-notes.sse'), 'internal', /a first turn handed off repairs/);
+    await refuses(wire('handed-off.sse'), 'internal', /done handed-off came before the revision's repairs/, { revision: true });
+    await refuses(withRepairs([{ module: 'place', message: 'x' }, { module: 'place', message: 'y' }]), 'internal',
+        /the repairs leave agent-action\.v3: \/repairs\/1\/module: place has a note already/, { revision: true });
+    await refuses(withRepairs([{ module: 'place', message: 'x', line: 1 }]), 'internal', /\/repairs\/0\/line: is not in the schema/, { revision: true });
+    await refuses(withRepairs(null), 'internal', /\/repairs: is null, not array/, { revision: true });
+    // Out of its place: before the program, or twice.
+    const early = sse([...revised.slice(0, at - 1), revised[at], revised[at - 1], ...revised.slice(at + 1)]);
+    await refuses(early, 'internal', /repairs came after the turn was designed/, { revision: true });
+    const twice = sse([...revised.slice(0, at + 1), revised[at], ...revised.slice(at + 1)]);
+    await refuses(twice, 'internal', /repairs came after the turn was repaired/, { revision: true });
 });

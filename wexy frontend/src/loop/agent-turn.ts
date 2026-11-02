@@ -96,6 +96,8 @@ export function reduceTurn(state: AgentTurnState, event: AgentEvent, now: number
         case 'check': return { ...state, calls: last({ check: event.check }), findings: event.check.findings };
         case 'design': return { ...state, design: event.design };
         case 'program': return { ...state, program: event.program };
+        // A revision's notes to its modules (EA6.3): a first turn's reader refuses them, so this turn never holds any.
+        case 'repairs': return state;
         case 'question': return { ...state, question: event.text };
     }
 }

@@ -317,4 +317,87 @@ class ProgramCheckTest {
         add(shared, "again", "ng.render.fullscreen", Map.of("module", "layer12", "fragmentEntry", "shadeAgain"));
         assertThat(found(check.check(shared))).containsExactly("fail module-shared @ /program/nodes/18/config/module");
     }
+
+    // EA6.3 (the frontend's visual-review design §8.2): a revision's notes to its modules, agent-action.v3.
+
+    /** Notes as the schema takes them: each a module and a message. */
+    static ArrayNode notes(String... moduleAndMessage) {
+        ArrayNode list = JSON.createArrayNode();
+        for (int i = 0; i < moduleAndMessage.length; i += 2) {
+            list.addObject().put("module", moduleAndMessage[i]).put("message", moduleAndMessage[i + 1]);
+        }
+        return list;
+    }
+
+    @Test
+    void aProgramsModulesAreItsStagesAndPassesModulesOnceAndNoneWhileItsNodesFail() {
+        assertThat(check.modules(valid().path("program"))).containsExactly("place");
+        assertThat(check.modules(withModules(3).path("program"))).containsExactly("place", "layer2", "layer3");
+        ObjectNode shared = withModules(2);
+        add(shared, "again", "ng.render.fullscreen", Map.of("module", "layer2", "fragmentEntry", "shadeAgain"));
+        assertThat(check.modules(shared.path("program"))).containsExactly("place", "layer2");
+        ObjectNode broken = valid();
+        node(broken, "place").put("config", "{\"module\":\"place\"}");
+        assertThat(check.modules(broken.path("program"))).isNull();
+    }
+
+    @Test
+    void aRevisionsNotesNameEachModuleOfItsProgramOnceAndSaySomethingJudgedWhole() {
+        java.util.Set<String> program = java.util.Set.of("place", "glow");
+        java.util.Set<String> base = java.util.Set.of("place", "old");
+
+        assertThat(ProgramCheck.repairs(notes(), program, base)).isEmpty();
+        assertThat(ProgramCheck.repairs(notes("place", "Lower every block by 2 units.", "glow", "Warmer."), program, base))
+                .as("a module the revision keeps, and one it adds, which is written with its note").isEmpty();
+
+        // Every bad note is told, at its own place, and the good ones beside them do not hide it.
+        List<Finding> bad = ProgramCheck.repairs(notes("place", "Lower it.", "nowhere", "x", "place", "Again.", "old", "Brighter.", "", "y",
+                "glow", " "), program, base);
+        assertThat(found(bad)).containsExactly("fail repair-target @ /revision/moduleRepairs/1/module", "fail repair-twice @ /revision/moduleRepairs/2/module",
+                "fail repair-target @ /revision/moduleRepairs/3/module", "fail repair-target @ /revision/moduleRepairs/4/module",
+                "fail repair-note @ /revision/moduleRepairs/5/message");
+        assertThat(bad.get(0).message()).isEqualTo("no node of the revised program names module nowhere: a note names a module of the program, as its"
+                + " node's config names it");
+        assertThat(bad.get(1).message()).isEqualTo("place has two notes: give it one, with everything its code must change");
+        assertThat(bad.get(2).message()).isEqualTo("the revised program no longer names module old, so there is no code of it to change: drop the note,"
+                + " or keep the module");
+        assertThat(bad.get(3).message()).isEqualTo("a note names the module whose code must change, as its node's config names it");
+        assertThat(bad.get(4).message()).isEqualTo("the note to glow says nothing: say what its code must do differently, or leave the module out");
+        assertThat(ProgramCheck.passes(bad)).isFalse();
+
+        // Blank as the browser's trim counts it (the independent review of EA6.3): non-breaking spaces and the BOM too.
+        List<Finding> invisible = ProgramCheck.repairs(notes("place", "\u00A0\u2007\u202F\uFEFF", "\u00A0", "Brighter."), program, base);
+        assertThat(found(invisible)).containsExactly("fail repair-note @ /revision/moduleRepairs/0/message",
+                "fail repair-target @ /revision/moduleRepairs/1/module");
+        assertThat(ModuleRequest.blank("\u001F")).as("stricter than the browser where Java is: harmless, the turn revises").isTrue();
+        assertThat(ModuleRequest.blank("Lower it.\u00A0")).isFalse();
+    }
+
+    /** The schema's notes and the routes that carry them agree: a module's name as a node names it, a note as a module call takes it. */
+    @Test
+    void theSchemasNotesKeepToTheNamesAndTheNoteTheModuleRouteTakes() {
+        JsonNode repairs = SCHEMAS.schema(JsonSchemas.AGENT_ACTION).at("/properties/revision/anyOf/0/properties/moduleRepairs");
+        assertThat(JsonSchemas.AGENT_ACTION).isEqualTo("agent-action.v3");
+        assertThat(repairs.path("type").asText()).isEqualTo("array");
+        assertThat(repairs.path("maxItems").asInt()).isEqualTo(12);
+        assertThat(repairs.at("/items/properties/module/maxLength").asInt()).isEqualTo(40)
+                .isEqualTo(MANIFEST.adapters().get("ng.compute.stage").config().at("/properties/module/maxLength").asInt());
+        assertThat(repairs.at("/items/properties/message/maxLength").asInt()).isEqualTo(ModuleRequest.NOTE_CHARS);
+        // A revise without notes is still an action, and one with a thirteenth note or an unknown key is not.
+        ObjectNode revise = valid().put("kind", "revise");
+        revise.putObject("revision").put("scope", "program").putArray("changes").add("lower the blocks");
+        ((ObjectNode) revise.path("revision")).set("moduleRepairs", notes());
+        assertThat(SCHEMAS.validate(JsonSchemas.AGENT_ACTION, revise)).isEmpty();
+        ArrayNode thirteen = notes();
+        for (int i = 0; i < 13; i++) {
+            thirteen.addObject().put("module", "m" + i).put("message", "x");
+        }
+        ((ObjectNode) revise.path("revision")).set("moduleRepairs", thirteen);
+        assertThat(SCHEMAS.validate(JsonSchemas.AGENT_ACTION, revise)).isNotEmpty();
+        ((ObjectNode) revise.path("revision")).set("moduleRepairs", notes("place", "x"));
+        ((ObjectNode) revise.path("revision").path("moduleRepairs").get(0)).put("line", 3);
+        assertThat(SCHEMAS.validate(JsonSchemas.AGENT_ACTION, revise)).isNotEmpty();
+        ((ObjectNode) revise.path("revision")).remove("moduleRepairs");
+        assertThat(SCHEMAS.validate(JsonSchemas.AGENT_ACTION, revise)).as("strict: every key is present").isNotEmpty();
+    }
 }

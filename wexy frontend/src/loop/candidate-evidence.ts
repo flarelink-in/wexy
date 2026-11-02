@@ -35,8 +35,11 @@ export interface EvidenceFinding {
     line: number | null;
     severity: 'error' | 'warning';
     message: string;
-    /** For a body's findings: the rung that found it (L1 the lint, L3 the compiler); the place it landed for L3. */
-    rung: 'L1' | 'L3' | null;
+    /**
+     * For a body's findings: the rung that found it (L1 the lint, L3 the compiler), or `note` for a program revision's
+     * note to the module (EA6.3), which no rung found; the place it landed for L3.
+     */
+    rung: 'L1' | 'L3' | 'note' | null;
     /** L3 only: on the body's lines, the host's (preamble, epilogue, chunks), or no line at all. */
     place: 'body' | 'host' | 'unplaced' | null;
 }

@@ -10,16 +10,25 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { ADAPTER_MANIFEST_HASH, ADAPTERS } from '../src/contract/adapters/index.ts';
-import { AGENT_ACTION, AGENT_ACTION_TEXT, AGENT_ACTION_VERSION, checkStrictSubset, parseDesign, parseProgram, schemaIssues } from '../src/contract/agent/index.ts';
+import { AGENT_ACTION, AGENT_ACTION_TEXT, AGENT_ACTION_VERSION, checkStrictSubset, MAX_MODULE_REPAIRS, parseDesign, parseProgram, parseRepairs, schemaIssues } from '../src/contract/agent/index.ts';
 import { ENGINE_BUNDLE_HASH } from '../src/forge-client/agent-client.ts';
+import { NOTE_CHARS } from '../src/forge-client/module-client.ts';
+import { NOTE_CODE, REPAIR_BUDGET_CODE, SET_ASIDE_CODE } from '../src/loop/candidate.ts';
 
 const BACKEND = 'D:/orion-realms/wexy/wexy backend/forge-service/src';
 const FIXTURES = fileURLToPath(new URL('./fixtures/agent-wire/', import.meta.url));
-/** sha256 of agent-action.v2.json with LF line ends; the backend's copy is the source (EA3.6, 10-30). */
-const SCHEMA_HASH = '90255491b3061b8b60d61f24a043bfb06ad53eb7f991313d606cd868b06b9858';
+/**
+ * sha256 of agent-action.v3.json with LF line ends; the backend's copy is the source (EA6.3, 11-02: v2's revision with
+ * moduleRepairs, the notes to modules whose code must change); before, v2's 90255491… (EA3.6, 10-30).
+ */
+const SCHEMA_HASH = 'c25fc7689301b9a8f79ae424de5aac489a11fed8399e9dbcb771c20581f26b39';
 /**
  * SHA-256 over `<name>\n<text>\n` for every recording, sorted by name, LF line ends (as host.test.mjs pins h1). A new
- * recording means the backend's wire changed: a contract change, agreed in both repositories the same day. 11-02 (Q84
+ * recording means the backend's wire changed: a contract change, agreed in both repositories the same day. 11-02 night
+ * (EA6.3, Q111 (a)): agent-action.v3 and agent.v6, so every meta's actionSchema and promptVersion and the refused turn's
+ * reservation (156,247 → 160,117 µUSD, the template's notes and its size × scale rule), revised.sse's `repairs` (none)
+ * and revised-notes.sse, a revision whose notes name a module; then agent.v6 two lines longer (the independent review's
+ * EA_NOTE_SET_ASIDE and EA_REPAIR_BUDGET), the reservation 160,117 → 160,585 µUSD; before, 6e4a57cd… and 457d236a… (11-02, Q84
  * revised): agent.v5, which states the candidate's module budget the turn's check now holds, so every meta's promptVersion
  * and the refused turn's reservation (156,034 → 156,247 µUSD, the template a line longer); before, 0d532c42… (11-01,
  * EA5.0, Q86 (a)): null-graph 1.2.1's engine bundle and the adapter manifest naming it, so every meta's bundle and manifest
@@ -28,7 +37,7 @@ const SCHEMA_HASH = '90255491b3061b8b60d61f24a043bfb06ad53eb7f991313d606cd868b06
  * v3 (the refused turn's reservation with it), and revised.sse, a turn that revises a base; before, 24373afe… (agent.v4
  * without the two rules), 13b6a9cb… (10-31: agent.v3 and Q80's gates), cb04377c….
  */
-const WIRE_HASH = '457d236a56e25aa44e012f2a5d02f5f0c39cb2eb798208f895e2b8ddca3c55d7';
+const WIRE_HASH = 'c5da82a46fa87a102ee0cb74946a2dfb7082eca3c4ce86a7d233246bb702dac7';
 
 const lf = (s) => s.replace(/\r\n/g, '\n');
 const recordings = () => Object.fromEntries(readdirSync(FIXTURES).sort().map(n => [n, lf(readFileSync(join(FIXTURES, n), 'utf8'))]));
@@ -36,8 +45,8 @@ const recordings = () => Object.fromEntries(readdirSync(FIXTURES).sort().map(n =
 const eventData = (wire, name) => [...wire.matchAll(/^event:(.*)\ndata:(.*)$/gm)].filter(m => m[1] === name).map(m => JSON.parse(m[2]));
 const clone = (v) => JSON.parse(JSON.stringify(v));
 
-test('EA-W1 the embedded agent-action.v2 and the wire recordings are the pinned ones', () => {
-    assert.equal(AGENT_ACTION_VERSION, 'agent-action.v2');
+test('EA-W1 the embedded agent-action.v3 and the wire recordings are the pinned ones', () => {
+    assert.equal(AGENT_ACTION_VERSION, 'agent-action.v3');
     assert.equal(createHash('sha256').update(AGENT_ACTION_TEXT).digest('hex'), SCHEMA_HASH);
     const h = createHash('sha256');
     for (const [name, text] of Object.entries(recordings())) h.update(`${name}\n${text}\n`);
@@ -45,21 +54,21 @@ test('EA-W1 the embedded agent-action.v2 and the wire recordings are the pinned 
 });
 
 test('EA-W2 the schema and every recording are the backend\'s, byte for byte, when that repository is on this disk', { skip: !existsSync(BACKEND) && 'the backend repository is not on this disk' }, () => {
-    assert.equal(AGENT_ACTION_TEXT, lf(readFileSync(join(BACKEND, 'main/resources/schemas/agent-action.v2.json'), 'utf8')));
+    assert.equal(AGENT_ACTION_TEXT, lf(readFileSync(join(BACKEND, 'main/resources/schemas/agent-action.v3.json'), 'utf8')));
     const files = recordings();
     const dir = join(BACKEND, 'test/resources/agent/wire');
     assert.deepEqual(Object.keys(files), readdirSync(dir).sort(), 'the same recordings on both sides');
     for (const [name, text] of Object.entries(files)) assert.equal(text, lf(readFileSync(join(dir, name), 'utf8')), name);
 });
 
-test('EA-W3 every recorded turn quotes this build\'s engine bundle, action contract and adapters, and the agent.v5 prompt, and names its calls in order', () => {
+test('EA-W3 every recorded turn quotes this build\'s engine bundle, action contract and adapters, and the agent.v6 prompt, and names its calls in order', () => {
     for (const [name, text] of Object.entries(recordings())) {
         if (!name.endsWith('.sse')) continue;
         const [meta] = eventData(text, 'meta');
         assert.equal(meta.bundleHash, ENGINE_BUNDLE_HASH, `${name}: regenerate the recordings after the bundle changes`);
         assert.equal(meta.actionSchema, AGENT_ACTION_VERSION, name);
         assert.equal(meta.manifestHash, ADAPTER_MANIFEST_HASH, `${name}: regenerate the recordings after the manifest changes`);
-        assert.equal(meta.promptVersion, 'agent.v5', name);
+        assert.equal(meta.promptVersion, 'agent.v6', name);
         assert.deepEqual(eventData(text, 'call').map(c => c.n), eventData(text, 'call').map((_, i) => i + 1), name);
     }
 });
@@ -137,4 +146,51 @@ test('EA-W7 the schema\'s adapters are the manifest\'s, and v1\'s program is ref
     assert.equal(parsed.ok, false);
     assert.ok(parsed.problems.includes('/program/nodes: is missing'), parsed.problems.join(' | '));
     assert.ok(parsed.problems.includes('/program/objects: is not in the schema'), parsed.problems.join(' | '));
+});
+
+// EA-VR4, the contract's half (EA6.3; the visual-review design §8.2, Q111 (a)): a revision's notes to its modules, as both
+// repositories read them. The machine's half (where each note goes) is in test/candidate.test.mjs.
+
+test('EA-VR4a a revision\'s notes are the schema\'s, held whole: a list of at most 12, one a module, each saying something', () => {
+    const repairs = AGENT_ACTION.properties.revision.anyOf.find(b => b.type === 'object').properties.moduleRepairs;
+    assert.equal(MAX_MODULE_REPAIRS, 12);
+    assert.equal(repairs.maxItems, MAX_MODULE_REPAIRS);
+    assert.equal(repairs.items.properties.module.maxLength, 40, 'a module as an adapter\'s config names it');
+    assert.equal(repairs.items.properties.message.maxLength, NOTE_CHARS, 'a note as a module call carries it');
+    const [{ repairs: recorded }] = eventData(recordings()['revised-notes.sse'], 'repairs');
+    assert.deepEqual(parseRepairs(recorded), { ok: true, value: recorded });
+    assert.deepEqual(parseRepairs([]), { ok: true, value: [] });
+    const note = (module, message = 'Lower it by 2 units.') => ({ module, message });
+    const cases = [
+        ['not a list', { place: 'x' }, /\/repairs: is object, not array/],
+        ['thirteen', Array.from({ length: 13 }, (_, i) => note(`m${i}`)), /\/repairs: has 13 items, over 12/],
+        ['a key of its own', [{ ...note('place'), line: 3 }], /\/repairs\/0\/line: is not in the schema/],
+        ['no message', [{ module: 'place' }], /\/repairs\/0\/message: is missing/],
+        ['a module past 40', [note('m'.repeat(41))], /\/repairs\/0\/module: is 41 characters, over 40/],
+        ['a note past 300 code points', [note('place', '\u{1F3F0}'.repeat(301))], /\/repairs\/0\/message: is 301 characters, over 300/],
+        ['a module twice', [note('place'), note('glow'), note('place', 'Brighter.')], /\/repairs\/2\/module: place has a note already/],
+        ['no module', [note('  ')], /\/repairs\/0\/module: names no module/],
+        ['a note that says nothing', [note('place', ' ')], /\/repairs\/0\/message: says nothing/],
+        // Non-breaking spaces and the BOM are blank here, and the backend's check agrees since the independent review.
+        ['a note of non-breaking spaces', [note('place', '\u00A0\u2007\u202F\uFEFF')], /\/repairs\/0\/message: says nothing/],
+        ['a module of a non-breaking space', [note('\u00A0')], /\/repairs\/0\/module: names no module/],
+    ];
+    for (const [label, value, pattern] of cases) {
+        const parsed = parseRepairs(value);
+        assert.equal(parsed.ok, false, label);
+        assert.match(parsed.problems.join('\n'), pattern, label);
+    }
+    // 300 code points of two UTF-16 units each are within the bound, as the backend counts them too.
+    assert.equal(parseRepairs([note('place', '\u{1F3F0}'.repeat(300))]).ok, true);
+});
+
+test('EA-VR4b the backend checks what the browser reads: its note\'s bound, and the code a kept body\'s note is sent as, when it is on this disk', { skip: !existsSync(BACKEND) && 'the backend repository is not on this disk' }, () => {
+    const request = readFileSync(join(BACKEND, 'main/java/ai/wexy/forge/agent/ModuleRequest.java'), 'utf8');
+    assert.match(request, new RegExp(`static final int NOTE_CHARS = ${NOTE_CHARS};`));
+    const repair = readFileSync(join(BACKEND, 'main/resources/prompts/module.repair.v2.md'), 'utf8');
+    assert.ok(repair.includes(NOTE_CODE), `module.repair.v2 explains ${NOTE_CODE}`);
+    const agent = readFileSync(join(BACKEND, 'main/resources/prompts/agent.v6.md'), 'utf8');
+    for (const code of [SET_ASIDE_CODE, REPAIR_BUDGET_CODE]) assert.ok(agent.includes(code), `agent.v6 explains ${code}`);
+    // Blank as the browser's trim counts it (the independent review of EA6.3).
+    assert.match(readFileSync(join(BACKEND, 'main/java/ai/wexy/forge/agent/ModuleRequest.java'), 'utf8'), /Character\.isSpaceChar\(c\) \|\| c == 0xFEFF/);
 });

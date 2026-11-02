@@ -7,6 +7,7 @@ import ai.wexy.forge.templates.PromptBuilder;
 import ai.wexy.forge.upstream.ChatMessage;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.io.IOException;
@@ -16,6 +17,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
@@ -35,7 +37,7 @@ import static ai.wexy.forge.agent.AgentOutcome.Status.HANDED_OFF;
  * so the request stays verbatim in every call and a proposal's design in every later one (A4). Before a call, every
  * budget is checked, and a refusal ends the turn with no call started (A1, P6). The turn's seconds are also a deadline:
  * the caller is given what is left of them, and an answer that comes after it is not acted on. After a call, the answer
- * must match {@code agent-action.v2} and carry its kind's payload (one repair is allowed). A {@code need_context} runs
+ * must match {@code agent-action.v3} and carry its kind's payload (one repair is allowed). A {@code need_context} runs
  * its reads; a proposal runs the check, which hands off or asks for a revision; {@code ask} and {@code finish} end the
  * turn.
  *
@@ -43,6 +45,11 @@ import static ai.wexy.forge.agent.AgentOutcome.Status.HANDED_OFF;
  * with what it found. Its first message carries the base after the request, its first call asks for the revise, and
  * every proposal of the turn is checked and handed off with the base's design, which a program revision may not change
  * (the frontend's candidate-loop design §8): an answer that changed it is told, as a {@code warn}, and not used.
+ *
+ * <p>A revision may also carry notes to its modules, {@code revision.moduleRepairs} (EA6.3; the frontend's visual-review
+ * design §8.2): code a program cannot change, such as where a module places what it draws. They are checked whole with
+ * the proposal ({@link ProgramCheck#repairs}), and a revision turn hands them off after its program, as {@code repairs},
+ * empty when there are none. A first turn has no code to repair: its notes are told, as a {@code warn}, and not used.
  */
 public final class AgentLoop {
 
@@ -54,7 +61,7 @@ public final class AgentLoop {
     private final LongSupplier clockMillis;
     private final ObjectMapper json = new ObjectMapper();
 
-    /** The template every call of a turn is built from ({@code agent.v5}), as its records and its meta name it. */
+    /** The template every call of a turn is built from ({@code agent.v6}), as its records and its meta name it. */
     public String promptVersion() {
         return prompts.version("agent");
     }
@@ -84,9 +91,12 @@ public final class AgentLoop {
         return AgentBase.validated(base, bundleHash, schemas, check);
     }
 
-    /** The {@code response_format} every call sends: the action's schema, strict (the tests price a call by it too). */
+    /**
+     * The {@code response_format} every call sends: the action's schema, strict, under its id's name ({@code agent_action_v3};
+     * the tests price a call by it too).
+     */
     static Map<String, Object> responseFormat(JsonSchemas schemas) {
-        return Map.of("type", "json_schema", "json_schema", Map.of("name", "agent_action_v2",
+        return Map.of("type", "json_schema", "json_schema", Map.of("name", JsonSchemas.AGENT_ACTION.replace('-', '_').replace('.', '_'),
                 "schema", schemas.schema(JsonSchemas.AGENT_ACTION), "strict", true));
     }
 
@@ -108,6 +118,8 @@ public final class AgentLoop {
         private JsonNode pendingDesign;
         /** A revision's design, which every proposal of the turn is checked and handed off with; null in a first turn. */
         private final JsonNode fixedDesign;
+        /** The modules of the program a revision revises (its base's, which passed the check); null in a first turn. */
+        private final Set<String> baseModules;
         private String purpose;
 
         Turn(AgentRequest request, AgentBase base, ModelCaller caller, Consumer<AgentEvent> events, BooleanSupplier cancelled) {
@@ -118,11 +130,14 @@ public final class AgentLoop {
             if (base == null) {
                 first = prompts.agent(request.prompt(), request.style(), request.seconds(), budget.describe());
                 fixedDesign = null;
+                baseModules = null;
                 purpose = "first";
             } else {
                 first = prompts.agent(request.prompt(), request.style(), request.seconds(), budget.describe(), base.design(), base.program(),
                         base.findings().stream().map(f -> new PromptBuilder.ProgramFinding(f.code(), f.path(), f.message())).toList());
                 fixedDesign = base.design();
+                Set<String> named = check.modules(base.program());
+                baseModules = named == null ? Set.of() : named;
                 // The first call is the revise the base asks for: the template's "A turn that revises a program".
                 purpose = "revise";
             }
@@ -207,13 +222,13 @@ public final class AgentLoop {
                         say("propose_program needs a design first: answer with propose_design_and_program.", "next");
                         yield null;
                     }
-                    yield propose(pendingDesign, action.path("program"));
+                    yield propose(pendingDesign, action.path("program"), action.path("revision"));
                 }
-                case "propose_design_and_program", "revise" -> propose(action.path("design"), action.path("program"));
+                case "propose_design_and_program", "revise" -> propose(action.path("design"), action.path("program"), action.path("revision"));
                 case "ask" -> {
                     String question = action.path("question").asText("");
                     emit("question", "text", question);
-                    yield new AgentOutcome(ASKED, null, null, null, null, question, calls, spent);
+                    yield new AgentOutcome(ASKED, null, null, null, null, null, question, calls, spent);
                 }
                 case "finish" -> end(FAILED, "finished", action.path("finish").path("summary").asText("the model gave up"));
                 default -> {
@@ -252,7 +267,7 @@ public final class AgentLoop {
             say(s.toString().stripTrailing(), "after-tools");
         }
 
-        private AgentOutcome propose(JsonNode proposed, JsonNode program) {
+        private AgentOutcome propose(JsonNode proposed, JsonNode program, JsonNode revision) {
             // S is fixed in a revision: the base's design is the one checked and handed off, whatever the answer carried.
             boolean kept = fixedDesign != null && !fixedDesign.equals(proposed);
             JsonNode design = fixedDesign != null ? fixedDesign : proposed;
@@ -264,6 +279,7 @@ public final class AgentLoop {
                 findings.add(Finding.warn("design-kept", "/design", "a program revision keeps the design it was given: the design this answer "
                         + "carried differs, and was not used"));
             }
+            ArrayNode repairs = repairs(revision.path("moduleRepairs"), program, findings);
             // What the browser could not read is not handed off: a part past the stream's limit is a finding to revise.
             wireSize("design", design, findings);
             wireSize("program", program, findings);
@@ -277,7 +293,11 @@ public final class AgentLoop {
             if (ok) {
                 emit("design", "design", design);
                 emit("program", "program", program);
-                return new AgentOutcome(HANDED_OFF, null, null, design, program, null, calls, spent);
+                if (baseModules != null) {
+                    // A revision's hand-off always says which modules' code must change, so the browser reads none into silence.
+                    emit("repairs", "repairs", repairs);
+                }
+                return new AgentOutcome(HANDED_OFF, null, null, design, program, repairs, null, calls, spent);
             }
             if (revisions >= budget.revisions()) {
                 return end(EXHAUSTED, "EA_TURN_BUDGET", "EA_TURN_BUDGET: the check still fails after " + revisions + " revisions");
@@ -290,6 +310,30 @@ public final class AgentLoop {
             }
             say(s.toString(), "revise");
             return null;
+        }
+
+        /**
+         * A proposal's notes to its modules, as the turn would hand them off (EA6.3). A first turn writes every module
+         * fresh, so it has no code to repair: its notes are told, as a {@code warn}, and not used. A revision's are checked
+         * whole once the program's nodes pass ({@link ProgramCheck#repairs}); until they do, the program's own findings
+         * come first, and the next answer's notes are checked with it.
+         */
+        private ArrayNode repairs(JsonNode listed, JsonNode program, List<Finding> findings) {
+            ArrayNode out = json.createArrayNode();
+            if (!listed.isArray() || listed.isEmpty()) {
+                return out;
+            }
+            if (baseModules == null) {
+                findings.add(Finding.warn("repairs-unused", "/revision/moduleRepairs", "a first turn writes every module fresh, so there is no "
+                        + "code to repair yet: these notes were not used"));
+                return out;
+            }
+            Set<String> modules = check.modules(program);
+            if (modules != null) {
+                findings.addAll(ProgramCheck.repairs(listed, modules, baseModules));
+            }
+            listed.forEach(r -> out.add(r.deepCopy()));
+            return out;
         }
 
         /**
@@ -395,7 +439,7 @@ public final class AgentLoop {
         }
 
         private AgentOutcome end(AgentOutcome.Status status, String code, String reason) {
-            return new AgentOutcome(status, code, reason, null, null, null, calls, spent);
+            return new AgentOutcome(status, code, reason, null, null, null, null, calls, spent);
         }
     }
 

@@ -204,7 +204,7 @@ mutate "whole-program rules run while nodes fail" "$S/agent/ProgramCheck.java" f
     's/if \(checked\.findings\(\)\.isEmpty\(\)\) \{/if (true) {/'
 mutate "an external family in the design only warned" "$S/agent/ProgramCheck.java" forge-service ProgramCheckTest \
     's/out\.add\(Finding\.fail\("external"/out.add(Finding.warn("external"/'
-mutate "the action schema dropping an adapter" "$R/schemas/agent-action.v2.json" forge-service ProgramCheckTest \
+mutate "the action schema dropping an adapter" "$R/schemas/agent-action.v3.json" forge-service ProgramCheckTest \
     's/"ng\.render\.fullscreen",\n\s*"ng\.post\.chain"\n/"ng.render.fullscreen"\n/'
 # Gate A, in the gateway: the agent route spends its App Check token, and its buckets charge a turn
 # its possible calls.
@@ -292,12 +292,51 @@ mutate "a module budget one past the frontend's" "$S/agent/ProgramCheck.java" fo
     's/owners\.size\(\) == AgentTurn\.MAX_MODULES \+ 1/owners.size() == AgentTurn.MAX_MODULES + 2/'
 mutate "the agent prompt saying another module budget" "$S/templates/PromptTemplates.java" forge-service AgentLoopTest \
     's/fill\.put\("maxModules", String\.valueOf\(AgentTurn\.MAX_MODULES\)\);/fill.put("maxModules", "4");/'
-mutate "the agent prompt without its module budget" "$R/prompts/agent.v5.md" forge-service AgentLoopTest \
+mutate "the agent prompt without its module budget" "$R/prompts/agent.v6.md" forge-service AgentLoopTest \
     's/- A program names at most \{\{maxModules\}\} modules: one world builds no more\. A world that needs more\n  merges stages that run in the same phase into one module, or leaves a part out\.\n//'
 mutate "an anonymous module bucket of the old seven calls" "$G/shield/GatewayShieldProperties.java" forge-gateway ForgeRoutesTest \
     's/new Bucket\(AgentTurn\.MODULE_CALLS \/ 120\.0, AgentTurn\.MODULE_CALLS\)/new Bucket(7 \/ 120.0, 7)/'
 mutate "a signed-in module bucket of the old fourteen calls" "$G/shield/GatewayShieldProperties.java" forge-gateway ForgeRoutesTest \
     's/new Bucket\(AgentTurn\.MODULE_CALLS \/ 60\.0, 2 \* AgentTurn\.MODULE_CALLS\)/new Bucket(7 \/ 60.0, 14)/'
+# EA6.3 (2026-11-02; the frontend's visual-review design §8.2, Q111 (a)): a revision's notes to its modules, agent-action.v3.
+# The whole plan is judged with the proposal, a revision always hands it off, a first turn's is not used, and an author
+# call carries its module's note as data, once; a repair's note is one of its findings.
+mutate "a note to a module the program does not name taken" "$S/agent/ProgramCheck.java" forge-service ProgramCheckTest \
+    's/\} else if \(!modules\.contains\(module\)\) \{/} else if (false) {/'
+mutate "two notes to one module taken" "$S/agent/ProgramCheck.java" forge-service ProgramCheckTest \
+    's/\} else if \(!seen\.add\(module\)\) \{/} else if (false \&\& !seen.add(module)) {/'
+mutate "a note that says nothing taken" "$S/agent/ProgramCheck.java" forge-service ProgramCheckTest \
+    's/if \(ModuleRequest\.blank\(r\.path\("message"\)\.asText\(""\)\)\) \{/if (false) {/'
+mutate "a revision's notes not handed off" "$S/agent/AgentLoop.java" forge-service AgentLoopTest \
+    's/emit\("repairs", "repairs", repairs\);/emit("repairs", "repairs", json.createArrayNode());/'
+mutate "a revision with no notes saying nothing" "$S/agent/AgentLoop.java" forge-service AgentLoopTest \
+    's/if \(baseModules != null\) \{(\s*\/\/ A revision)/if (baseModules != null \&\& !repairs.isEmpty()) {$1/'
+mutate "a first turn's notes handed off" "$S/agent/AgentLoop.java" forge-service AgentLoopTest \
+    's/if \(baseModules == null\) \{(\s*findings\.add\(Finding\.warn\("repairs-unused")/if (false) {$1/'
+mutate "the response format named for another contract" "$S/agent/AgentLoop.java" forge-service AgentRoutesTest \
+    's/JsonSchemas\.AGENT_ACTION\.replace\(.-., ._.\)\.replace\(.\.., ._.\)/"agent_action_v2"/'
+mutate "a repair's note taken" "$S/agent/ModuleRequest.java" forge-service ModuleRoutesTest \
+    's/if \(!"author"\.equals\(purpose\)\) \{(\s*throw bad\("A repair)/if (false) {$1/'
+mutate "a note past its cap taken" "$S/agent/ModuleRequest.java" forge-service ModuleRoutesTest \
+    's/codePoints\(text\) > NOTE_CHARS/codePoints(text) > NOTE_CHARS + 1/'
+mutate "a note counted in UTF-16 units" "$S/agent/ModuleRequest.java" forge-service ModuleRoutesTest \
+    's/codePoints\(text\) > NOTE_CHARS/text.length() > NOTE_CHARS/'
+mutate "an author's note dropped" "$S/agent/ModuleHandler.java" forge-service ModuleRoutesTest \
+    's/findings, m\.note\(\)\);/findings, null);/'
+mutate "an author's note read as instructions" "$S/templates/PromptBuilder.java" forge-service PromptBuilderTest \
+    's/\+ quoted\(note\)\);/+ note);/'
+mutate "the agent prompt without its notes" "$R/prompts/agent.v6.md" forge-service AgentLoopTest \
+    's/Name a module once, only a module your program names, and at most 12 in all\. //'
+mutate "the agent prompt without the scale rule" "$R/prompts/agent.v6.md" forge-service AgentLoopTest \
+    's/- A primitive.s size and an instance.s scale multiply:[^\n]*\n[^\n]*\n[^\n]*\n//'
+# The independent review of EA6.3 (11-02 night): blank as the browser's trim counts it, and every finding's message in
+# code points, as the browser cuts it.
+mutate "a note of non-breaking spaces taken" "$S/agent/ModuleRequest.java" forge-service ProgramCheckTest \
+    's/ \|\| Character\.isSpaceChar\(c\) \|\| c == 0xFEFF//'
+mutate "a repair's finding counted in UTF-16 units" "$S/agent/ModuleRequest.java" forge-service ModuleRoutesTest \
+    's/codePoints\(f\.path\("message"\)\.asText\(\)\) > FINDING_CHARS/f.path("message").asText().length() > FINDING_CHARS/'
+mutate "a base finding counted in UTF-16 units" "$S/agent/AgentBase.java" forge-service AgentRoutesTest \
+    's/ModuleRequest\.codePoints\(v\.asText\(\)\) <= max/v.asText().length() <= max/'
 
 echo "$ran mutation(s)${DRY:+, a dry run}"
 exit $status

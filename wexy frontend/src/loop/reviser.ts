@@ -4,8 +4,9 @@
 // base to them, to its schema and to its program check before any charge (AgentBase). The turn's own reader holds the
 // stream to the contract (meta's bundle, action contract and manifest; one terminal), so a revision is a turn like any
 // other:
-//   handed-off  the new design and program, the revision's turn id, and the calls the turn made (the ledger reconciles
-//               its reserved six to them);
+//   handed-off  the new design and program, its notes to the modules whose code must change (EA6.3, `repairs`, held
+//               to the schema by the reader and to the program by the machine), the revision's turn id, and the calls
+//               the turn made (the ledger reconciles its reserved six to them);
 //   asked, declined, exhausted  their reason and their calls: no replacement;
 //   anything else  rejects (a refusal, an error event, a broken stream, another contract), and its calls are unknown,
 //               never zero (the design §8).
@@ -24,7 +25,9 @@ export function createReviser(client: AgentClient): Reviser {
             base: { versions: TURN_VERSIONS, design: request.design, program: request.program, findings: request.findings },
         }, onEvent, signal);
         const calls = result.calls.length;
-        if (result.status === 'handed-off') return { status: 'handed-off', turnId: result.meta.turnId, design: result.design, program: result.program, calls };
+        if (result.status === 'handed-off') {
+            return { status: 'handed-off', turnId: result.meta.turnId, design: result.design, program: result.program, repairs: result.repairs, calls };
+        }
         if (result.status === 'asked') return { status: 'asked', reason: result.question, calls };
         return { status: result.status, reason: result.reason, calls };
     };

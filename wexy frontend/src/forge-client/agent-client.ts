@@ -12,6 +12,7 @@
 import { ADAPTER_MANIFEST_HASH } from '../contract/adapters';
 import { AGENT_ACTION_VERSION, type SolutionDesign, type WorldProgram } from '../contract/agent';
 import bundleText from '../contract/engine/bundle.json?raw';
+import { codePoints, cutCodePoints } from '../contract/text';
 import type { Style } from '../contract/spec';
 import { readAgentStream, type AgentEvent, type AgentTurnResult } from './agent-stream';
 import { ForgeError } from './errors';
@@ -58,7 +59,8 @@ export interface AgentTurnBase {
 }
 
 /**
- * The backend's caps on a base (AgentBase): its findings, each string, and the whole base, at most 64 KiB as JSON in
+ * The backend's caps on a base (AgentBase): its findings, each string (a message's in code points, as both sides count
+ * it), and the whole base, at most 64 KiB as JSON in
  * UTF-8. A request past one is refused before any charge, so the browser cuts first. The server leaves every hand-off
  * room for the pins and a finding (its `base-size`), so cutting findings always makes a base fit; `margin` absorbs the
  * few bytes the server's own serialization may differ by.
@@ -86,9 +88,10 @@ export interface AgentTurnRequest {
  * first, down to one, whose message then shortens; S and W never change, since they are the base.
  */
 function wireBase(base: AgentTurnBase): AgentTurnBase {
+    // A message's cap is in code points, as the backend counts it (the independent review of EA6.3): no emoji is split.
     const findings = base.findings.slice(0, BASE_CAPS.findings).map(f => ({
         id: f.id.slice(0, BASE_CAPS.id), code: f.code.slice(0, BASE_CAPS.code), path: f.path === null ? null : f.path.slice(0, BASE_CAPS.path),
-        message: f.message.slice(0, BASE_CAPS.message),
+        message: cutCodePoints(f.message, BASE_CAPS.message),
     }));
     const wire: AgentTurnBase = {
         versions: { actionSchema: base.versions.actionSchema, bundle: base.versions.bundle, manifest: base.versions.manifest },
@@ -98,8 +101,8 @@ function wireBase(base: AgentTurnBase): AgentTurnBase {
     };
     const bound = BASE_CAPS.bytes - BASE_CAPS.margin;
     while (findings.length > 1 && jsonBytes(wire) > bound) findings.pop();
-    while (findings.length === 1 && findings[0].message.length > 1 && jsonBytes(wire) > bound) {
-        findings[0] = { ...findings[0], message: findings[0].message.slice(0, Math.ceil(findings[0].message.length / 2)) };
+    while (findings.length === 1 && codePoints(findings[0].message) > 1 && jsonBytes(wire) > bound) {
+        findings[0] = { ...findings[0], message: cutCodePoints(findings[0].message, Math.ceil(codePoints(findings[0].message) / 2)) };
     }
     return wire;
 }
@@ -122,7 +125,8 @@ export function createAgentClient(api: Api, options: { deadlineMs?: number; bund
                     method: 'POST', path: '/v1/agent/turn', body: req.base ? { ...fields, base: wireBase(req.base) } : fields,
                     auth: true, accept: 'text/event-stream', signal: within,
                 });
-                return await readAgentStream(res, onEvent, { bundleHash, manifestHash, signal: within });
+                // A revision's hand-off carries its notes to modules after its program (EA6.3); a first turn's never does.
+                return await readAgentStream(res, onEvent, { bundleHash, manifestHash, signal: within, revision: req.base !== undefined });
             } catch (error) {
                 if ((error as Error)?.name === 'TimeoutError') {
                     throw new ForgeError('timeout', 0, `The agent turn had no last event within ${Math.round(deadlineMs / 1000)} s; the connection was dropped.`);

@@ -30,7 +30,6 @@ import { COPY } from '../../loop/copy';
 import { completeOutcome } from '../../loop/outcome';
 import { SceneRuntime } from '../../runtime/scene-runtime';
 import { MAX_LIVE_PIXELS, Viewport, type CameraMode } from '../../runtime/viewport';
-import type { WorldRuntime } from '../../runtime/world';
 import type { CompiledBody, ModuleCompiler } from '../../contract/adapters/bodies';
 import type { DeepReadonly } from '../../contract/engine/frozen';
 import type { SealedCandidate } from '../../loop/snapshot';
@@ -82,17 +81,28 @@ type FrameWorld = typeof import('../../exec/bounds').frameWorld;
 type RunSummary = import('./candidate-view').RunSummary;
 type Sealed = DeepReadonly<SealedCandidate>;
 type CreateFilmWorkload = import('null-graph/film').CreateFilmWorkload;
+// The review of the stage (EA6), loaded only behind ?agent=1 too.
+type AgentRuntimeT = import('../../exec/world-runtime').AgentRuntime;
+type EnginePortT = import('../../exec/engine-port').EnginePort;
+type ReviewCapture = typeof import('../../exec/review-capture');
+type StageReviews = import('../../loop/review').StageReviews;
+type StageCapture = import('../../loop/review').StageCapture;
+type StageWorld = import('../../loop/review').StageWorld;
+type CandidateSession = import('../../loop/candidate').CandidateSession;
 /**
  * An agent world on the stage (EA5.3): its runtime, what it holds in the stage's ledger, its candidate, the device verdicts
- * it was admitted on, and its install's number, to which each film of it is bound (EA5.5).
+ * it was admitted on, and its install's number, to which each film of it is bound (EA5.5); and what its Run found (its
+ * boxes, the probe's report), which its review starts from (EA6).
  */
 interface AgentWorld {
-    runtime: WorldRuntime;
+    runtime: AgentRuntimeT;
     held: AgentReservation;
     candidate: string;
     snapshot: Sealed;
     compiled: readonly DeepReadonly<CompiledBody>[];
     epoch: number;
+    bounds: AgentBounds | null;
+    report: AgentReport | null;
 }
 
 /** A Run's numbers in one line for Developer view: the probe's predictions, the reservation, the first frame's look. */
@@ -161,7 +171,13 @@ class Studio {
     private deviceCompiler: ModuleCompiler | null = null;
     /** The device's generation: it moves on a device loss, and evidence from before proves nothing (EA5). */
     private deviceGeneration = 0;
-    private candidatePanel: { refresh(): void; readonly epoch: number } | null = null;
+    private candidatePanel: { refresh(): void; readonly epoch: number; readonly session: CandidateSession } | null = null;
+    /** ?agent=1 only: the review of the world on the stage (EA6.2), its panel beside the candidate. */
+    private reviews: StageReviews | null = null;
+    /** ?agent=1 only, with the stage: its engine's port and the review's capture, which draws the Head again offscreen (EA6.1). */
+    private stagePort: EnginePortT | null = null;
+    private reviewCapture: ReviewCapture | null = null;
+    private encodeJpeg: ((rgba: Uint8Array, width: number, height: number, quality: number) => Promise<Uint8Array>) | null = null;
     /** ?agent=1 only: a saved attempt replayed through the stage's Run (11-02), compiled once the device compiler exists. */
     private replayPanel: { refresh(): void } | null = null;
     /** ?agent=1 only, once the viewport and its device compiler exist: the stage's Run (EA5.3). */
@@ -347,8 +363,69 @@ class Studio {
         this.replayPanel = replay;
         replay.el.classList.add('dev-only');
         $('#left').insertBefore(replay.el, this.trace.el);
+        // The review of the world on the stage (EA6.2; Q109: Developer view only): captured after each install, the host's
+        // findings, and the creator's "Looks right" or "Improve it" through the candidate session that holds that world.
+        const [{ ReviewPanel }, { StageReviews }] = await Promise.all([import('./review-view'), import('../../loop/review')]);
+        let view: InstanceType<typeof ReviewPanel> | null = null;
+        const reviews = new StageReviews({
+            stage: () => this.stageWorld(),
+            capture: (world, stale) => this.captureReview(world, stale),
+            session: () => this.candidatePanel?.session ?? null,
+            generation: () => this.deviceGeneration,
+            busy: () => this.reviewBusy(),
+            // Run waits while the stage is captured (runBlocked): the panels that offer it are shown again as it ends.
+            onChange: () => {
+                view?.render();
+                this.candidatePanel?.refresh();
+                this.replayPanel?.refresh();
+            },
+            onDrop: ids => view?.dropped(ids),
+        });
+        view = new ReviewPanel(reviews);
+        this.reviews = reviews;
+        view.el.classList.add('dev-only');
+        $('#left').insertBefore(view.el, this.trace.el);
         const named = new URLSearchParams(location.search).get('replay');
         if (named !== null) void replay.loadNamed(named);
+    }
+
+    /** The agent world on the stage as its review sees it (EA6); null for an h1 world or none. */
+    private stageWorld(): StageWorld | null {
+        const w = this.agentWorld;
+        if (!w) return null;
+        const p = w.report?.probe;
+        return {
+            epoch: w.epoch, candidate: w.candidate, graph: w.snapshot.x.hash, gpu: this.viewport?.gpuLabel ?? 'unknown GPU',
+            probe: p ? { warnings: p.warnings ?? [], width: p.viewport?.width ?? 0, height: p.viewport?.height ?? 0 } : null,
+            unboxed: w.snapshot.x.nodes.filter(n => n.adapterId === 'ng.render.custom_batch').map(n => n.id),
+        };
+    }
+
+    /** Why the stage cannot be captured for a review now: another owner holds it (a Run, a film, a photo). */
+    private reviewBusy(): string | null {
+        if (this.stage?.busy) return 'a Run is under way on this device';
+        if (document.body.classList.contains('exporting')) return 'a film is being made';
+        if (this.viewport?.held) return 'the stage is held by a photo, a film or a probe';
+        return null;
+    }
+
+    /**
+     * One capture of the agent world on the stage for its review (EA6.1; visual-review-design.md §6): its two views from
+     * the framing of what it built (at the canvas's aspect now), drawn offscreen on the stage's engine while the viewport
+     * holds still, read back with its boxes at that tick, fitted and encoded. The world stays on the stage whatever happens.
+     */
+    private async captureReview(world: StageWorld, stale: () => string | null): Promise<StageCapture> {
+        const vp = this.viewport, w = this.agentWorld, port = this.stagePort, rc = this.reviewCapture, encode = this.encodeJpeg;
+        const aspect = vp ? vp.canvas.width / Math.max(1, vp.canvas.height) : 1;
+        const none = (message: string): StageCapture => ({ outcome: { ok: false, code: 'EA_CAPTURE', message }, missing: [], framed: null, aspect, prepared: null });
+        if (!vp || !w || w.epoch !== world.epoch) return none('EA_CAPTURE stage: no agent world on the stage');
+        if (!port || !rc || !encode) return none('EA_CAPTURE_UNAVAILABLE capture: the review\'s capture is still loading');
+        const framing = this.frameWorld?.(w.bounds, vp.currentView().fov, aspect) ?? null;
+        const { views, missing } = rc.reviewViews(framing, vp.currentView());
+        const outcome = await rc.captureInstalled({
+            port, runtime: w.runtime, x: w.snapshot.x, views, restoreHeadCamera: () => vp.writeCamera(), hold: () => vp.pause(), stale, ledger: this.stage?.ledger, encode,
+        });
+        return { outcome, missing, framed: views[0]?.camera ?? null, aspect, prepared: w.bounds };
     }
 
     /**
@@ -368,8 +445,11 @@ class Studio {
         // The stage's Run (EA5.3): the viewport's engine, its device's limits, this device compiler's verdicts, the go from
         // Developer view, a reservation in one ledger with the Head's, and the switch: the viewport's setRuntime alone.
         this.retire = stages.retire;
+        // One port over the viewport's engine: the stage's, and the review's capture of what the stage installed (EA6.1).
+        const port = createNullGraphPort(vp.engine);
+        this.stagePort = port;
         this.stage = stages.createStage({
-            port: createNullGraphPort(vp.engine),
+            port,
             headless: (width, height) => createHeadlessPort(vp.engine.device, width, height),
             limits: limitsOf(vp.engine.device),
             compiler: () => compiler,
@@ -406,6 +486,10 @@ class Studio {
         }, { fps, still });
         this.candidatePanel?.refresh();
         this.replayPanel?.refresh();
+        // The review's capture and the browser's JPEG encoder (EA6.1): loaded behind the stage, needed only once a world is on it.
+        const [capture, { encodeJpeg }] = await Promise.all([import('../../exec/review-capture'), import('../../capture/jpeg')]);
+        this.reviewCapture = capture;
+        this.encodeJpeg = encodeJpeg;
     }
 
     /** Why Run cannot be pressed now; null when it can. */
@@ -414,6 +498,7 @@ class Studio {
         if (!this.stage) return 'The stage is starting: its device compiler loads first.';
         if (this.stage.busy) return 'A Run is under way.';
         if (this.busy) return 'A world is being made: Run once it is done.';
+        if (this.reviews?.capturing) return 'The stage is being captured for its review: Run once it is done.';
         return null;
     }
 
@@ -426,9 +511,11 @@ class Studio {
         const r = await stage.run(snapshot, compiled);
         const numbers = runNumbers(r.report);
         if (r.status === 'installed') {
-            const notes = this.installAgent(r.runtime, r.held, snapshot, compiled, r.report?.bounds ?? null);
+            const notes = this.installAgent(r.runtime, r.held, snapshot, compiled, r.report);
             const said = [numbers, ...notes].filter(Boolean).join(' · ');
             step.ok(said, `id(C) ${snapshot.id.slice(0, 12)}…`);
+            // Its review (EA6): captured now, as it is, from the framed view and the side.
+            this.reviews?.installed(this.stageWorld());
             return { status: 'installed', reason: null, numbers: said };
         }
         step.error(r.reason, numbers);
@@ -442,7 +529,8 @@ class Studio {
      * not got yet is off: keyframes and the camera path (W has none) and the Director (Q85). Films and photos are on
      * (EA5.5): each made from its candidate again, from time zero, with the camera where it is.
      */
-    private installAgent(runtime: WorldRuntime, held: AgentReservation, snapshot: Sealed, compiled: readonly DeepReadonly<CompiledBody>[], bounds: AgentBounds | null): string[] {
+    private installAgent(runtime: AgentRuntimeT, held: AgentReservation, snapshot: Sealed, compiled: readonly DeepReadonly<CompiledBody>[], report: AgentReport | null): string[] {
+        const bounds = report?.bounds ?? null;
         const vp = this.viewport!;
         const retired: Array<[{ destroy(): void } | null, AgentReservation | null]> = [
             [this.runtime, this.headReservation], [this.agentWorld?.runtime ?? null, this.agentWorld?.held ?? null],
@@ -452,7 +540,7 @@ class Studio {
         this.draftIsLive = false;
         this.selectedKey = -1;
         this.headReservation = null;
-        this.agentWorld = { runtime, held, candidate: snapshot.id, snapshot, compiled, epoch: ++this.installs };
+        this.agentWorld = { runtime, held, candidate: snapshot.id, snapshot, compiled, epoch: ++this.installs, bounds, report };
         for (const [world, reservation] of retired) {
             const error = this.retire?.(world, reservation) ?? null;
             if (error) this.trace.add('The old world\'s cleanup', 'gate').error(error);
@@ -923,6 +1011,8 @@ class Studio {
             const error = this.retire?.(this.agentWorld.runtime, this.agentWorld.held) ?? null;
             if (error) this.trace.add('The old world\'s cleanup', 'gate').error(error);
             this.agentWorld = null;
+            // Its reviews stay as history; none can authorize anything now (EA6).
+            this.reviews?.installed(null);
         }
         // The new Head, counted in the stage's ledger (I7), so a Run reserves beside it.
         this.headReservation?.release();
