@@ -21,8 +21,8 @@ import { createIdentity } from '../../forge-client/identity';
 import { createLiveClient } from '../../forge-client/live-client';
 import { MockClient } from '../../forge-client/mock-client';
 import { COLLISION_PROMPT } from '../../forge-client/examples/colliding-galaxies';
-import { cameraPath, firstView, keyframeToView, viewToKeyframe } from '../../runtime/camera-path';
-import { snapshotLive, sweepFilms } from '../../capture/film';
+import { cameraPath, firstView, keyframeToView, viewToKeyframe, type CameraView } from '../../runtime/camera-path';
+import { sceneFilm, snapshotLive, snapshotOf, sweepFilms, type FilmSource } from '../../capture/film';
 import type { GateDiagnostic } from '../../verify/gate';
 import { createLadder } from '../../verify/ladder';
 import { RUNG_NAMES, runLoop, type LoopEvent, type LoopOutcome, type VerifyFailure, type Verifier } from '../../loop/machine';
@@ -42,6 +42,7 @@ import { highlightWgslLine } from '../../shared/highlight';
 import { icon, loader, logo, wordmark } from '../../shared/icons';
 import { formatJson } from '../../shared/json';
 import { programText, QUALITY_UNIFORM, targetsOf, withProgramText, type ProgramTarget, type SceneSpec, type Style } from '../../contract/spec';
+import { BACKDROP_DEFAULT, startBackdrop, type Backdrop } from './backdrop';
 import { CodeView, type CodeMark } from './code-view';
 import { DirectorPanel } from './director';
 import { canShareFile, ExportDialog, shareFile } from './export-dialog';
@@ -69,13 +70,30 @@ const STARTERS: Array<{ id: string; label: string; prompt: string }> = [
 ];
 type Tab = 'director' | 'spec' | 'wgsl';
 const lineCount = (s: string) => (s ? s.split('\n').length : 0);
+/** A touch screen: the viewport zooms by pinching there, not by scrolling. */
+const TOUCH = matchMedia('(pointer: coarse)').matches;
 
 // The stage's Run (EA5.3), loaded only behind ?agent=1: its types, by name, so nothing of it is imported here.
 type AgentStage = import('../../exec/stage').Stage;
 type AgentReport = import('../../exec/stage').PrepareReport;
 type AgentReservation = import('../../exec/gate').Reservation;
+type AgentBounds = import('../../exec/bounds').WorldBounds;
+type FrameWorld = typeof import('../../exec/bounds').frameWorld;
 type RunSummary = import('./candidate-view').RunSummary;
 type Sealed = DeepReadonly<SealedCandidate>;
+type CreateFilmWorkload = import('null-graph/film').CreateFilmWorkload;
+/**
+ * An agent world on the stage (EA5.3): its runtime, what it holds in the stage's ledger, its candidate, the device verdicts
+ * it was admitted on, and its install's number, to which each film of it is bound (EA5.5).
+ */
+interface AgentWorld {
+    runtime: WorldRuntime;
+    held: AgentReservation;
+    candidate: string;
+    snapshot: Sealed;
+    compiled: readonly DeepReadonly<CompiledBody>[];
+    epoch: number;
+}
 
 /** A Run's numbers in one line for Developer view: the probe's predictions, the reservation, the first frame's look. */
 function runNumbers(report: AgentReport | null): string {
@@ -143,14 +161,26 @@ class Studio {
     /** The device's generation: it moves on a device loss, and evidence from before proves nothing (EA5). */
     private deviceGeneration = 0;
     private candidatePanel: { refresh(): void; readonly epoch: number } | null = null;
+    /** ?agent=1 only: a saved attempt replayed through the stage's Run (11-02), compiled once the device compiler exists. */
+    private replayPanel: { refresh(): void } | null = null;
     /** ?agent=1 only, once the viewport and its device compiler exist: the stage's Run (EA5.3). */
     private stage: AgentStage | null = null;
     /** The stage's chunk's retire, loaded with it: an old world's teardown after a switch (§9). */
     private retire: ((old: { destroy(): void } | null, held: AgentReservation | null) => string | null) | null = null;
-    /** An agent world on the stage (EA5.3): its runtime, what it holds in the stage's ledger, its id(C). */
-    private agentWorld: { runtime: WorldRuntime; held: AgentReservation; candidate: string } | null = null;
+    /** ?agent=1 only, with the stage: an agent world's camera framed on what it built (bounds.ts, 11-02). */
+    private frameWorld: FrameWorld | null = null;
+    /** An agent world on the stage (EA5.3). */
+    private agentWorld: AgentWorld | null = null;
+    /** Agent worlds installed so far: each film of one is bound to its install (EA5.5). */
+    private installs = 0;
+    /** ?agent=1, once the stage exists: a film's or a photo's workload of an agent world on the stage (EA5.5). */
+    private agentFilm: ((world: AgentWorld, fps: number, still: CameraView) => CreateFilmWorkload) | null = null;
     /** What an h1 Head holds in the stage's ledger (I7), so a Run reserves beside it. */
     private headReservation: AgentReservation | null = null;
+    /** The empty stage's live backdrop (backdrop.ts) until the first world replaces it; null without one. */
+    private backdrop: Backdrop | null = null;
+    /** Its frames, held while the device checks a candidate: released by a refusal, the run's end or the swap. */
+    private backdropHold: (() => void) | null = null;
 
     // Components and the elements they live in.
     private readonly trace = new TracePanel();
@@ -235,7 +265,26 @@ class Studio {
             return;
         }
         const vp = this.viewport;
-        this.ladder = createLadder(vp.engine, { width: () => vp.canvas.width, height: () => vp.canvas.height });
+        const ladder = createLadder(vp.engine, { width: () => vp.canvas.width, height: () => vp.canvas.height });
+        // A check waits for the backdrop's build and holds its frames, so the probe times the candidate alone. A refusal
+        // lets it play again while the model repairs; a pass keeps it held until the swap, so the canvas goes from the
+        // backdrop straight to the new world (L6 draws its smoke frame on the canvas).
+        this.ladder = {
+            verify: async (spec, signal) => {
+                if (this.backdrop) {
+                    await this.backdrop.ready;
+                    this.holdBackdrop();
+                }
+                try {
+                    const result = await ladder.verify(spec, signal);
+                    if (!result.ok) this.releaseBackdrop();
+                    return result;
+                } catch (error) {
+                    this.releaseBackdrop();
+                    throw error;
+                }
+            },
+        };
         $('#gpu-pill').replaceChildren(h('i', { class: 'ok' }), h('span', null, vp.gpuLabel));
         $('#gpu-pill').title = 'The adapter WebGPU gave this page. On hybrid-GPU laptops Chrome may pick the integrated GPU: set Chrome to "High performance" in Windows graphics settings.';
         vp.onFrame = stats => this.onFrame(stats.fps, stats.width, stats.height, stats.quality, stats.scale);
@@ -249,6 +298,10 @@ class Studio {
         if (agent) void this.mountDeviceCompiler(vp);
         if (params.has('rung')) vp.pin(Number(params.get('rung')));
         vp.start();
+        // The empty stage's live backdrop. Not under ?agent=1, whose stage measures its Head as EA-E did. ?backdrop=off
+        // keeps the still stage and the loader video; ?backdrop=<id> picks another playground example.
+        const backdrop = params.get('backdrop') ?? BACKDROP_DEFAULT;
+        if (!agent && backdrop !== 'off') this.mountBackdrop(vp, backdrop);
         // Films a closed or crashed tab left in OPFS, and finished films no tab is showing (film.ts).
         void sweepFilms().then(removed => { if (removed.length) console.info(`Wexy: removed ${removed.length} old film(s) from this browser's storage`); });
         this.forgeBtn.disabled = false;
@@ -283,6 +336,18 @@ class Studio {
         this.candidatePanel = panel.candidate;
         panel.el.classList.add('dev-only');
         $('#left').insertBefore(panel.el, this.trace.el);
+        // A saved attempt replayed (11-02): `&replay=<name>` from the dev server's dev/replays, or a downloaded bundle
+        // opened. Sealed and compiled here, then the same Run as a candidate's; no backend, so it needs no Api.
+        const { ReplayPanel } = await import('./replay-view');
+        const replay = new ReplayPanel({
+            compiler: () => this.deviceCompiler,
+            run: { blocked: () => this.runBlocked(), go: (snapshot, compiled) => this.runCandidate(snapshot, compiled) },
+        });
+        this.replayPanel = replay;
+        replay.el.classList.add('dev-only');
+        $('#left').insertBefore(replay.el, this.trace.el);
+        const named = new URLSearchParams(location.search).get('replay');
+        if (named !== null) void replay.loadNamed(named);
     }
 
     /**
@@ -290,9 +355,13 @@ class Studio {
      * it compiles passed L1 and L2 first, and compiling runs nothing on the GPU. Its code loads only then.
      */
     private async mountDeviceCompiler(vp: Viewport): Promise<void> {
-        const [{ createDeviceCompiler }, stages, { createHeadlessPort, createNullGraphPort }, { limitsOf }, { adapterIdentity, environmentOf }] = await Promise.all([
+        const [{ createDeviceCompiler }, stages, { createHeadlessPort, createNullGraphPort }, { limitsOf }, { adapterIdentity, environmentOf }, films, { frameWorld }] = await Promise.all([
             import('../../exec/device-compiler'), import('../../exec/stage'), import('../../exec/null-graph-port'), import('../../exec/gate'), import('../../exec/eligibility'),
+            import('../../exec/film-workload'), import('../../exec/bounds'),
         ]);
+        this.frameWorld = frameWorld;
+        // The exact model, from the device's own adapter info: a browser that hides it keeps every candidate static-only.
+        const environment = environmentOf(adapterIdentity(vp.engine.device.adapterInfo), navigator.userAgent);
         const compiler = createDeviceCompiler(vp.engine.device, { generation: () => this.deviceGeneration, gpu: vp.gpuLabel });
         this.deviceCompiler = compiler;
         // The stage's Run (EA5.3): the viewport's engine, its device's limits, this device compiler's verdicts, the go from
@@ -304,8 +373,7 @@ class Studio {
             limits: limitsOf(vp.engine.device),
             compiler: () => compiler,
             present: { turn: () => this.candidatePanel?.epoch ?? 0, device: () => this.deviceGeneration },
-            // The exact model, from the device's own adapter info: a browser that hides it keeps every candidate static-only.
-            environment: environmentOf(adapterIdentity(vp.engine.device.adapterInfo), navigator.userAgent),
+            environment,
             gpu: vp.gpuLabel,
             size: () => ({ width: vp.canvas.width, height: vp.canvas.height }),
             maxPixels: MAX_LIVE_PIXELS,
@@ -318,7 +386,25 @@ class Studio {
             onRefusal: message => this.trace.add('The agent world paused', 'gate').error(message),
         });
         if (this.runtime) this.headReservation = this.stage.ledger.record(`head: ${this.spec?.title ?? 'h1'}`, this.runtime.deviceBytes);
+        // Films and photos of an agent world (EA5.5; executor-design.md §9a): each built again on the film's own engine, through
+        // the stage's gate, probe and look at the film's size, reserved beside the Head, on the verdicts the Head was admitted
+        // on, and bound to its install and this device generation.
+        const ledger = this.stage.ledger;
+        this.agentFilm = (world, fps, still) => films.agentFilmWorkload(world.snapshot, {
+            port: engine => createNullGraphPort(engine as Parameters<typeof createNullGraphPort>[0]),
+            headless: (width, height) => createHeadlessPort(vp.engine.device, width, height),
+            now: () => performance.now(),
+            quiet: () => vp.pause(),
+            limits: limitsOf(vp.engine.device), compiler: () => compiler, environment, gpu: vp.gpuLabel, ledger,
+            present: { turn: () => this.agentWorld?.epoch ?? -1, device: () => this.deviceGeneration },
+            onStage: () => this.agentWorld?.candidate ?? null,
+            compiled: world.compiled,
+            // Developer view's record of each film (and measurement) once disposed: its frames against time zero, and what
+            // the stage's ledger holds after its release (EA-F2 reads both).
+            onFrames: a => console.info(`Wexy: agent film ${a.candidate.slice(0, 12)}…, ${a.frames} frames at ${a.stepsPerFrame} step(s) a frame from time zero; frame 0 at step ${a.firstFrameSteps}; ${a.offTime} frame(s) off time; the stage's ledger holds ${ledger.held()} bytes`),
+        }, { fps, still });
         this.candidatePanel?.refresh();
+        this.replayPanel?.refresh();
     }
 
     /** Why Run cannot be pressed now; null when it can. */
@@ -339,9 +425,10 @@ class Studio {
         const r = await stage.run(snapshot, compiled);
         const numbers = runNumbers(r.report);
         if (r.status === 'installed') {
-            this.installAgent(r.runtime, r.held, snapshot);
-            step.ok(numbers, `id(C) ${snapshot.id.slice(0, 12)}…`);
-            return { status: 'installed', reason: null, numbers };
+            const notes = this.installAgent(r.runtime, r.held, snapshot, compiled, r.report?.bounds ?? null);
+            const said = [numbers, ...notes].filter(Boolean).join(' · ');
+            step.ok(said, `id(C) ${snapshot.id.slice(0, 12)}…`);
+            return { status: 'installed', reason: null, numbers: said };
         }
         step.error(r.reason, numbers);
         return { status: r.status, reason: r.reason, numbers };
@@ -351,9 +438,10 @@ class Studio {
      * An agent world on the stage (EA5.3; executor-design.md §5). The switch was the stage's commit (the viewport's
      * setRuntime); this is the studio's own, after it. The old world is retired (its releases attempted, its reservation
      * returned; a failure is said and changes nothing installed), h1's state is detached, and what an agent world has
-     * not got yet is off: keyframes and the camera path (W has none), the Director (Q85), films and photos (EA5.5).
+     * not got yet is off: keyframes and the camera path (W has none) and the Director (Q85). Films and photos are on
+     * (EA5.5): each made from its candidate again, from time zero, with the camera where it is.
      */
-    private installAgent(runtime: WorldRuntime, held: AgentReservation, snapshot: Sealed): void {
+    private installAgent(runtime: WorldRuntime, held: AgentReservation, snapshot: Sealed, compiled: readonly DeepReadonly<CompiledBody>[], bounds: AgentBounds | null): string[] {
         const vp = this.viewport!;
         const retired: Array<[{ destroy(): void } | null, AgentReservation | null]> = [
             [this.runtime, this.headReservation], [this.agentWorld?.runtime ?? null, this.agentWorld?.held ?? null],
@@ -363,24 +451,32 @@ class Studio {
         this.draftIsLive = false;
         this.selectedKey = -1;
         this.headReservation = null;
-        this.agentWorld = { runtime, held, candidate: snapshot.id };
+        this.agentWorld = { runtime, held, candidate: snapshot.id, snapshot, compiled, epoch: ++this.installs };
         for (const [world, reservation] of retired) {
             const error = this.retire?.(world, reservation) ?? null;
             if (error) this.trace.add('The old world\'s cleanup', 'gate').error(error);
         }
+        // ?agent=1 starts no backdrop; should one be up, the switch has taken its place.
+        this.dropBackdrop();
         this.setMode('orbit', true);
+        // A program has no camera of its own yet: the orbit is framed on what the world built, its mesh batches as init
+        // left them (bounds.ts), or starts where the orbit always starts. The old world's view is never inherited.
+        const fov = vp.currentView().fov;
+        const framing = this.frameWorld?.(bounds, fov, vp.canvas.width / Math.max(1, vp.canvas.height)) ?? null;
+        vp.setView(framing?.view ?? { target: [0, 0, 0], distance: 12, azimuth: 0, polar: 1.25, fov });
         vp.path = null;
         this.timeline.setKeyframes([]);
         this.director.note('This world was built from an agent program: its controls are not here yet.');
-        this.exportBtn.disabled = true;
-        this.snapBtn.disabled = true;
-        this.captureBar.hidden = true;
+        this.exportBtn.disabled = false;
+        this.snapBtn.disabled = false;
+        this.captureBar.hidden = false;
         this.empty.hidden = true;
         this.hud.root.hidden = false;
-        this.hud.title.textContent = `Agent world ${snapshot.id.slice(0, 12)}…`;
+        this.hud.title.textContent = agentTitle({ candidate: snapshot.id });
         this.hud.source.hidden = true;
         this.hud.count.textContent = `${snapshot.x.nodes.length} nodes · ${snapshot.interfaces.length} modules`;
         this.swapBtn.disabled = this.busy || !this.draftSpec;
+        return framing?.notes ?? [];
     }
 
     /**
@@ -486,13 +582,14 @@ class Studio {
             b.addEventListener('click', () => { this.prompt.value = s.prompt; this.prompt.dispatchEvent(new Event('input')); void this.forge('mock'); });
             return b;
         });
+        // Where the idea and the steps are depends on the layout: beside the stage, or below it once the panels stack.
         this.empty.replaceChildren(h('div', { class: 'empty-card' },
             h('span', { class: 'empty-logo', html: logo(64) }),
             h('h3', null, 'Describe a world'),
-            h('p', { class: 'empty-building', role: 'status' }, 'Follow the steps on the left'),
-            h('p', { class: 'empty-lede' }, 'Type an idea on the left, or tap one below. It turns into a living 3D world you can fly around, and then into a video.'),
+            h('p', { class: 'empty-building', role: 'status', html: 'Follow the steps <span class="at-wide">on the left</span><span class="at-narrow">below</span>' }),
+            h('p', { class: 'empty-lede', html: '<span class="at-wide">Type an idea on the left, or tap one below.</span><span class="at-narrow">Tap an idea below, or scroll down to type your own.</span> It turns into a living 3D world you can fly around, and then into a video.' }),
             h('div', { class: 'empty-examples' }, chips),
-        ));
+        ), h('p', { class: 'empty-source' }));
     }
 
     /** Camera-app controls on the viewport itself: the shape, a photo and the record button. */
@@ -742,6 +839,8 @@ class Studio {
             this.restoreControls();
         } finally {
             if (this.abort === ac) this.abort = null;
+            // A run that brought no world lets the backdrop play again.
+            this.releaseBackdrop();
             this.setBusy(false);
         }
     }
@@ -816,6 +915,8 @@ class Studio {
         vp.setRuntime(runtime);
         // Destroy after the swap: the old world kept rendering while the new one was checked and built (L8).
         old?.destroy();
+        // The empty stage's backdrop, which held still through the check, goes the same way.
+        this.dropBackdrop();
         // An agent world on the stage goes the same way, after the switch (EA5.3); its reservation with it.
         if (this.agentWorld) {
             const error = this.retire?.(this.agentWorld.runtime, this.agentWorld.held) ?? null;
@@ -889,6 +990,7 @@ class Studio {
             }
         } finally {
             if (this.abort === ac) this.abort = null;
+            this.releaseBackdrop();
             this.setBusy(false);
         }
     }
@@ -921,14 +1023,66 @@ class Studio {
         this.swapBtn.disabled = busy || !this.draftSpec || (this.editedTargets.size === 0 && this.draftIsLive);
     }
 
-    /** While the empty stage waits for a first world, the mark turns (public/loader1.mp4). */
+    /** While the empty stage waits for a first world, its mark turns and the starters step aside. */
     private setBuilding(busy: boolean): void {
-        const mark = this.empty.querySelector<HTMLElement>('.empty-logo:not(.warn)');
-        if (!mark || this.empty.classList.contains('is-building') === busy) return;
+        if (this.empty.classList.contains('is-building') === busy) return;
         this.empty.classList.toggle('is-building', busy);
-        mark.innerHTML = busy ? loader(1, 132) : logo(64);
         const title = this.empty.querySelector('h3');
         if (title) title.textContent = busy ? 'Making your world' : 'Describe a world';
+        this.renderMark();
+    }
+
+    /**
+     * The empty stage's mark, at rest or turning. With a backdrop it turns as the small spinner does, with nothing to
+     * load; without one, the loader video plays (public/loader1.mp4).
+     */
+    private renderMark(): void {
+        const mark = this.empty.querySelector<HTMLElement>('.empty-logo:not(.warn)');
+        if (!mark) return;
+        const state = !this.empty.classList.contains('is-building') ? 'rest' : this.backdrop ? 'turning' : 'video';
+        if (mark.dataset.state === state) return;
+        mark.dataset.state = state;
+        mark.innerHTML = state === 'turning' ? '<i class="spinner"></i>' : state === 'video' ? loader(1, 132) : logo(64);
+    }
+
+    // ------------------------------------------------------------------ the empty stage's backdrop
+
+    /** A playground example drawn live behind the empty card (backdrop.ts); the still stage stays if it cannot be built. */
+    private mountBackdrop(vp: Viewport, id: string): void {
+        const backdrop = startBackdrop(vp, id, { touch: TOUCH, still: matchMedia('(prefers-reduced-motion: reduce)').matches });
+        if (!backdrop) return;
+        this.backdrop = backdrop;
+        void backdrop.ready.then(live => {
+            if (this.backdrop !== backdrop) return;
+            if (!live) {
+                this.backdrop = null;
+                this.renderMark();
+                return;
+            }
+            // Its source, as the HUD names a world's (design guidelines §3).
+            const label = STARTERS.find(s => s.id === id)?.label ?? id;
+            const source = this.empty.querySelector('.empty-source');
+            if (source) source.textContent = `${label} · playground example, running live`;
+            this.empty.classList.add('has-backdrop');
+        });
+    }
+
+    private holdBackdrop(): void {
+        if (this.backdrop && !this.backdropHold) this.backdropHold = this.backdrop.hold();
+    }
+
+    private releaseBackdrop(): void {
+        this.backdropHold?.();
+        this.backdropHold = null;
+    }
+
+    /** After a world has replaced the backdrop on the viewport: its holds let go, then it is freed. */
+    private dropBackdrop(): void {
+        if (!this.backdrop) return;
+        this.releaseBackdrop();
+        this.backdrop.drop();
+        this.backdrop = null;
+        this.empty.classList.remove('has-backdrop');
     }
 
     // ------------------------------------------------------------------ WGSL + spec views
@@ -1012,8 +1166,8 @@ class Studio {
             if (isTyping() || e.ctrlKey || e.metaKey || e.altKey || this.exporter.el.open) return;
             if (e.key === ' ' && this.runtime) { e.preventDefault(); this.setPlaying(!this.timeline.isPlaying); }
             else if (e.key.toLowerCase() === 'k' && this.runtime) this.addKeyframe();
-            else if (e.key.toLowerCase() === 'p' && this.runtime) void this.takeSnapshot();
-            else if (e.key.toLowerCase() === 'r' && this.runtime) this.openExport();
+            else if (e.key.toLowerCase() === 'p' && (this.runtime || this.agentWorld)) void this.takeSnapshot();
+            else if (e.key.toLowerCase() === 'r' && (this.runtime || this.agentWorld)) this.openExport();
             else if ((e.key === 'Delete' || e.key === 'Backspace') && this.selectedKey >= 0) this.removeKeyframe(this.selectedKey);
         });
     }
@@ -1060,7 +1214,7 @@ class Studio {
         this.timeline.setMode(mode);
         this.hud.cam.innerHTML = mode === 'path'
             ? `${icon('route', 12)}<span>Playing the camera move · drag to look around</span>`
-            : `${icon('orbit', 12)}<span>Drag to look around · scroll to zoom · K saves the view</span>`;
+            : `${icon('orbit', 12)}<span>${TOUCH ? 'Drag to look around · pinch to zoom' : 'Drag to look around · scroll to zoom · K saves the view'}</span>`;
     }
 
     private addKeyframe(): void {
@@ -1127,14 +1281,32 @@ class Studio {
         this.director.refresh();
     }
 
+    /** An agent world's film source (EA5.5): its candidate built again for each measurement, film and photo. */
+    private agentFilmSource(world: AgentWorld): FilmSource | null {
+        const make = this.agentFilm;
+        if (!make) return null;
+        return { workload: (fps, still) => make(world, fps, still), warmupSeconds: 0, provenance: { candidate: world.candidate, graph: world.snapshot.x.hash } };
+    }
+
     private openExport(): void {
-        const vp = this.viewport, rt = this.runtime, spec = this.spec;
-        if (!vp || !rt || !spec) return;
+        const vp = this.viewport;
+        if (!vp) return;
+        const world = this.agentWorld;
+        if (world) {
+            // An agent world's film (EA5.5): from its time zero, with the camera where it is now (W has no path). Not while a
+            // Run builds another on the same device.
+            const film = this.agentFilmSource(world);
+            if (!film || this.stage?.busy) return;
+            const still = vp.currentView();
+            this.exporter.open({ viewport: vp, film, title: agentTitle(world), seconds: this.duration, format: this.format, pathFor: () => () => still });
+            return;
+        }
+        const rt = this.runtime, spec = this.spec;
+        if (!rt || !spec) return;
         this.setPlaying(false);
         this.exporter.open({
             viewport: vp,
-            runtime: rt,
-            spec,
+            film: sceneFilm(spec, rt),
             title: spec.title,
             seconds: this.duration,
             format: this.format,
@@ -1148,25 +1320,30 @@ class Studio {
 
     /** One click, one file: a Full HD photo in the chosen shape, saved straight away. */
     private async takeSnapshot(): Promise<void> {
-        const vp = this.viewport, rt = this.runtime, spec = this.spec;
-        if (!vp || !rt || !spec || this.busy || document.body.classList.contains('exporting')) return;
+        const vp = this.viewport, rt = this.runtime, spec = this.spec, world = this.agentWorld;
+        if (!vp || this.busy || document.body.classList.contains('exporting')) return;
+        // An agent world's photo (EA5.5) shows its time zero, its candidate built again for it; h1's, the live state.
+        const film = world ? this.agentFilmSource(world) : null;
+        if (world ? !film || this.stage?.busy : !rt || !spec) return;
+        const title = world ? agentTitle(world) : spec!.title;
         const { width, height } = frameSize(this.format, 'fhd');
-        // A photo of the live state on an engine of its own; the preview waits, untouched (film.ts).
+        const view = vp.currentView();
+        // A photo on an engine of its own; the preview waits, untouched (film.ts).
         const resume = vp.pause();
         let png: Blob;
         try {
-            ({ png } = await snapshotLive(vp.engine.device, rt, width, height, vp.currentView()));
+            ({ png } = film ? await snapshotOf(vp.engine.device, film.workload(60, view), width, height, view) : await snapshotLive(vp.engine.device, rt!, width, height, view));
         } catch (e) {
             this.showMessage(`The photo could not be taken: ${(e as Error).message.replace(/^film: /, '')}`, 'error');
             return;
         } finally {
             resume();
         }
-        const name = `${spec.title.split(':')[0].trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${this.format}-${Date.now()}.png`;
+        const name = `${title.split(':')[0].trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${this.format}-${Date.now()}.png`;
         download(png, name);
         const file = new File([png], name, { type: 'image/png' });
         const f = formatById(this.format);
-        this.showToast(`Photo saved · ${f.label} ${f.ratio}`, canShareFile(file) ? () => void shareFile(file, spec.title) : null);
+        this.showToast(`Photo saved · ${f.label} ${f.ratio}`, canShareFile(file) ? () => void shareFile(file, title) : null);
     }
 
     private showToast(text: string, onShare: (() => void) | null): void {
@@ -1201,6 +1378,11 @@ class Studio {
             h('a', { class: 'btn', href: './' }, 'Back to the home page'),
         ));
     }
+}
+
+/** An agent world's name in the studio: its id(C), short. */
+function agentTitle(world: { candidate: string }): string {
+    return `Agent world ${world.candidate.slice(0, 12)}…`;
 }
 
 function round3(v: number): number {

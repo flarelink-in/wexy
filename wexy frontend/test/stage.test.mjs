@@ -70,12 +70,16 @@ test('EA-D14 the offscreen first frame: drawn into a private target, the Head\'s
     assert.equal(r.report.probe.peakBytes, need.total);
     assert.equal(r.report.sanity.visibility, 'passed');
     assert.deepEqual(r.report.firstFrame, SIZE);
+    assert.deepEqual(r.report.bounds, { batches: [] }, 'its instances read back as the fake engine holds them: never written, so nothing to frame');
     assert.equal(r.report.refused, null);
 
     // The stage's engine ran nothing generated before the probe approved it: its first submission is init's, at full size.
     assert.deepEqual(s.port.log.filter(l => l.startsWith('render')), ['render [seed#create]', 'render [main, post/0, post/1]']);
-    // The first frame, step by step, into its private target; the Head's camera written back right after the frame.
+    // The first frame, step by step, into its private target; the Head's camera written back right after the frame. Then
+    // its bounds (11-02): galaxy's 12,000 instances read in 16 evenly spaced runs of 256, for the studio's camera.
     const from = s.port.log.indexOf('offscreenTarget 1280x720');
+    const run = 256 * 14 * 4;
+    const bounds = Array.from({ length: 16 }, (_, k) => `readBuffer galaxy#create/storage ${run}${k ? ` @${Math.floor(k * (12000 - 256) / 15) * 14 * 4}` : ''}`);
     assert.deepEqual(s.port.log.slice(from, s.port.log.indexOf('commit') + 1), [
         'offscreenTarget 1280x720',
         'redirect chain -> target 1280x720',
@@ -86,6 +90,7 @@ test('EA-D14 the offscreen first frame: drawn into a private target, the Head\'s
         'readTarget target 1280x720',
         'readBuffer backdrop#create/storage 16',
         `readBuffer galaxy#create/storage ${1024 * 14 * 4}`,
+        ...bounds,
         'redirect chain -> screen',
         'destroyTarget target 1280x720',
         'commit',
@@ -128,7 +133,8 @@ test('EA-D14 the offscreen first frame: drawn into a private target, the Head\'s
 
 test('the EA5.3 review: a probe submission\'s error refuses before full work (H1); a newer turn or a lost device stops preparation\'s own work (M1); a first frame that throws still writes the Head\'s camera back (M2)', async () => {
     // H1: a variant's submission raises an error: refused before anything ran at full size on the stage's engine.
-    const erring = await stageFor('galaxy', { headlessOptions: { checkpointError: () => 'a validation error: the bind group is invalid' } });
+    // (Its build's bindings, checked since 11-02, pass: the error is a submission's.)
+    const erring = await stageFor('galaxy', { headlessOptions: { checkpointError: port => (/^apply(Material|Lights) /.test(port.log.at(-1) ?? '') ? null : 'a validation error: the bind group is invalid') } });
     erring.stage.press(erring.snap);
     const e = await erring.stage.run(erring.snap, erring.compiled);
     assert.equal(e.status, 'failed');

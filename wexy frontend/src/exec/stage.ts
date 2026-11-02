@@ -25,6 +25,7 @@ import type { DeepReadonly } from '../contract/engine/frozen';
 import { createAuthority, instantiate, type Present } from '../loop/executor';
 import type { SealedCandidate } from '../loop/snapshot';
 import type { CameraView } from '../runtime/camera-path';
+import { worldBounds, type WorldBounds } from './bounds';
 import { createEngineExecutor, type PreparedWorld } from './engine-executor';
 import type { EnginePort } from './engine-port';
 import type { Environment, Parsed } from './eligibility';
@@ -50,6 +51,11 @@ export interface PrepareReport {
      * included). EA-G1 holds the probe's predictions to these (§9: "compare predictions with target work").
      */
     actual: { initMs: number | null; firstFrameMs: number | null };
+    /**
+     * Each mesh batch's box once init has run, read back before commit (bounds.ts, 11-02): what the studio frames its
+     * camera on. Null when this engine cannot read them back, or reading them failed (the world is not refused for it).
+     */
+    bounds: WorldBounds | null;
     refused: string | null;
 }
 
@@ -83,7 +89,8 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 export function stagePreparation(snapshot: Snapshot, port: EnginePort, deps: PreparationDeps): (world: PreparedWorld) => Promise<void> {
     return async world => {
         const report: PrepareReport = {
-            candidate: snapshot.id, probe: null, sanity: null, reservation: deps.need, firstFrame: null, actual: { initMs: null, firstFrameMs: null }, refused: null,
+            candidate: snapshot.id, probe: null, sanity: null, reservation: deps.need, firstFrame: null, actual: { initMs: null, firstFrameMs: null }, bounds: null,
+            refused: null,
         };
         /** Still wanted: neither cancelled nor stale. A stop throws, and the coordinator, seeing the same, stops and releases. */
         const fresh = () => {
@@ -143,6 +150,13 @@ export function stagePreparation(snapshot: Snapshot, port: EnginePort, deps: Pre
                 const sanity = await sanityLook(world.runtime, port, snapshot.x, pixels);
                 report.sanity = sanity.numbers;
                 if (!sanity.ok) throw new Error(sanity.reason);
+                fresh();
+                // Where the world is, for the studio's camera: advisory, so a failed read leaves it unframed, never refused.
+                try {
+                    report.bounds = await worldBounds(world.runtime.meshBatches(), port);
+                } catch {
+                    report.bounds = null;
+                }
                 fresh();
                 // Back at the screen only now; a refused world stays pointed at nothing visible until it is released.
                 world.runtime.redirectOutput(null);

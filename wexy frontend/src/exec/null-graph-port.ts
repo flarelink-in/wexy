@@ -21,6 +21,7 @@ import {
 } from 'null-graph/materials';
 import * as post from 'null-graph/post';
 import { eyeOf, type CameraView } from '../runtime/camera-path';
+import { vertexBox } from './bounds';
 import type { BatchRequest, BindEntry, CameraState, EnginePort, Handle } from './engine-port';
 
 const USAGE: Readonly<Record<string, number>> = {
@@ -130,6 +131,8 @@ export function createNullGraphPort(engine: NullGraph): EnginePort {
             return geometry;
         },
         destroyGeometry: geometry => (geometry as Geometry).destroy(),
+        // Its own box, from the positions its vertices hold on the CPU (StandardLayout's first attribute): bounds.ts.
+        geometryBox: geometry => vertexBox((geometry as Geometry).vertices, (geometry as Geometry).layout.strideFloats),
         material: (className, options) => {
             const baseColor = options.baseColor as [number, number, number, number];
             switch (className) {
@@ -270,11 +273,11 @@ export function createNullGraphPort(engine: NullGraph): EnginePort {
             t.color.destroy();
             t.depth.destroy();
         },
-        readBuffer: async (buffer, bytes) => {
+        readBuffer: async (buffer, bytes, offset = 0) => {
             const size = align4(bytes);
             const staging = device.createBuffer({ label: 'wexy/state read', size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
             try {
-                submit(e => e.copyBufferToBuffer(buffer as GPUBuffer, 0, staging, 0, size));
+                submit(e => e.copyBufferToBuffer(buffer as GPUBuffer, offset, staging, 0, size));
                 await staging.mapAsync(GPUMapMode.READ);
                 return staging.getMappedRange(0, size).slice(0);
             } finally {

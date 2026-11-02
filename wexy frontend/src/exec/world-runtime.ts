@@ -11,6 +11,7 @@ import type { DeepReadonly } from '../contract/engine/frozen';
 import type { ExecutionGraph, XOperation } from '../contract/adapters/graph';
 import type { CameraView } from '../runtime/camera-path';
 import type { WorldRuntime } from '../runtime/world';
+import type { MeshBatchState } from './bounds';
 import type { EnginePort, Handle } from './engine-port';
 
 type Graph = DeepReadonly<ExecutionGraph>;
@@ -341,6 +342,20 @@ export class AgentRuntime implements WorldRuntime {
             if (r.owner !== 'host' && r.owner !== 'engine') continue;
             if (!this.built.buffers.get(r.id)?.length || r.elements === null || r.strideFloats === null) continue;
             out.push({ resource: r.id, buffer: bufferOf(this.built, r.id), elements: r.elements, strideFloats: r.strideFloats });
+        }
+        return out;
+    }
+
+    /** Its mesh batches (stock materials): each one's instance buffer, the instances it draws and its geometry (bounds.ts). */
+    meshBatches(): MeshBatchState[] {
+        const out: MeshBatchState[] = [];
+        for (const op of this.x.operations) {
+            if (op.call !== 'engine.createBatch' || (op.args.shader as { kind: string }).kind !== 'stock') continue;
+            const geometry = this.built.made.get(`${String(op.args.geometry)}#create`);
+            const storage = op.accesses[0].resource;
+            if (geometry?.kind !== 'geometry' || !this.built.buffers.get(storage)?.length) continue;
+            const draw = this.x.operations.find(o => o.id === `${op.node}#draw`);
+            out.push({ node: op.node, buffer: bufferOf(this.built, storage), instances: (draw?.args as { instances?: number } | undefined)?.instances ?? 0, geometry: geometry.geometry });
         }
         return out;
     }

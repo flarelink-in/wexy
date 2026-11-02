@@ -90,8 +90,10 @@ export interface EnginePort {
     /** Its colour, read back as RGBA8 (red first, whatever the canvas format), row by row with no padding. */
     readTarget?(target: Handle): Promise<Uint8Array>;
     destroyTarget?(target: Handle): void;
-    /** A buffer's first `bytes`, read back: the sanity look's f32 samples. */
-    readBuffer?(buffer: Handle, bytes: number): Promise<ArrayBuffer>;
+    /** `bytes` of a buffer from `offset` (0 when not given; both multiples of 4), read back: the sanity look's and the bounds' samples. */
+    readBuffer?(buffer: Handle, bytes: number, offset?: number): Promise<ArrayBuffer>;
+    /** A geometry's own box, from its vertices' positions (bounds.ts); null when it holds none. */
+    geometryBox?(geometry: Handle): { min: [number, number, number]; max: [number, number, number] } | null;
     /** Resolves once the queue has run everything submitted so far: the probe's fence. */
     settle?(): Promise<void>;
     /**
