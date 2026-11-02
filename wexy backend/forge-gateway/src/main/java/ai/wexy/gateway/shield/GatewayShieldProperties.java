@@ -96,12 +96,12 @@ public class GatewayShieldProperties {
             Map.entry("agent-turn", new Bucket(AgentTurn.MAX_CALLS / 30.0, 4 * AgentTurn.MAX_CALLS, AgentTurn.MAX_CALLS)),
             Map.entry("agent-turn-user", new Bucket(AgentTurn.MAX_CALLS / 60.0, 2 * AgentTurn.MAX_CALLS, AgentTurn.MAX_CALLS)),
             Map.entry("agent-turn-anonymous", new Bucket(AgentTurn.MAX_CALLS / 120.0, 2 * AgentTurn.MAX_CALLS, AgentTurn.MAX_CALLS)),
-            // A module call is one model call (EA4.2). An attempt makes at most seven (Q84's proposal: four authors and three
-            // repairs), so these keep the turns' pace: signed in, two attempts at once, then one a minute; anonymous, one,
-            // then one every two minutes.
-            Map.entry("agent-module", new Bucket(14 / 30.0, 28)),
-            Map.entry("agent-module-user", new Bucket(7 / 60.0, 14)),
-            Map.entry("agent-module-anonymous", new Bucket(7 / 120.0, 7)),
+            // A module call is one model call (EA4.2). An attempt makes at most AgentTurn.MODULE_CALLS of them (Q84, revised
+            // 2026-11-02: twelve authors and ten repairs; seven before), so these keep the turns' pace: signed in, two attempts
+            // at once, then one a minute; anonymous, one, then one every two minutes; a client, four, then two every 30 s.
+            Map.entry("agent-module", new Bucket(2.0 * AgentTurn.MODULE_CALLS / 30.0, 4 * AgentTurn.MODULE_CALLS)),
+            Map.entry("agent-module-user", new Bucket(AgentTurn.MODULE_CALLS / 60.0, 2 * AgentTurn.MODULE_CALLS)),
+            Map.entry("agent-module-anonymous", new Bucket(AgentTurn.MODULE_CALLS / 120.0, AgentTurn.MODULE_CALLS)),
             Map.entry("publish", new Bucket(0.1, 10)),
             Map.entry("publish-user", new Bucket(0.05, 5)),
             Map.entry("admin", new Bucket(1, 10))

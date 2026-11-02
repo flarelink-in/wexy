@@ -240,7 +240,7 @@ async function endings(): Promise<void> {
     v = await ending(errorBudgetWire, 'error-budget');
     check('EA-V1 a later charge refused: failed, the code and where, the first call\'s reservation held', v.phase === 'failed' && v.success === 'false'
         && v.reason === 'budget in the stream: Live creation has reached its spending limit for now.'
-        && v.calls[0].includes('? in / ? out · $0.1560 held, no usage came'), v);
+        && v.calls[0].includes('? in / ? out · $0.1562 held, no usage came'), v);
 
     v = await ending(errorUpstreamWire, 'error-upstream');
     check('EA-V1 answers off the schema twice: failed, as upstream', v.phase === 'failed'
@@ -438,7 +438,7 @@ async function candidates(): Promise<void> {
         v.phase === 'static-verified' && v.status === 'Static-verified: checked, not compiled' && /^id\(C\) [0-9a-f]{12}…$/.test(v.id ?? '')
         && v.modules.length === 1 && place.module === 'place' && place.phase === 'passed' && /^place · compute · passed · 1 call · body [0-9a-f]{12}…$/.test(place.head)
         && place.body === RECORDED_BODY && place.verdicts.length === 1 && place.verdicts[0].startsWith('lint pass (host, current)')
-        && v.budget === 'Q_C: 4 of 19 calls · authors 1/4 · repairs 0/3 · revisions 0/1' && v.jobs.length === 1
+        && v.budget === 'Q_C: 4 of 34 calls · authors 1/12 · repairs 0/10 · revisions 0/1' && v.jobs.length === 1
         && /^job-1 place author: ok · \$0\.01\d\d · [^·]+ · module\.author\.v1$/.test(v.jobs[0])
         && v.evidence === 'Evidence 5 records' && requests.length === 1 && requests[0].purpose === 'author', v);
     candidateButton(p, 'Download bundle').click();
@@ -473,7 +473,7 @@ async function candidates(): Promise<void> {
     v = lookCandidate(retry);
     check('EA-V8 an unusable answer is called again within Q_C, and the second is checked and sealed', v.phase === 'static-verified'
         && v.jobs.length === 2 && v.jobs[0].includes('author: unusable') && v.jobs[0].includes('upstream: The model wrote nothing for this part.')
-        && v.jobs[1].includes('author: ok') && v.budget === 'Q_C: 5 of 19 calls · authors 2/4 · repairs 0/3 · revisions 0/1', v);
+        && v.jobs[1].includes('author: ok') && v.budget === 'Q_C: 5 of 34 calls · authors 2/12 · repairs 0/10 · revisions 0/1', v);
     const refused = candidatePanel(liveClient(() => stream(handedOffWire).response),
         moduleClient(() => new Response(moduleDeniedJson, { status: 503, headers: { 'Content-Type': 'application/json' } })), 'candidate: refused');
     await refused.run();
@@ -482,7 +482,7 @@ async function candidates(): Promise<void> {
     v = lookCandidate(refused);
     check('EA-V8 a refusal before the stream: failed, the creator\'s sentence and the developer\'s words, the call counted unknown', v.phase === 'failed'
         && v.status === 'Failed: no candidate' && v.note === COPY.failures.budget && v.reason === 'host budget: Live creation has reached its spending limit for now.'
-        && v.jobs.length === 1 && v.jobs[0].includes('author: refused · charge unknown') && v.budget === 'Q_C: 4 of 19 calls, 1 unknown · authors 1/4 · repairs 0/3 · revisions 0/1'
+        && v.jobs.length === 1 && v.jobs[0].includes('author: refused · charge unknown') && v.budget === 'Q_C: 4 of 34 calls, 1 unknown · authors 1/12 · repairs 0/10 · revisions 0/1'
         && v.enabled['Write the modules again'] === true && v.id === null, v);
 
     // EA-V9: markup in a body (a comment, which the lint passes) is text.
@@ -555,10 +555,10 @@ async function candidates(): Promise<void> {
     await until(() => settled(revising), 5_000);
     const r = lookCandidate(revising);
     check('EA-V11 a program the browser refuses is revised: the revision\'s turn shows beside the hand-off\'s, each call with its charge, model and template',
-        r.phase === 'static-verified' && r.budget === 'Q_C: 5 of 19 calls · authors 1/4 · repairs 0/3 · revisions 1/1' && r.turns.length === 2
-        && r.turns[0].role === 'hand-off' && r.turns[0].head === 'turn-1 hand-off: handed-off · 3 calls · $0.1380 · muse-spark-1.3 · agent.v4'
+        r.phase === 'static-verified' && r.budget === 'Q_C: 5 of 34 calls · authors 1/12 · repairs 0/10 · revisions 1/1' && r.turns.length === 2
+        && r.turns[0].role === 'hand-off' && r.turns[0].head === 'turn-1 hand-off: handed-off · 3 calls · $0.1380 · muse-spark-1.3 · agent.v5'
         && r.turns[0].calls.length === 3 && r.turns[1].role === 'revision'
-        && r.turns[1].head === 'turn-1 program revision: handed-off · 1 call · $0.0460 · muse-spark-1.3 · agent.v4'
+        && r.turns[1].head === 'turn-1 program revision: handed-off · 1 call · $0.0460 · muse-spark-1.3 · agent.v5'
         && JSON.stringify(r.turns[1].calls) === JSON.stringify(['1 revise: $0.0460 · gen-1']) && r.jobs.length === 1 && r.jobs[0].includes('place author: ok'), r);
     candidateButton(revising, 'Download bundle').click();
     const revisedBundle = revisedSaved.length === 1 ? JSON.parse(revisedSaved[0].text) : null;
@@ -566,8 +566,8 @@ async function candidates(): Promise<void> {
     const records = revisedBundle ? revisedBundle.calls.turns.reduce((n: number, t: { calls: unknown[] }) => n + t.calls.length, 0) + revisedBundle.calls.jobs.length : -1;
     check('EA-V11 the downloaded bundle holds the revision\'s turn: its call, charge, model and template; each call Q_C settled has its record',
         revisedBundle?.format === 'wexy-candidate-bundle.v2' && revision?.role === 'revision' && revision.status === 'handed-off' && revision.model === 'muse-spark-1.3'
-        && revision.promptVersion === 'agent.v4' && revision.charge === 'known' && revision.calls.length === 1 && revision.calls[0].purpose === 'revise'
-        && revision.calls[0].costMicroUsd === 46_000 && revisedBundle.versions.templates.includes('agent.v4') && records === revisedBundle.calls.budget.calls.settled,
+        && revision.promptVersion === 'agent.v5' && revision.charge === 'known' && revision.calls.length === 1 && revision.calls[0].purpose === 'revise'
+        && revision.calls[0].costMicroUsd === 46_000 && revisedBundle.versions.templates.includes('agent.v5') && records === revisedBundle.calls.budget.calls.settled,
         { turns: revisedBundle?.calls?.turns, templates: revisedBundle?.versions?.templates, records });
 }
 

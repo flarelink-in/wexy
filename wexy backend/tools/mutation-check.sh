@@ -283,6 +283,21 @@ mutate "an anonymous turn bucket of one turn, refusing the revision" "$G/shield/
     's/\("agent-turn-anonymous", new Bucket\(AgentTurn\.MAX_CALLS \/ 120\.0, 2 \* AgentTurn\.MAX_CALLS,/("agent-turn-anonymous", new Bucket(AgentTurn.MAX_CALLS \/ 120.0, AgentTurn.MAX_CALLS,/'
 mutate "a hand-off too large for the base of its revision" "$S/agent/AgentLoop.java" forge-service AgentLoopTest \
     's/if \(bytes > room\) \{/if (false) {/'
+# Q84 revised (2026-11-02; the frontend's candidate-loop design §8): the black hole starter needed about eight modules,
+# past the browser's four, and was stopped after its turn was spent. One world builds twelve now, the turn's check and its
+# prompt hold a program to them, and the gateway's module buckets pace an attempt's 22 module calls.
+mutate "a check that lets a program name more modules than one world builds" "$S/agent/ProgramCheck.java" forge-service ProgramCheckTest \
+    's/if \(pastCap != null\) \{/if (false) {/'
+mutate "a module budget one past the frontend's" "$S/agent/ProgramCheck.java" forge-service ProgramCheckTest \
+    's/owners\.size\(\) == AgentTurn\.MAX_MODULES \+ 1/owners.size() == AgentTurn.MAX_MODULES + 2/'
+mutate "the agent prompt saying another module budget" "$S/templates/PromptTemplates.java" forge-service AgentLoopTest \
+    's/fill\.put\("maxModules", String\.valueOf\(AgentTurn\.MAX_MODULES\)\);/fill.put("maxModules", "4");/'
+mutate "the agent prompt without its module budget" "$R/prompts/agent.v5.md" forge-service AgentLoopTest \
+    's/- A program names at most \{\{maxModules\}\} modules: one world builds no more\. A world that needs more\n  merges stages that run in the same phase into one module, or leaves a part out\.\n//'
+mutate "an anonymous module bucket of the old seven calls" "$G/shield/GatewayShieldProperties.java" forge-gateway ForgeRoutesTest \
+    's/new Bucket\(AgentTurn\.MODULE_CALLS \/ 120\.0, AgentTurn\.MODULE_CALLS\)/new Bucket(7 \/ 120.0, 7)/'
+mutate "a signed-in module bucket of the old fourteen calls" "$G/shield/GatewayShieldProperties.java" forge-gateway ForgeRoutesTest \
+    's/new Bucket\(AgentTurn\.MODULE_CALLS \/ 60\.0, 2 \* AgentTurn\.MODULE_CALLS\)/new Bucket(7 \/ 60.0, 14)/'
 
 echo "$ran mutation(s)${DRY:+, a dry run}"
 exit $status

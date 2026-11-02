@@ -7,6 +7,7 @@
 // EA-K7 and EA-K11, the admission seam, are in executor.test.mjs. No model, no backend, no GPU.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { assembleModule, checkBody } from '../src/contract/adapters/bodies.ts';
 import { deriveInterfaces, invalidated } from '../src/contract/adapters/interfaces.ts';
@@ -48,6 +49,8 @@ const stage = (name, buffer) => [
 ];
 const four = () => [...world(), ...stage('stir', 'dust')];
 const five = () => [...four(), ...stage('glow', 'ember')];
+/** The world with stages of their own added until it names `n` modules (the world names three). */
+const withModules = n => [...world(), ...Array.from({ length: n - 3 }, (_, i) => stage(`extra${i + 1}`, `extraBuf${i + 1}`)).flat()];
 /** No authored module at all: stock materials only. */
 const zero = () => world().filter(n => !['move', 'water', 'sky', 'field'].includes(n.id));
 /** One module, motion, writing the instances: its candidate checks one body. */
@@ -75,6 +78,7 @@ const BODIES = {
     sky: 'fn dusk(uv: vec2<f32>) -> vec4<f32> {\n    let f = b_field_current[0] * 0.0;\n    return vec4<f32>(uv.x, uv.y, 0.4 + f, 1.0);\n}',
     stir: 'fn stirRun(index: u32) {\n    b_dust[index * B_dust_STRIDE] = f32(index) * 0.5;\n}',
     glow: 'fn glowRun(index: u32) {\n    b_ember[index * B_ember_STRIDE] = f32(index);\n}',
+    ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`extra${i + 1}`, `fn extra${i + 1}Run(index: u32) {\n    b_extraBuf${i + 1}[index * B_extraBuf${i + 1}_STRIDE] = f32(index);\n}`])),
 };
 BODIES.sky2 = BODIES.sky;
 /** Bodies the lint refuses: each calls a function nothing declares, on its line 2. */
@@ -92,7 +96,7 @@ const DESIGN = {
 /** The hand-off turn's three calls, each with its usage: Q_C is seeded with them. */
 const TURN_CALLS = [1, 2, 3].map(n => ({ n, purpose: n === 1 ? 'first' : 'next', charge: 'known', costMicroUsd: 46_000, generationId: `gen-${n}` }));
 const handOff = (nodes = world(), over = {}) => ({
-    turnId: 'turn-1', request: R, design: DESIGN, program: { nodes }, model: 'model-0', promptVersion: 'agent.v4', calls: TURN_CALLS, ...over,
+    turnId: 'turn-1', request: R, design: DESIGN, program: { nodes }, model: 'model-0', promptVersion: 'agent.v5', calls: TURN_CALLS, ...over,
 });
 
 /**
@@ -433,30 +437,32 @@ test('EA-K4 P4: a visual pass on a technically failing candidate is its own verd
 
 test('EA-K5 P5: each budget at B runs and at B+1 refuses before its call, the outcome naming it', async () => {
     const L = (over = {}, turn = 0) => new Ledger({ ...Q_C, ...over }, turn);
-    // calls: 19, the turn's 6 among them.
+    // Q84, revised 2026-11-02 after the black hole starter (about eight modules) was stopped at four.
+    assert.deepEqual({ ...Q_C }, { calls: 34, modules: 12, authors: 12, concurrent: 4, repairs: 10, repairsPerModule: 2, revisions: 1, revisionCalls: 6 });
+    // calls: 34, the turn's 6 among them.
     const calls = L({ authors: 100, concurrent: 100 }, 6);
-    for (let i = 0; i < 13; i++) assert.ok(calls.reserveModule('author', `m${i}`).ok, `call ${7 + i}`);
-    const over = calls.reserveModule('author', 'm13');
-    assert.deepEqual(over, { ok: false, budget: 'calls', used: 19, limit: 19 });
-    assert.equal(budgetDiagnostic(over), 'EA_TURN_BUDGET calls: 19 of 19');
-    // authors: 4.
+    for (let i = 0; i < 28; i++) assert.ok(calls.reserveModule('author', `m${i}`).ok, `call ${7 + i}`);
+    const over = calls.reserveModule('author', 'm28');
+    assert.deepEqual(over, { ok: false, budget: 'calls', used: 34, limit: 34 });
+    assert.equal(budgetDiagnostic(over), 'EA_TURN_BUDGET calls: 34 of 34');
+    // authors: 12.
     const authors = L({ concurrent: 100 });
-    for (let i = 0; i < 4; i++) assert.ok(authors.reserveModule('author', `m${i}`).ok);
-    assert.deepEqual(authors.reserveModule('author', 'm4'), { ok: false, budget: 'authors', used: 4, limit: 4 });
-    // repairs: 2 a module, 3 in all.
+    for (let i = 0; i < 12; i++) assert.ok(authors.reserveModule('author', `m${i}`).ok);
+    assert.deepEqual(authors.reserveModule('author', 'm12'), { ok: false, budget: 'authors', used: 12, limit: 12 });
+    // repairs: 2 a module, 10 in all.
     const repairs = L({ concurrent: 100 });
     assert.ok(repairs.reserveModule('repair', 'a').ok && repairs.reserveModule('repair', 'a').ok);
     assert.deepEqual(repairs.reserveModule('repair', 'a'), { ok: false, budget: 'repairs-per-module', used: 2, limit: 2 });
-    assert.ok(repairs.reserveModule('repair', 'b').ok);
-    assert.deepEqual(repairs.reserveModule('repair', 'c'), { ok: false, budget: 'repairs', used: 3, limit: 3 });
-    // concurrent: 2 at once, the scheduler's bound: a third waits, and goes once one has ended.
+    for (const m of ['b', 'c', 'd', 'e']) assert.ok(repairs.reserveModule('repair', m).ok && repairs.reserveModule('repair', m).ok, m);
+    assert.deepEqual(repairs.reserveModule('repair', 'f'), { ok: false, budget: 'repairs', used: 10, limit: 10 });
+    // concurrent: 4 at once, the scheduler's bound: a fifth waits, and goes once one has ended.
     const concurrent = L();
     const a = concurrent.reserveModule('author', 'a');
-    assert.ok(concurrent.reserveModule('author', 'b').ok);
-    assert.deepEqual(concurrent.reserveModule('author', 'c'), { ok: false, budget: 'concurrent', used: 2, limit: 2 });
+    for (const m of ['b', 'c', 'd']) assert.ok(concurrent.reserveModule('author', m).ok, m);
+    assert.deepEqual(concurrent.reserveModule('author', 'e'), { ok: false, budget: 'concurrent', used: 4, limit: 4 });
     concurrent.dispatched(a.reservation);
     concurrent.settle(a.reservation, 1);
-    assert.ok(concurrent.reserveModule('author', 'c').ok);
+    assert.ok(concurrent.reserveModule('author', 'e').ok);
     // revisions: 1, its whole allowance reserved, never beside a module call.
     const revisions = L({}, 6);
     const m = revisions.reserveModule('author', 'a');
@@ -471,8 +477,8 @@ test('EA-K5 P5: each budget at B runs and at B+1 refuses before its call, the ou
     revisions.settle(rev.reservation, 2);
     assert.deepEqual(revisions.state.calls, { settled: 9, reserved: 0, unknown: 0 }, 'reconciled to its actual calls');
     assert.deepEqual(revisions.reserveRevision(), { ok: false, budget: 'revisions', used: 1, limit: 1 });
-    assert.deepEqual(L({}, 14).reserveRevision(), { ok: false, budget: 'calls', used: 14, limit: 19 }, 'its six must fit');
-    assert.ok(L({}, 13).reserveRevision().ok);
+    assert.deepEqual(L({}, 29).reserveRevision(), { ok: false, budget: 'calls', used: 29, limit: 34 }, 'its six must fit');
+    assert.ok(L({}, 28).reserveRevision().ok);
     // Only a reservation never dispatched returns; a dispatched one whose end is not seen is counted, never zero.
     const spent = L();
     const undispatched = spent.reserveModule('author', 'a');
@@ -489,10 +495,10 @@ test('EA-K5 P5: each budget at B runs and at B+1 refuses before its call, the ou
         const run = session({ limits: { ...Q_C, ...limits }, modules: fakeModules(script) });
         return { end: await run.s.start(handOff(nodes)), calls: run.modules.calls };
     };
-    const at4 = await runAt(four(), {});
-    assert.deepEqual([at4.end.phase, at4.calls.length], ['static-verified', 4]);
-    const at5 = await runAt(five(), {});
-    assert.deepEqual([at5.end.phase, at5.end.stop.diagnostic, at5.end.stop.sentence, at5.calls.length], ['exhausted', 'EA_TURN_BUDGET modules: 5 of 4', COPY.candidate.budget, 0]);
+    const at12 = await runAt(withModules(12), {});
+    assert.deepEqual([at12.end.phase, at12.calls.length], ['static-verified', 12], 'twelve modules: the black hole starter\'s eight fit');
+    const at13 = await runAt(withModules(13), {});
+    assert.deepEqual([at13.end.phase, at13.end.stop.diagnostic, at13.end.stop.sentence, at13.calls.length], ['exhausted', 'EA_TURN_BUDGET modules: 13 of 12', COPY.candidate.budget, 0]);
     assert.equal((await runAt(world(), { authors: 3 })).end.phase, 'static-verified');
     const authors2 = await runAt(world(), { authors: 2 });
     assert.deepEqual([authors2.end.phase, authors2.end.stop.diagnostic, authors2.calls.length], ['exhausted', 'EA_TURN_BUDGET authors: 2 of 2', 2]);
@@ -504,6 +510,15 @@ test('EA-K5 P5: each budget at B runs and at B+1 refuses before its call, the ou
     assert.deepEqual([repairs3.end.phase, repairs3.calls.filter(c => c.purpose === 'repair').length], ['static-verified', 3]);
     const repairs2 = await runAt(world(), { repairs: 2 }, allFaulty);
     assert.deepEqual([repairs2.end.phase, repairs2.end.stop.diagnostic, repairs2.calls.filter(c => c.purpose === 'repair').length], ['exhausted', 'EA_TURN_BUDGET repairs: 2 of 2', 2]);
+});
+
+const AGENT_TURN = 'D:/orion-realms/wexy/wexy backend/forge-common/src/main/java/ai/wexy/common/AgentTurn.java';
+
+test('EA-K5b Q84 in both repositories: the backend holds a turn to Q_C\'s modules and paces the module route at its authors and repairs, when it is on this disk', { skip: !existsSync(AGENT_TURN) && 'the backend repository is not on this disk' }, () => {
+    const java = readFileSync(AGENT_TURN, 'utf8');
+    const constant = name => Number(new RegExp(`${name} = ([\\d_]+);`).exec(java)?.[1].replace(/_/g, ''));
+    assert.equal(constant('MAX_MODULES'), Q_C.modules, 'the turn\'s program check holds a program to the modules a candidate builds');
+    assert.equal(constant('MODULE_CALLS'), Q_C.authors + Q_C.repairs, 'the gateway\'s module buckets pace an attempt\'s authors and repairs');
 });
 
 test('EA-K6 a cancel or a newer candidate in each phase: shown at once, no call after, nothing applied, nothing to admit', async () => {
@@ -634,7 +649,7 @@ test('EA-K8 a resolve failure is addressable before X; two bodies failing under 
 test('EA-K9 the ledger under concurrency and revisions: no oversubscription, no fifth author, an unseen revision counted whole', async () => {
     // Two calls at once, never a third, and the third goes once one ends.
     const fake = fakeModules({ motion: [{ hold: 'm' }], sky: [{ hold: 's' }], water: [{ hold: 'w' }] });
-    const run = session({ modules: fake });
+    const run = session({ modules: fake, limits: { ...Q_C, concurrent: 2 } });
     const pending = run.s.start(handOff());
     await waitFor(() => fake.held.length === 2, 'two calls');
     await settle();
@@ -656,7 +671,7 @@ test('EA-K9 the ledger under concurrency and revisions: no oversubscription, no 
 
     // A revision after four authors: the module it changes cannot be authored a fifth time.
     const reviser = fakeReviser([{ status: 'handed-off', turnId: 'turn-2', design: DESIGN, program: { nodes: motionAt(32, four()) }, calls: 2 }]);
-    const fourRun = session({ revise: reviser.revise });
+    const fourRun = session({ revise: reviser.revise, limits: { ...Q_C, authors: 4 } });
     const first = await fourRun.s.start(handOff(four()));
     assert.equal(first.phase, 'static-verified');
     const visual = fourRun.s.visual({ verdict: 'fail', producedBy: 'creator', findings: [{ code: 'grouping', message: 'smaller groups' }] });
@@ -734,7 +749,7 @@ test('EA-K12 the evidence bounds: history past its bound is dropped oldest first
     // The bundle declares what it omits, the versions and each call's charge; no credential is anywhere in it.
     const bundle = candidateBundle(after);
     assert.deepEqual([bundle.format, bundle.candidate, bundle.omitted.records, bundle.omitted.byPhase.visual], ['wexy-candidate-bundle.v2', st.id, 3, 3]);
-    assert.deepEqual(bundle.versions.templates, ['agent.v4', 'module.author.v1']);
+    assert.deepEqual(bundle.versions.templates, ['agent.v5', 'module.author.v1']);
     assert.equal(bundle.versions.checker, 'ea4-body.v1');
     assert.ok(bundle.calls.jobs.every(j => j.charge === 'known'));
     assert.deepEqual(bundle.request, R);

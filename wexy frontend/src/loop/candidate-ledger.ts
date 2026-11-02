@@ -1,4 +1,4 @@
-// Q_C, the candidate's budget (candidate-loop-design.md §8; Q84 decided 2026-10-31 as recommended): what one attempt may
+// Q_C, the candidate's budget (candidate-loop-design.md §8; Q84 decided 2026-10-31, revised 2026-11-02): what one attempt may
 // spend on model calls, counted before each call starts. A cooperative bound on the browser's own attempt, not a
 // security boundary: the backend's reservations and daily caps bound money (the design §6).
 //
@@ -28,12 +28,15 @@ export interface CandidateLimits {
 }
 
 /**
- * Q84 (decided): at most 4 modules, 2 calls at once, 2 repairs a module and 3 in all, 1 program revision of at most 6
- * calls, and 19 calls an attempt, the turn's 6 included: 6 + 4 + 3 + 6. Independent ceilings, not a promise that every
- * graph can finish. Measured at EA5's first live runs.
+ * Q84, revised 2026-11-02 (the user: "12 modules, 34 calls", after the black hole starter, about eight modules, was
+ * stopped at four): at most 12 modules and 12 authors, 4 calls at once, 2 repairs a module and 10 in all, 1 program
+ * revision of at most 6 calls, and 34 calls an attempt, the turn's 6 included: 6 + 12 + 10 + 6. Independent ceilings,
+ * not a promise that every graph can finish. The backend holds a turn's program to the same 12 modules
+ * (`AgentTurn.MAX_MODULES`) and paces the module route at an attempt's 22 module calls (`AgentTurn.MODULE_CALLS`, the
+ * authors and repairs here). Decided first 2026-10-31: 4 modules, 2 at once, 3 repairs, 19 calls.
  */
 export const Q_C: CandidateLimits = Object.freeze({
-    calls: 19, modules: 4, authors: 4, concurrent: 2, repairs: 3, repairsPerModule: 2, revisions: 1, revisionCalls: 6,
+    calls: 34, modules: 12, authors: 12, concurrent: 4, repairs: 10, repairsPerModule: 2, revisions: 1, revisionCalls: 6,
 });
 
 /** A budget a refusal names. `concurrent` is the scheduler's bound: wait for a call to end, never an exhaustion. */

@@ -65,7 +65,7 @@ test('EA-S1 every recorded way a turn ends reads to its typed result, each event
         [[1, 'first', 'gen-1', 2, null], [2, 'after-tools', 'gen-2', null, false], [3, 'revise', 'gen-3', null, true]]);
     assert.equal(handedOff.result.calls[1].check.findings[0].code, 'buffer-producer');
     assert.equal(handedOff.result.costMicroUsd, 3 * 46_000);
-    assert.deepEqual(handedOff.result.meta, { turnId: 'turn-1', model: 'muse-spark-1.3', source: 'live', promptVersion: 'agent.v4', bundleHash: ENGINE_BUNDLE_HASH,
+    assert.deepEqual(handedOff.result.meta, { turnId: 'turn-1', model: 'muse-spark-1.3', source: 'live', promptVersion: 'agent.v5', bundleHash: ENGINE_BUNDLE_HASH,
         actionSchema: 'agent-action.v2', manifestHash: ADAPTER_MANIFEST_HASH });
     const recorded = Object.fromEntries(events(wire('handed-off.sse')).filter(([e]) => e === 'design' || e === 'program').map(([e, d]) => [e, JSON.parse(d)[e]]));
     assert.deepEqual(handedOff.result.design, recorded.design);
@@ -107,7 +107,7 @@ test('EA-S2 the recorded failures are the backend\'s own errors, after everythin
     await readAgentStream(res(wire('error-budget.sse')), e => seen.push(e), { bundleHash: ENGINE_BUNDLE_HASH }).catch(() => {});
     assert.deepEqual(seen.map(e => e.type), ['meta', 'call', 'usage', 'tools']);
     // No usage came for the first call, so its reservation stands as its cost, and its tokens are unknown.
-    assert.deepEqual(seen[2].usage, { n: 1, generationId: 'gen-1', in: null, out: null, reasoning: null, cached: null, costMicroUsd: 156_034 });
+    assert.deepEqual(seen[2].usage, { n: 1, generationId: 'gen-1', in: null, out: null, reasoning: null, cached: null, costMicroUsd: 156_247 });
 
     await refuses(wire('error-upstream.sse'), 'upstream', /missed the action schema after a repair/);
 });

@@ -203,7 +203,7 @@ class AgentRoutesTest {
 
         assertThat(names(events)).containsExactly("meta", "call", "usage", "tools", "call", "usage", "check", "design", "program", "done");
         JsonNode meta = data(events, "meta");
-        assertThat(meta.path("promptVersion").asText()).isEqualTo("agent.v4");
+        assertThat(meta.path("promptVersion").asText()).isEqualTo("agent.v5");
         // EA3.6: the action's contract and the adapter manifest its program was checked against.
         assertThat(meta.path("actionSchema").asText()).isEqualTo("agent-action.v2");
         assertThat(meta.path("manifestHash").asText()).isEqualTo(AdapterManifest.HASH);
@@ -219,7 +219,7 @@ class AgentRoutesTest {
         List<Generation> calls = agentCalls();
         assertThat(calls).hasSize(2).allMatch(g -> g.status() == Generation.Status.OK && g.role().equals("agent")
                 && g.parentId().equals(meta.path("turnId").asText()) && g.uid().equals("uid-agent"));
-        assertThat(calls).extracting(Generation::promptVersion).containsOnly("agent.v4");
+        assertThat(calls).extracting(Generation::promptVersion).containsOnly("agent.v5");
         assertThat(ledger.reservations()).isEqualTo(2);
     }
 
@@ -386,7 +386,7 @@ class AgentRoutesTest {
         List<ServerSentEvent<String>> events = stream(revision(base -> { }));
 
         assertThat(names(events)).containsExactly("meta", "call", "usage", "check", "design", "program", "done");
-        assertThat(data(events, "meta").path("promptVersion").asText()).isEqualTo("agent.v4");
+        assertThat(data(events, "meta").path("promptVersion").asText()).isEqualTo("agent.v5");
         assertThat(data(events, "call").path("purpose").asText()).isEqualTo("revise");
         assertThat(data(events, "design").path("design")).isEqualTo(AgentLoopTest.baseJson().path("design"));
         assertThat(data(events, "done").path("status").asText()).isEqualTo("handed-off");
@@ -395,7 +395,7 @@ class AgentRoutesTest {
                 .matches(r -> r.body().contains("This turn revises a program the browser refused.") && r.body().contains("step cannot be an entry"));
         // One record, the turn's request with its base as the input.
         assertThat(agentCalls()).singleElement().matches(g -> g.status() == Generation.Status.OK && g.input().contains("\"base\"")
-                && g.promptVersion().equals("agent.v4"));
+                && g.promptVersion().equals("agent.v5"));
     }
 
     @Test

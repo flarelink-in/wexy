@@ -1,5 +1,6 @@
 package ai.wexy.forge.agent;
 
+import ai.wexy.common.AgentTurn;
 import ai.wexy.forge.engine.AdapterManifest;
 import ai.wexy.forge.engine.EngineBundle;
 import ai.wexy.forge.templates.WgslWords;
@@ -33,6 +34,8 @@ import java.util.TreeSet;
  *       and the browser refused it, with no revision left to the turn): a module serves one node (its
  *       {@code deriveInterfaces}: two consumers, each with its own bindings, cannot share one body), and {@code after}
  *       orders two stages of one phase (its resolver). Held here, the turn's own revision answers them.</li>
+ *   <li>the candidate's module budget (the frontend's Q_C; Q84 revised 2026-11-02): at most {@link AgentTurn#MAX_MODULES}
+ *       modules, held at the module past it, so the turn trims the program before the browser would stop it.</li>
  * </ul>
  * Paths are JSON pointers into the action ({@code /program/nodes/3/config/entry}). v1's rules over raw engine calls
  * retired with the contract they read ({@link RawCallCheck}).
@@ -101,6 +104,7 @@ public final class ProgramCheck {
         for (NodeCheck.Node n : nodes) {
             byId.put(n.id(), n);
         }
+        NodeCheck.Node pastCap = null;
         for (NodeCheck.Node n : nodes) {
             if (!ENTRIES.containsKey(n.adapter().id())) {
                 continue;
@@ -110,7 +114,15 @@ public final class ProgramCheck {
             if (first != null) {
                 out.add(Finding.fail("module-shared", "/program/nodes/" + n.index() + "/config/module", "module " + module + " serves "
                         + first.id() + " and " + n.id() + ": a module serves one node, so give " + n.id() + " a module of its own"));
+            } else if (owners.size() == AgentTurn.MAX_MODULES + 1) {
+                pastCap = n;
             }
+        }
+        // One candidate builds at most MAX_MODULES modules (the frontend's Q_C, Q84): held at the module past the cap.
+        if (pastCap != null) {
+            out.add(Finding.fail("module-count", "/program/nodes/" + pastCap.index() + "/config/module", "the program names "
+                    + owners.size() + " modules, and one world builds at most " + AgentTurn.MAX_MODULES + ": merge stages that run in "
+                    + "the same phase into one module, or leave a part out"));
         }
         for (NodeCheck.Node n : nodes) {
             if (!"ng.compute.stage".equals(n.adapter().id())) {

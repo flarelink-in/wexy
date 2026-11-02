@@ -76,7 +76,7 @@ test('EA-MR1 a revision is one turn: the three fields and a base of this build\'
     assert.deepEqual(sent.base.findings[1], { id: 'x'.repeat(64), code: 'c'.repeat(40), path: `/${'p'.repeat(199)}`, message: 'm'.repeat(400) });
     // The recorded revision: one call, the revise; its hand-off with the revision's own turn id and that call.
     assert.deepEqual(eventData(REVISED, 'call').map(c => c.purpose), ['revise']);
-    assert.deepEqual(eventData(REVISED, 'meta')[0].promptVersion, 'agent.v4');
+    assert.deepEqual(eventData(REVISED, 'meta')[0].promptVersion, 'agent.v5');
     assert.deepEqual(result, { status: 'handed-off', turnId: 'turn-1', design: DESIGN, program: PROGRAM, calls: 1 });
     // A first turn still sends its three fields alone.
     const first = fakeFetch(res(wire('asked.sse')));
@@ -146,7 +146,7 @@ function machine(answer) {
 /** The hand-off turn's own calls, as the recorded hand-off made them: each reported its usage. */
 const TURN_CALLS = ['first', 'after-tools', 'next'].map((purpose, i) => ({ n: i + 1, purpose, charge: 'known', costMicroUsd: 46_000, generationId: `gen-${i + 1}` }));
 const handOff = (over = {}) => ({
-    turnId: 'turn-0', request: R, design: DESIGN, program: BASE_PROGRAM, model: 'muse-spark-1.3', promptVersion: 'agent.v4', calls: TURN_CALLS, ...over,
+    turnId: 'turn-0', request: R, design: DESIGN, program: BASE_PROGRAM, model: 'muse-spark-1.3', promptVersion: 'agent.v5', calls: TURN_CALLS, ...over,
 });
 
 test('EA-MR3 a program the browser refuses is revised over the recorded wire, resolved again, authored and static-verified; Q_C counts the revision\'s calls', async () => {
@@ -205,15 +205,15 @@ test('EA-MR5 the EA4.5 review: the hand-off\'s turn and a revision\'s are kept, 
     const end = await session.start(handOff());
     assert.equal(end.phase, 'static-verified', JSON.stringify(end.stop));
     assert.deepEqual(end.turns, [
-        { role: 'hand-off', turnId: 'turn-0', revision: 0, status: 'handed-off', model: 'muse-spark-1.3', promptVersion: 'agent.v4', charge: 'known', calls: TURN_CALLS, error: null },
-        { role: 'revision', turnId: 'turn-1', revision: 1, status: 'handed-off', model: 'muse-spark-1.3', promptVersion: 'agent.v4', charge: 'known', calls: [revisionCall], error: null },
+        { role: 'hand-off', turnId: 'turn-0', revision: 0, status: 'handed-off', model: 'muse-spark-1.3', promptVersion: 'agent.v5', charge: 'known', calls: TURN_CALLS, error: null },
+        { role: 'revision', turnId: 'turn-1', revision: 1, status: 'handed-off', model: 'muse-spark-1.3', promptVersion: 'agent.v5', charge: 'known', calls: [revisionCall], error: null },
     ]);
     // Q_C reconciles from the records: each call it settled has one, the turns' and the module job's.
     assert.equal(end.turns.reduce((n, t) => n + t.calls.length, 0) + end.jobs.length, end.budget.calls.settled);
     const bundle = candidateBundle(end);
     assert.equal(bundle.format, 'wexy-candidate-bundle.v2');
     assert.deepEqual(bundle.calls.turns, end.turns);
-    assert.deepEqual(bundle.versions.templates, ['agent.v4', 'module.author.v1']);
+    assert.deepEqual(bundle.versions.templates, ['agent.v5', 'module.author.v1']);
     const spent = [...bundle.calls.turns.flatMap(t => t.calls), ...bundle.calls.jobs].reduce((sum, c) => sum + c.costMicroUsd, 0);
     assert.equal(spent, 3 * 46_000 + 46_000 + 1_000, 'the hand-off\'s three calls, the revision\'s one, the author');
 
@@ -223,7 +223,7 @@ test('EA-MR5 the EA4.5 review: the hand-off\'s turn and a revision\'s are kept, 
     assert.deepEqual([failed.phase, failed.budget.calls], ['failed', { settled: 3, reserved: 0, unknown: 6 }]);
     const said = eventData(wire('error-upstream.sse'), 'error')[0].message;
     assert.deepEqual(failed.turns[1], {
-        role: 'revision', turnId: 'turn-1', revision: 1, status: 'broken', model: 'muse-spark-1.3', promptVersion: 'agent.v4', charge: 'unknown',
+        role: 'revision', turnId: 'turn-1', revision: 1, status: 'broken', model: 'muse-spark-1.3', promptVersion: 'agent.v5', charge: 'unknown',
         calls: [{ ...revisionCall, purpose: 'first' }, { ...revisionCall, n: 2, purpose: 'repair', generationId: 'gen-2' }], error: said,
     });
     assert.equal(candidateBundle(failed).calls.turns[1].charge, 'unknown');

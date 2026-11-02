@@ -162,7 +162,10 @@ class ForgeRoutesTest {
                 .isCloseTo(anonymous.getRequestCost(), org.assertj.core.api.Assertions.within(1e-9));
     }
 
-    /** A module call is one model call (EA4.2): tiered as a turn is, a token a request, at an attempt's seven calls. */
+    /**
+     * A module call is one model call (EA4.2): tiered as a turn is, a token a request, at an attempt's module calls
+     * (AgentTurn.MODULE_CALLS: 22 since Q84's revision on 2026-11-02, seven before), at the turns' pace.
+     */
     @Test
     void theModuleCallIsTieredAndItsBucketsCountOneCallEach() {
         RateLimits.Tiered tiered = route("agent-module").getFilters().stream()
@@ -175,7 +178,19 @@ class ForgeRoutesTest {
         for (String bucket : List.of("agent-module", "agent-module-user", "agent-module-anonymous")) {
             assertThat(shield.getBuckets().get(bucket).getRequestCost()).as(bucket).isEqualTo(1);
         }
-        assertThat(shield.getBuckets().get("agent-module-anonymous").getBurstCapacity()).isEqualTo(7);
+        // Anonymous: one attempt at once, then one every two minutes; signed in: two, then one a minute; a client: four,
+        // then two every 30 s.
+        int attempt = ai.wexy.common.AgentTurn.MODULE_CALLS;
+        assertThat(attempt).as("twelve authors and ten repairs (the frontend's Q_C)").isEqualTo(22);
+        GatewayShieldProperties.Bucket anonymous = shield.getBuckets().get("agent-module-anonymous");
+        GatewayShieldProperties.Bucket user = shield.getBuckets().get("agent-module-user");
+        GatewayShieldProperties.Bucket client = shield.getBuckets().get("agent-module");
+        assertThat(anonymous.getBurstCapacity()).isEqualTo(attempt);
+        assertThat(anonymous.getRefillPerSecond() * 120).isCloseTo(attempt, org.assertj.core.api.Assertions.within(1e-9));
+        assertThat(user.getBurstCapacity()).isEqualTo(2 * attempt);
+        assertThat(user.getRefillPerSecond() * 60).isCloseTo(attempt, org.assertj.core.api.Assertions.within(1e-9));
+        assertThat(client.getBurstCapacity()).isEqualTo(4 * attempt);
+        assertThat(client.getRefillPerSecond() * 30).isCloseTo(2 * attempt, org.assertj.core.api.Assertions.within(1e-9));
         assertThat(route("agent-module").getFilters()).contains(appCheck.singleUse()).doesNotContain(appCheck);
     }
 

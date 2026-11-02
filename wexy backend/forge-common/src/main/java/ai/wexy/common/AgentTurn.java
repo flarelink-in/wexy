@@ -17,6 +17,20 @@ public final class AgentTurn {
      */
     public static final int MAX_EVENT_CHARS = 262_144;
 
+    /**
+     * The most modules one candidate builds: the frontend's Q_C (its candidate-loop design §8; Q84, revised 2026-11-02
+     * from 4 after the black hole starter needed about eight). Each compute stage, custom batch and fullscreen pass names a
+     * module of its own, so the turn's check holds a program that names more, and the turn's own revision merges or drops
+     * parts, before the browser would refuse it with the turn already spent.
+     */
+    public static final int MAX_MODULES = 12;
+
+    /**
+     * The most module calls one candidate makes (Q_C: an author for each of {@link #MAX_MODULES} modules and ten repairs
+     * in all), and so what one attempt takes from the gateway's agent-module buckets, a token a call.
+     */
+    public static final int MODULE_CALLS = 22;
+
     private AgentTurn() {
     }
 }

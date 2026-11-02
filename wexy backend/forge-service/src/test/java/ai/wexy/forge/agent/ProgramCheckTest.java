@@ -288,4 +288,33 @@ class ProgramCheckTest {
                 "phase", "init"), "writes", "blocks", "buffer", "after", "place", "done");
         assertThat(check.check(within)).isEmpty();
     }
+
+    /** The mock's program with fullscreen passes of their own modules added until it names {@code modules} in all. */
+    static ObjectNode withModules(int modules) {
+        ObjectNode a = valid();
+        for (int i = 2; i <= modules; i++) {
+            add(a, "layer" + i, "ng.render.fullscreen", Map.of("module", "layer" + i, "fragmentEntry", "shade" + i));
+        }
+        return a;
+    }
+
+    // 2026-11-02, Q84 revised: the black hole starter needed about eight modules, past the browser's four, and was stopped
+    // after its turn was spent. The browser now builds twelve, and the turn holds a program to them.
+
+    @Test
+    void oneWorldBuildsAtMostTwelveModulesAndTheTurnIsToldAtTheModulePastThem() {
+        assertThat(ai.wexy.common.AgentTurn.MAX_MODULES).as("the frontend's Q_C").isEqualTo(12);
+        assertThat(nodes(withModules(12))).hasSize(18);
+        assertThat(check.check(withModules(12))).as("twelve modules: the mock's place and eleven passes").isEmpty();
+        List<Finding> over = check.check(withModules(13));
+        assertThat(found(over)).containsExactly("fail module-count @ /program/nodes/18/config/module");
+        assertThat(over.get(0).message()).isEqualTo("the program names 13 modules, and one world builds at most 12: merge stages that run in"
+                + " the same phase into one module, or leave a part out");
+        assertThat(check.check(withModules(15)).get(0).message()).as("the count is the whole program's, said at the first past the cap")
+                .startsWith("the program names 15 modules");
+        // A module two nodes name is one module, which the module-shared rule tells: it is not counted twice.
+        ObjectNode shared = withModules(12);
+        add(shared, "again", "ng.render.fullscreen", Map.of("module", "layer12", "fragmentEntry", "shadeAgain"));
+        assertThat(found(check.check(shared))).containsExactly("fail module-shared @ /program/nodes/18/config/module");
+    }
 }

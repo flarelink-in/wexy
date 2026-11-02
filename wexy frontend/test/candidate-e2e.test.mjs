@@ -127,11 +127,11 @@ test('EA-E1 (the candidate loop, P6): the recorded hand-off, its module written 
     assert.deepEqual([bundle.format, bundle.candidate, bundle.phase, bundle.modules[0].body], [CANDIDATE_BUNDLE, end.id, 'static-verified', place.body]);
     assert.equal(bundle.evidence.length, 8);
     assert.deepEqual(bundle.omitted, { records: 0, byPhase: {} });
-    assert.deepEqual(bundle.versions.templates, ['agent.v4', 'module.author.v1', 'module.repair.v1']);
+    assert.deepEqual(bundle.versions.templates, ['agent.v5', 'module.author.v1', 'module.repair.v1']);
     // The hand-off's turn as recorded, each call with its charge (the EA4.5 review): with the jobs, a record for each
     // call Q_C settled.
     assert.deepEqual(bundle.calls.turns, [{
-        role: 'hand-off', turnId: turn.meta.turnId, revision: 0, status: 'handed-off', model: turn.meta.model, promptVersion: 'agent.v4', charge: 'known',
+        role: 'hand-off', turnId: turn.meta.turnId, revision: 0, status: 'handed-off', model: turn.meta.model, promptVersion: 'agent.v5', charge: 'known',
         calls: ['first', 'after-tools', 'revise'].map((purpose, i) => ({ n: i + 1, purpose, charge: 'known', costMicroUsd: 46_000, generationId: `gen-${i + 1}` })), error: null,
     }]);
     assert.equal(bundle.calls.turns[0].calls.length + bundle.calls.jobs.length, end.budget.calls.settled);

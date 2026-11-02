@@ -1,5 +1,6 @@
 package ai.wexy.forge.templates;
 
+import ai.wexy.common.AgentTurn;
 import ai.wexy.forge.engine.AdapterManifest;
 import ai.wexy.forge.engine.EngineBundle;
 import ai.wexy.forge.models.ModelCatalog;
@@ -208,6 +209,8 @@ public class PromptTemplates {
                 // agent-action.v2 (EA3.6): a program is adapter nodes, so the template lists the adapters it may use.
                 fill.put("adapters", AdapterManifest.load(json).describe());
                 fill.put("example", exampleProgram(resources, json));
+                // agent.v5 (Q84 revised 2026-11-02): the candidate's module budget, which the program check holds.
+                fill.put("maxModules", String.valueOf(AgentTurn.MAX_MODULES));
             }
         } else if (name.startsWith("module.")) {
             // EA4.2: a module body for a turn's program; the mock world's own body is the example, as for the agent.

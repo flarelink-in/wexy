@@ -162,6 +162,15 @@ class AgentLoopTest {
         assertThat(events.get(8).data()).containsEntry("ok", true);
     }
 
+    /** Q84 revised (2026-11-02): the model reads the module budget the program check holds it to, from the one constant. */
+    @Test
+    void theAgentTemplateStatesTheModuleBudgetTheCheckHolds() {
+        var prompt = PROMPTS.agent(REQUEST.prompt(), REQUEST.style(), REQUEST.seconds(), "6 model calls in all.");
+        assertThat(prompt.templateId()).isEqualTo("agent.v5");
+        assertThat(prompt.system()).contains("- A program names at most " + ai.wexy.common.AgentTurn.MAX_MODULES + " modules: one world builds no more.")
+                .contains("- A program names at most 12 modules:");
+    }
+
     @Test
     void everyCallCarriesTheRequestVerbatimAndLaterCallsTheProposedDesign() throws Exception {
         Script script = new Script(needContext(), failing(), valid("revise"));

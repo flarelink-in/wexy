@@ -132,7 +132,7 @@ public class PromptBuilder {
         }
     }
 
-    /** The id of the template a prompt of this name is built from, as records name it ({@code agent.v4}). */
+    /** The id of the template a prompt of this name is built from, as records name it ({@code agent.v5}). */
     public String version(String name) {
         return templates.get(name).id();
     }
