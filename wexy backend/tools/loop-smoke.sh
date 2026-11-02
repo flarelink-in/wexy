@@ -11,17 +11,19 @@
 #   ./mvnw -pl forge-service spring-boot:run -Dspring-boot.run.profiles=local,mock
 #   bash tools/loop-smoke.sh ["an idea"]
 #
-# It signs in with the local dev token (dev.anonymous.<uid>, design §9), so the gateway must run under
-# the local profile with no Firebase credentials. The streams land in out/smoke/<time>/ (git-ignored).
-# Exit 0 when every check passes, 1 on a failed check, 2 when a service is not up.
+# It signs in with a local dev token (design §9), so the gateway must run under the local profile with no
+# Firebase credentials. Since W1 the gateway counts prompts as a deployment does, so the smoke signs in as its
+# local operator (dev.google.<uid>, on the local profile's admin list: twenty plans a day), not as a new anonymous
+# caller, whose network's one anonymous plan a day the first run would spend. WEXY_SMOKE_TOKEN overrides it.
+# The streams land in out/smoke/<time>/ (git-ignored). Exit 0 when every check passes, 1 on a failed check, 2 when
+# a service is not up.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 
 GATEWAY=${WEXY_GATEWAY:-http://localhost:8400}
 SERVICE=${WEXY_SERVICE:-http://localhost:8410}
 IDEA=${1:-"a spiral galaxy, gold at the core and blue along the arms"}
-SMOKE_UID=${WEXY_SMOKE_UID:-smoke-$(date +%s)}
-TOKEN="dev.anonymous.$SMOKE_UID"
+TOKEN=${WEXY_SMOKE_TOKEN:-dev.google.00000000000000000000000000000001}
 OUT="out/smoke/$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$OUT" || exit 2
 status=0
@@ -105,7 +107,7 @@ generation_id() {
     tr -d '\r' < "$OUT/$1.sse" | grep -A1 '^event:[ \t]*meta' | grep '^data:' | head -1 | sed -E 's/.*"generationId":"([^"]+)".*/\1/'
 }
 
-echo "Wexy loop smoke: $GATEWAY, then $SERVICE; uid $SMOKE_UID; idea: $IDEA"
+echo "Wexy loop smoke: $GATEWAY, then $SERVICE; as $TOKEN (a local dev token, not a secret); idea: $IDEA"
 echo "streams: $OUT"
 
 # 1. The plan.
@@ -139,9 +141,10 @@ else
 fi
 
 # 4. A direct turn about a running world (a small spec stands in for the studio's; the mock's director
-#    answers its recorded edit whatever the world), and the answer is one JSON document.
+#    answers its recorded edit whatever the world), and the answer is one JSON document. It names its plan, so it
+#    runs inside the plan's prompt (W1): without planId it would be a second anonymous prompt, refused 403.
 SPEC='{"title":"Smoke world","summary":"A world the smoke script runs.","uniforms":{"spin":{"label":"Spin speed","value":1,"min":0,"max":2}},"post":{"bloom":{"intensity":0.6}},"camera":{"move":"orbit"}}'
-call direct /v1/forge/direct "{\"spec\":$SPEC,\"turn\":\"make it glow more\"}" json
+call direct /v1/forge/direct "{\"spec\":$SPEC,\"turn\":\"make it glow more\",\"planId\":\"$PLAN_ID\"}" json
 check_json direct direct 200 '"kind":"patch"'
 
 # 5. The browser's outcome report about every generation above.
