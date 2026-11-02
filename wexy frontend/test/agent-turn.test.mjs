@@ -74,7 +74,7 @@ test('EA-T1 each recorded ending has its phase, and only a hand-off is a success
     const deadline = await createAgentSession(replaying('exhausted-deadline'), () => {}, clock().now).start(REQUEST);
     assert.deepEqual([deadline.unreported, deadline.costMicroUsd], [1, 0], 'one call reported nothing: its cost is unknown, and counted so');
     const budget = await createAgentSession(replaying('error-budget'), () => {}, clock().now).start(REQUEST);
-    assert.deepEqual([budget.code, budget.reason, budget.costMicroUsd], ['budget', 'in the stream: Live creation has reached its spending limit for now.', 156_034]);
+    assert.deepEqual([budget.code, budget.reason, budget.costMicroUsd], ['budget', 'in the stream: Live creation has reached its spending limit for now.', 156_247]);
 });
 
 test('EA-T2 a new turn supersedes the running one: it is cancelled, and nothing it says or resolves to is heard', async () => {
@@ -207,9 +207,11 @@ function reach(roots) {
 
 test('EA-T6 the agent\'s modules reach no runtime, verifier, capture or engine code, set no HTML, and load only behind ?agent=1', () => {
     // EA4.5: the candidate path too (its panel, machine, reviser and module client), which checks bodies. EA5.1: and the
-    // device compiler, handed a GPUDevice alone, which the panel never imports: the studio hands it in.
+    // device compiler, handed a GPUDevice alone, which the panel never imports: the studio hands it in. 11-02: and a
+    // saved attempt's replay, its view and its seal.
     const modules = [
         'src/shell/studio/agent-view.ts', 'src/shell/studio/candidate-view.ts', 'src/loop/agent-turn.ts', 'src/loop/candidate.ts', 'src/loop/reviser.ts',
+        'src/shell/studio/replay-view.ts', 'src/loop/replay.ts',
         'src/forge-client/agent-client.ts', 'src/forge-client/agent-stream.ts', 'src/forge-client/module-client.ts', 'src/forge-client/module-stream.ts',
         'src/contract/agent/index.ts', 'src/exec/device-compiler.ts',
     ];
@@ -219,20 +221,23 @@ test('EA-T6 the agent\'s modules reach no runtime, verifier, capture or engine c
     assert.deepEqual(reached.filter(p => /^src\/(runtime|verify|capture)\//.test(p) || /^(null-graph|mediabunny|firebase)(\/|$)/.test(p)), [],
         'nothing the agent path loads can reach the world, the GPU, a film or Firebase');
     // Firebase arrives only through the Api the studio hands the clients; the views are handed no world at all.
-    for (const file of ['src/shell/studio/agent-view.ts', 'src/shell/studio/candidate-view.ts']) {
+    for (const file of ['src/shell/studio/agent-view.ts', 'src/shell/studio/candidate-view.ts', 'src/shell/studio/replay-view.ts']) {
         const view = readFileSync(join(ROOT, file), 'utf8');
         for (const sink of ['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write', "html:", "'html'"]) {
             assert.ok(!view.includes(sink), `${file} uses ${sink}`);
         }
     }
     const main = readFileSync(join(ROOT, 'src/shell/studio/main.ts'), 'utf8');
-    assert.ok(!/^import [^;]*(agent-view|agent-client|agent-stream|agent-turn|candidate-view|module-client|module-stream|loop\/candidate|reviser|exec\/)/m.test(main),
+    assert.ok(!/^import [^;]*(agent-view|agent-client|agent-stream|agent-turn|candidate-view|replay-view|loop\/replay|module-client|module-stream|loop\/candidate|reviser|exec\/)/m.test(main),
         'the studio does not load the agent path statically');
     assert.match(main, /import\('\.\/agent-view'\)/);
+    assert.match(main, /import\('\.\/replay-view'\)/);
     assert.match(main, /import\('\.\.\/\.\.\/forge-client\/module-client'\)/);
     assert.match(main, /import\('\.\.\/\.\.\/loop\/reviser'\)/);
     assert.match(main, /import\('\.\.\/\.\.\/exec\/device-compiler'\)/);
     assert.match(main, /if \(agent\) void this\.mountDeviceCompiler\(vp\)/, 'the device compiler only behind ?agent=1');
-    assert.ok(!readFileSync(join(ROOT, 'src/shell/studio/candidate-view.ts'), 'utf8').includes('exec/'), 'the panel is handed its compiler');
+    for (const file of ['src/shell/studio/candidate-view.ts', 'src/shell/studio/replay-view.ts', 'src/loop/replay.ts']) {
+        assert.ok(!readFileSync(join(ROOT, file), 'utf8').includes('exec/'), `${file} is handed its compiler and its stage`);
+    }
     assert.match(main, /params\.get\('agent'\) === '1'/);
 });
