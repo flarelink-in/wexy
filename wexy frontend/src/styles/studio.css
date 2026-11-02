@@ -36,6 +36,27 @@
 .gpu-pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); flex: none; }
 .gpu-pill i.ok { background: var(--ok); }
 .gpu-pill i.bad { background: var(--err); }
+/* The account control (W1): the allowance chip as the server says it, and Sign in or Sign out. Ink only: the accent is
+   Create's and the export's (design guidelines §1). */
+.account { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.account-chip {
+    display: inline-flex; align-items: center; height: 28px; padding: 0 11px; border-radius: var(--pill);
+    border: 1px solid var(--line-2); background: var(--panel); color: var(--text-2);
+    font: 500 12px/1 var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px;
+}
+.account-who { font-size: 12px; color: var(--text-3-strong); white-space: nowrap; }
+.account [hidden] { display: none; }
+
+/* The account's dialogs: a refusal's sign-in, the day's reset, a link collision. */
+.account-dialog {
+    width: min(440px, calc(100vw - 32px)); padding: 22px 22px 18px;
+    border: 1px solid var(--line-2); border-radius: 20px; background: var(--panel); color: var(--text);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7);
+}
+.account-dialog::backdrop { background: rgba(0, 0, 0, 0.7); }
+.account-dialog h2 { font: 600 16px/1.3 var(--display); letter-spacing: -0.03em; }
+.account-dialog .acct-body { margin-top: 8px; font-size: 13.5px; line-height: 1.5; color: var(--text-2); }
+.account-dialog .acct-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 
 /* ---------------------------------------------------------------- workspace */
 
@@ -627,6 +648,9 @@
 @media (max-width: 560px) {
     .topbar { gap: 8px; padding: 0 8px 0 12px; }
     .brand-sub, #btn-snapshot, .gpu-pill { display: none; }
+    /* W1: the chip and its action stay; "Signed in with Google" gives way, Sign out says it. */
+    .account-who { display: none; }
+    .account-chip { max-width: 150px; padding: 0 9px; }
     /* The HUD: the title gives way on one line with its source; the reassurance chip takes the camera hint's row
        (`.hud .hud-cam`: `.hud > div` would outrank a bare `.hud-cam`). */
     .hud .hud-cam { display: none; }

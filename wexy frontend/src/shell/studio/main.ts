@@ -42,6 +42,8 @@ import { highlightWgslLine } from '../../shared/highlight';
 import { icon, loader, logo, wordmark } from '../../shared/icons';
 import { formatJson } from '../../shared/json';
 import { programText, QUALITY_UNIFORM, targetsOf, withProgramText, type ProgramTarget, type SceneSpec, type Style } from '../../contract/spec';
+import { AccountSession } from '../../platform/session';
+import { AccountControl } from './account';
 import { BACKDROP_DEFAULT, startBackdrop, type Backdrop } from './backdrop';
 import { CodeView, type CodeMark } from './code-view';
 import { DirectorPanel } from './director';
@@ -181,6 +183,8 @@ class Studio {
     private backdrop: Backdrop | null = null;
     /** Its frames, held while the device checks a candidate: released by a refusal, the run's end or the swap. */
     private backdropHold: (() => void) | null = null;
+    /** The header's account control (W1): the allowance chip and Sign in; null without a live backend or a way to sign in. */
+    private accountControl: AccountControl | null = null;
 
     // Components and the elements they live in.
     private readonly trace = new TracePanel();
@@ -229,8 +233,14 @@ class Studio {
         const params = new URLSearchParams(location.search);
         const config = readConfig();
         // One identity for every client: Firebase starts once per page.
-        const api = config.apiOrigin ? createApi(config, createIdentity(config)) : null;
+        const identity = config.apiOrigin ? createIdentity(config) : null;
+        const api = identity ? createApi(config, identity) : null;
         if (api && params.get('source') !== 'mock') this.live = createLiveClient(api);
+        // The account control (W1), for the live backend only: a playground example spends nothing and asks no one in.
+        if (api && this.live && identity?.account) {
+            this.accountControl = new AccountControl(new AccountSession(identity.account), api, text => this.showToast(text, null));
+            $('#btn-snapshot').before(this.accountControl.el);
+        }
         const agent = params.get('agent') === '1';
         this.mountLeft();
         this.mountRight();
@@ -813,6 +823,8 @@ class Studio {
                 if (outcome.kind === 'cancelled') return;
                 this.trace.add('Stopped', stage === 'plan' ? 'spark' : stage === 'build' ? 'code' : 'gate').error(`${outcome.sentence} (${outcome.detail})`);
                 this.journey.fail(stage, outcome.sentence);
+                // W1: the free world spent, or today's made: the limit dialog, the idea in its box and the world on stage kept.
+                if (outcome.kind === 'allowance' || outcome.kind === 'quota') this.accountControl?.limit(outcome.kind, outcome.sentence);
                 this.restoreControls();
                 // A world the ladder refused is evidence too (F6): reported now, with no fps.
                 if (outcome.outcome) this.send(client, completeOutcome(outcome.outcome, { fps: null, ...this.gpuLabels() }));
@@ -842,6 +854,8 @@ class Studio {
             // A run that brought no world lets the backdrop play again.
             this.releaseBackdrop();
             this.setBusy(false);
+            // The call made or found an identity: who it is, and what the server says is left (W1).
+            if (client === this.live) void this.accountControl?.afterEntry();
         }
     }
 
@@ -1016,6 +1030,7 @@ class Studio {
 
     private setBusy(busy: boolean): void {
         this.busy = busy;
+        this.accountControl?.setBusy(busy);
         this.forgeBtn.disabled = busy || !this.viewport;
         this.forgeBtn.classList.toggle('is-busy', busy);
         this.forgeBtn.querySelector('span')!.textContent = busy ? 'Creating…' : 'Create world';

@@ -167,7 +167,15 @@ export function classifyError(error: unknown, stage: 'plan' | 'author' | 'repair
                 const minutes = error.retryAfterSeconds === null ? null : Math.max(1, Math.ceil(error.retryAfterSeconds / 60));
                 return { kind: 'rate', sentence: minutes === null ? COPY.failures.rate : COPY.rateWithMinutes(minutes), detail };
             }
-            case 'auth': case 'appcheck': case 'account-required': case 'forbidden': return sentence('sign-in');
+            // W1: on a forge route, account-required is the anonymous allowance spent (the account's one world, or its
+            // network's for the day): the studio offers Google sign-in, never a reload.
+            case 'account-required': return sentence('allowance');
+            case 'quota': {
+                const reset = error.retryAfterSeconds === null ? null : new Date(Date.now() + error.retryAfterSeconds * 1000);
+                return { kind: 'quota', sentence: reset === null ? COPY.failures.quota : COPY.quotaUntil(reset), detail };
+            }
+            case 'content-refused': return sentence('refused');
+            case 'auth': case 'appcheck': case 'forbidden': return sentence('sign-in');
             case 'timeout': return stage === 'plan' ? sentence('plan') : sentence('author-slow');
             case 'upstream':
                 // The backend judged the answer (empty, no function, declined) or Meta failed, twice: not slowness.

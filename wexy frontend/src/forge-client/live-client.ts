@@ -93,10 +93,11 @@ export function createLiveClient(api: Api, deadlines: Deadlines = DEADLINES): Fo
             return { fn, text: unfence(text), generation };
         },
 
-        async direct(spec: SceneSpec, turn: string, signal): Promise<DirectResult> {
+        async direct(spec: SceneSpec, turn: string, signal, planId?: string): Promise<DirectResult> {
             const t0 = performance.now();
             try {
-                const res = await api.send({ method: 'POST', path: '/v1/forge/direct', body: { spec, turn }, auth: true, signal: within(signal, deadlines.directMs) });
+                const body = planId ? { spec, turn, planId } : { spec, turn };
+                const res = await api.send({ method: 'POST', path: '/v1/forge/direct', body, auth: true, signal: within(signal, deadlines.directMs) });
                 const doc = await res.json() as Record<string, unknown>;
                 const usage = doc.usage && typeof doc.usage === 'object' ? (doc.usage as StreamUsage) : null;
                 const generation: GenerationInfo = {

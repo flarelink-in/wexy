@@ -116,8 +116,12 @@ export interface ForgeClient {
     author(fn: FunctionName, planId: string, progress: StreamProgress, signal: AbortSignal): Promise<FunctionResult>;
     /** A repair: the generation that wrote the function, and what the browser's checks found. */
     repair(fn: FunctionName, generationId: string, diagnostics: RepairDiagnostic[], progress: StreamProgress, signal: AbortSignal): Promise<FunctionResult>;
-    /** The director: the running world and one instruction, answered as an edit plan (applied by FE2). */
-    direct(spec: SceneSpec, turn: string, signal: AbortSignal): Promise<DirectResult>;
+    /**
+     * The director: the running world and one instruction, answered as an edit plan (applied by FE2). `planId`, the plan
+     * whose world it edits (its generation id), keeps the turn inside that plan's prompt (W1, 2026-11-02; the creations
+     * platform designs §10); a turn without one, on a starter world say, spends a prompt of its own.
+     */
+    direct(spec: SceneSpec, turn: string, signal: AbortSignal, planId?: string): Promise<DirectResult>;
     /** What the browser found; the caller does not wait for it. */
     report(outcome: OutcomeReport): Promise<void>;
 }

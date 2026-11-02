@@ -95,7 +95,7 @@ test('L13 direct answers one document: the edit parsed, the generation from the 
     const client = createLiveClient(api);
     const spec = { version: '2.0', title: 'x', uniforms: {} };
     const d = await client.direct(spec, 'make it glow more', signal());
-    assert.deepEqual(api.requests[0].body, { spec, turn: 'make it glow more' });
+    assert.deepEqual(api.requests[0].body, { spec, turn: 'make it glow more' }, 'no plan named: the turn spends a prompt of its own (W1)');
     assert.equal(api.requests[0].path, '/v1/forge/direct');
     assert.equal(api.requests[0].accept, undefined);
     assert.deepEqual(d.edit, { kind: 'patch', ops: [{ path: 'post.bloom.intensity', value: 0.9 }], summary: 'Brighter.' });
@@ -109,4 +109,12 @@ test('L13 direct answers one document: the edit parsed, the generation from the 
     // A document whose edit breaks the contract is the backend's bug, said as internal.
     const broken = fakeApi(new Response(JSON.stringify({ ...doc, edit: { kind: 'undo' } }), { status: 200 }));
     await assert.rejects(createLiveClient(broken).direct(spec, 't', signal()), e => e instanceof ForgeError && e.code === 'internal' && /edit\.kind/.test(e.message));
+});
+
+test('PL-FE9 a Director turn on a planned world names its plan, so it runs inside that plan\'s prompt (W1)', async () => {
+    const doc = { generationId: '01JDIR', model: 'muse-spark-1.3', source: 'live', role: 'director', promptVersion: 'director.v1', edit: { kind: 'patch', ops: [{ path: 'post.bloom.intensity', value: 0.4 }], summary: 'Softer.' } };
+    const api = fakeApi(new Response(JSON.stringify(doc), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    const spec = { version: '2.0', title: 'x', uniforms: {} };
+    await createLiveClient(api).direct(spec, 'slower', signal(), '01JPLAN0000000000000000000');
+    assert.deepEqual(api.requests[0].body, { spec, turn: 'slower', planId: '01JPLAN0000000000000000000' });
 });

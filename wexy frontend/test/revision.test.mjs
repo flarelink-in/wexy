@@ -66,7 +66,9 @@ test('EA-MR1 a revision is one turn: the three fields and a base of this build\'
     const sent = JSON.parse(requests[0].body);
     assert.deepEqual(Object.keys(sent), ['prompt', 'style', 'seconds', 'base']);
     assert.deepEqual({ prompt: sent.prompt, style: sent.style, seconds: sent.seconds }, R, 'R verbatim');
-    assert.deepEqual(Object.keys(sent.base), ['versions', 'design', 'program', 'findings']);
+    // W1 (PL-FE9): the base names the turn it revises, so the revision runs inside that turn's prompt.
+    assert.deepEqual(Object.keys(sent.base), ['turnId', 'versions', 'design', 'program', 'findings']);
+    assert.equal(sent.base.turnId, 'turn-0', 'the turn the candidate holds: the hand-off\'s, or the last revision\'s');
     assert.deepEqual(sent.base.versions, { actionSchema: 'agent-action.v2', bundle: ENGINE_BUNDLE_HASH, manifest: ADAPTER_MANIFEST_HASH });
     assert.deepEqual(sent.base.versions, { ...TURN_VERSIONS });
     assert.deepEqual([sent.base.design, sent.base.program], [DESIGN, BASE_PROGRAM], 'S and W as handed off');
