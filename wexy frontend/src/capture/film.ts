@@ -3,7 +3,8 @@
 // the live preview is paused meanwhile, and never resized, stepped or reset. Its frames are the old exporter's
 // (design §2): the runner draws frame j after its warm-up and (j + 1)·s steps, so the workload spends its first
 // s steps after placement as no-ops and restarts the clock where SceneRuntime.reset() does, and frame j shows
-// placement, the spec's warm-up and j·s steps, as it always has.
+// placement, the spec's warm-up and j·s steps, as it always has. An agent world is filmed by the same runner from another
+// source (FilmSource; its workload is exec/film-workload.ts, EA5.5), from its time zero.
 
 import type { NullGraph } from 'null-graph';
 import {
@@ -102,11 +103,30 @@ export function filmWorkload(spec: SceneSpec, live: SceneRuntime | null, { fps, 
     };
 }
 
-export interface ExportRequest {
+/**
+ * What a film is made from, whichever world it is (EA5.5): the export dialog films any source the same way. h1's
+ * rebuilds its spec on the film's engine (sceneFilm); an agent world's rebuilds its sealed candidate, admitted and
+ * probed at the film's size before the runner gets it (exec/film-workload.ts, executor-design.md §9a).
+ */
+export interface FilmSource {
+    /** The film's workload at `fps`; `still` is its view where the film has no camera path. */
+    workload(fps: number, still: CameraView): CreateFilmWorkload;
+    /** Simulated seconds stepped before frame 0: h1's spec warm-up; an agent world's film starts at time zero. */
+    readonly warmupSeconds: number;
+    readonly provenance: Record<string, unknown>;
+}
+
+/** h1's source: `spec` built again on the film's engine, with the live runtime's parameters (filmWorkload). */
+export function sceneFilm(spec: SceneSpec, live: SceneRuntime | null): FilmSource {
+    return {
+        workload: (fps, still) => filmWorkload(spec, live, { fps, still }),
+        warmupSeconds: spec.particles.warmupSeconds,
+        provenance: { scene: spec.title, seed: spec.particles.seed, keyframes: spec.camera.keyframes.length },
+    };
+}
+
+export interface FilmRequest {
     device: GPUDevice;
-    spec: SceneSpec;
-    /** The live runtime, read for its parameters only. */
-    live: SceneRuntime | null;
     settings: FilmSettings;
     /** Film time in seconds → view, before reframing for the film's shape. */
     path: (seconds: number) => CameraView;
@@ -119,33 +139,44 @@ export interface ExportRequest {
     onReport?: (r: FilmReport) => void;
 }
 
-/** Record the film: H.264 MP4, from an offscreen canvas, a finalized partial kept after a failure that is not a cancel. */
-export function recordExport(r: ExportRequest): Promise<FilmResult<FilmReport>> {
+export interface ExportRequest extends FilmRequest {
+    spec: SceneSpec;
+    /** The live runtime, read for its parameters only. */
+    live: SceneRuntime | null;
+}
+
+/** Record `source`'s film: H.264 MP4, from an offscreen canvas, a finalized partial kept after a failure that is not a cancel. */
+export function recordFilmOf(source: FilmSource, r: FilmRequest): Promise<FilmResult<FilmReport>> {
     const { width, height, fps, seconds } = r.settings;
     return recordFilm({
         device: r.device,
-        createWorkload: filmWorkload(r.spec, r.live, { fps, still: r.still }),
-        film: { width, height, fps, seconds, warmupSeconds: r.spec.particles.warmupSeconds },
+        createWorkload: source.workload(fps, r.still),
+        film: { width, height, fps, seconds, warmupSeconds: source.warmupSeconds },
         camera: r.path,
         output: { container: 'mp4', target: r.target ?? 'auto', name: r.name },
         partial: 'keep-if-finalizable',
         signal: r.signal,
         onProgress: r.onProgress,
         onReport: r.onReport,
-        provenance: { scene: r.spec.title, seed: r.spec.particles.seed, keyframes: r.spec.camera.keyframes.length },
+        provenance: source.provenance,
     });
 }
 
+/** h1's film of `spec` (recordFilmOf over sceneFilm). */
+export function recordExport(r: ExportRequest): Promise<FilmResult<FilmReport>> {
+    return recordFilmOf(sceneFilm(r.spec, r.live), r);
+}
+
 /**
- * What one frame costs at this size, measured by the runner itself: a film of one frame with no file, so the
- * runner's device turn, error scopes and teardown apply (design §5.1). Rejects with the runner's words when
- * calibration refuses the size.
+ * What one frame of `source` costs at this size, measured by the runner itself: a film of one frame with no file, so
+ * the runner's device turn, error scopes and teardown apply (design §5.1). Rejects with the runner's words, or the
+ * workload's, when the size is refused.
  */
-export async function measureExport(device: GPUDevice, spec: SceneSpec, live: SceneRuntime | null, settings: Omit<FilmSettings, 'seconds'>, view: CameraView, signal?: AbortSignal): Promise<{ msPerFrame: number; report: FilmReport }> {
+export async function measureFilmOf(source: FilmSource, device: GPUDevice, settings: Omit<FilmSettings, 'seconds'>, view: CameraView, signal?: AbortSignal): Promise<{ msPerFrame: number; report: FilmReport }> {
     let report: FilmReport | null = null;
     await recordFilm({
         device,
-        createWorkload: filmWorkload(spec, live, { fps: settings.fps, still: view }),
+        createWorkload: source.workload(settings.fps, view),
         film: { width: settings.width, height: settings.height, fps: settings.fps, seconds: 1 / settings.fps },
         output: false,
         camera: () => view,
@@ -157,30 +188,41 @@ export async function measureExport(device: GPUDevice, spec: SceneSpec, live: Sc
     return { msPerFrame: done.guard.calibration.msPerFrame, report: done };
 }
 
+/** h1's measurement of `spec` (measureFilmOf over sceneFilm). */
+export function measureExport(device: GPUDevice, spec: SceneSpec, live: SceneRuntime | null, settings: Omit<FilmSettings, 'seconds'>, view: CameraView, signal?: AbortSignal): Promise<{ msPerFrame: number; report: FilmReport }> {
+    return measureFilmOf(sceneFilm(spec, live), device, settings, view, signal);
+}
+
 /**
  * A photo of what the preview shows now, at any size: the live state copied into a runtime of the photo's
  * own, drawn once, read back exactly, and made opaque (a premultiplied additive scene can leave alpha below 1,
  * and a photo must not come out transparent). The preview must be paused (design §6).
  */
-export async function snapshotLive(device: GPUDevice, live: SceneRuntime, width: number, height: number, view: CameraView): Promise<{ png: Blob; rgba: Uint8Array; translucent: number }> {
-    const shot = await snapshot({
-        device, width, height, seconds: live.simTime, view,
-        createWorkload: async ({ engine, width: w, height: h }) => {
-            const { runtime, smoke } = await SceneRuntime.build(engine as NullGraph, live.spec, w, h);
-            if (!runtime) throw new Error(`The scene did not build for the photo: ${smoke.error ?? 'unknown error'}`);
-            runtime.copyStateFrom(live);
-            runtime.quality = 1;
-            return {
-                dt: live.spec.particles.dt,
-                step() {},
-                draw(frame) {
-                    runtime.view(asView(fitAspect(frame.view ?? view, w / h)), frame.seconds);
-                    return runtime.draw();
-                },
-                dispose() { runtime.destroy(); },
-            };
-        },
-    });
+export function snapshotLive(device: GPUDevice, live: SceneRuntime, width: number, height: number, view: CameraView): Promise<{ png: Blob; rgba: Uint8Array; translucent: number }> {
+    return snapshotOf(device, async ({ engine, width: w, height: h }) => {
+        const { runtime, smoke } = await SceneRuntime.build(engine as NullGraph, live.spec, w, h);
+        if (!runtime) throw new Error(`The scene did not build for the photo: ${smoke.error ?? 'unknown error'}`);
+        runtime.copyStateFrom(live);
+        runtime.quality = 1;
+        return {
+            dt: live.spec.particles.dt,
+            step() {},
+            draw(frame) {
+                runtime.view(asView(fitAspect(frame.view ?? view, w / h)), frame.seconds);
+                return runtime.draw();
+            },
+            dispose() { runtime.destroy(); },
+        };
+    }, width, height, view, live.simTime);
+}
+
+/**
+ * A photo of `createWorkload`'s world at `seconds`: drawn once on an engine of its own, read back exactly, and made
+ * opaque (a premultiplied additive pass can leave alpha below 1, and a photo must not come out transparent). h1's
+ * copies the live state (snapshotLive); an agent world's shows its time zero (executor-design.md §9a).
+ */
+export async function snapshotOf(device: GPUDevice, createWorkload: CreateFilmWorkload, width: number, height: number, view: CameraView, seconds = 0): Promise<{ png: Blob; rgba: Uint8Array; translucent: number }> {
+    const shot = await snapshot({ device, width, height, seconds, view, createWorkload });
     const { rgba } = shot;
     let translucent = 0;
     for (let i = 3; i < rgba.length; i += 4) {

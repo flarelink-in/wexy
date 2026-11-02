@@ -8,7 +8,7 @@ registerHooks({
     load(url, context, nextLoad) {
         if (url.endsWith('/src/capture/film.ts')) return {
             format: 'module', shortCircuit: true,
-            source: 'export const measureExport = (...args) => globalThis.reviewMeasure(...args); export const codecLabel = () => ""; export const holdFilm = () => () => {}; export const recordExport = () => {};',
+            source: 'export const measureFilmOf = (film, device, ...rest) => globalThis.reviewMeasure(device, film, ...rest); export const codecLabel = () => ""; export const holdFilm = () => () => {}; export const recordFilmOf = () => {};',
         };
         return nextLoad(url, context);
     },
@@ -60,12 +60,12 @@ test('UI3 a reopened export measures the new world and ignores the old result', 
     const dialog = Object.create(ExportDialog.prototype);
     const calls = [];
     let finish;
-    globalThis.reviewMeasure = async (_device, spec) => {
-        calls.push(spec);
+    globalThis.reviewMeasure = async (_device, film) => {
+        calls.push(film);
         if (calls.length === 1) await new Promise(resolve => { finish = resolve; });
-        return { msPerFrame: spec === 'old' ? 90 : 4 };
+        return { msPerFrame: film === 'old' ? 90 : 4 };
     };
-    const ctx = spec => ({ spec, runtime: {}, viewport: { engine: { device: {} }, pause: () => () => {} }, pathFor: () => () => ({}) });
+    const ctx = film => ({ film, viewport: { engine: { device: {} }, pause: () => () => {} }, pathFor: () => () => ({}) });
     Object.assign(dialog, { ctx: ctx('old'), el: { open: true }, settings: { width: 1280, height: 720, fps: 60, seconds: 6 },
         calibrating: false, measureQueued: false, renderSetup() {} });
     const pending = dialog.measure();
@@ -81,7 +81,7 @@ test('UI4 closing export while measuring discards late results without rebuildin
     const dialog = Object.create(ExportDialog.prototype);
     let finish, resumes = 0, renders = 0;
     globalThis.reviewMeasure = () => new Promise(resolve => { finish = resolve; });
-    Object.assign(dialog, { ctx: { spec: {}, runtime: {}, viewport: { engine: { device: {} },
+    Object.assign(dialog, { ctx: { film: {}, viewport: { engine: { device: {} },
         pause: () => () => { resumes++; } }, pathFor: () => () => ({}) },
         el: { open: true }, settings: { width: 1280, height: 720, fps: 60, seconds: 6 },
         calibrating: false, measureQueued: false, renderSetup() { renders++; } });
@@ -95,6 +95,21 @@ test('UI4 closing export while measuring discards late results without rebuildin
     assert.equal(renders, 1);
     assert.equal(resumes, 1);
     assert.equal(dialog.calibrating, false);
+});
+
+test('UI7 EA5.5: an agent world\'s film refused at a size says so in the studio\'s words, its reason in Developer view', async () => {
+    const dialog = Object.create(ExportDialog.prototype);
+    const reason = 'EA_FILM 0123456789ab… at 3840x2160: EA_ELIGIBILITY ng.render.fullscreen@1 (node backdrop): pixels 8294400 over 2359296';
+    globalThis.reviewMeasure = async () => { throw new Error(reason); };
+    Object.assign(dialog, { ctx: { film: 'an agent world', viewport: { engine: { device: {} }, pause: () => () => {} }, pathFor: () => () => ({}) }, el: { open: true },
+        settings: { width: 3840, height: 2160, fps: 60, seconds: 6 }, calibrating: false, measureQueued: false, renderSetup() {} });
+    await dialog.measure();
+    assert.deepEqual(dialog.refusal, { plain: 'This world could not be filmed at this size; it is still on the stage.', detail: reason });
+    assert.equal(dialog.msPerFrame, null);
+    // The runner's own refusals keep their words.
+    globalThis.reviewMeasure = async () => { throw new Error('film: a draw at 3840×2160 took 1,200 ms, over the 1,000 ms per-submission limit'); };
+    await dialog.measure();
+    assert.equal(dialog.refusal.plain, 'This quality is too heavy for this graphics card. Pick a lower quality.');
 });
 
 test('UI5 EA5.0: the stage runs any WorldRuntime by its own dt; a swap that throws before it switches leaves the Head as it was', () => {

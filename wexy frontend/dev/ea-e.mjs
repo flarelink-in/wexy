@@ -246,11 +246,11 @@ try {
     await sleep(1500);
     const agentState = await evaluate(`({
         title: document.querySelector('#hud-title')?.textContent, count: document.querySelector('#hud-count')?.textContent, fps: document.querySelector('#hud-fps')?.textContent,
-        exportOff: !!document.querySelector('#btn-export')?.disabled, photoOff: !!document.querySelector('#btn-snapshot')?.disabled, captureBarHidden: !!document.querySelector('#capture-bar')?.hidden,
+        exportOn: !document.querySelector('#btn-export')?.disabled, photoOn: !document.querySelector('#btn-snapshot')?.disabled, captureBarShown: !document.querySelector('#capture-bar')?.hidden,
         director: document.querySelector('.director .inspector-empty p')?.textContent ?? null,
     })`);
-    step('the agent world on the stage, with its studio state: its title, Film and Photo off, the Director\'s note (§5)',
-        /^Agent world [0-9a-f]{12}…$/.test(agentState.title ?? '') && agentState.exportOff && agentState.photoOff && agentState.captureBarHidden
+    step('the agent world on the stage, with its studio state: its title, Film and Photo offered (EA5.5), the Director\'s note (§5)',
+        /^Agent world [0-9a-f]{12}…$/.test(agentState.title ?? '') && agentState.exportOn && agentState.photoOn && agentState.captureBarShown
         && /agent program/.test(agentState.director ?? '') && /^[1-9]\d* fps$/.test(agentState.fps ?? ''), agentState);
     await shot('agent-world');
 

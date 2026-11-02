@@ -6,20 +6,20 @@
 
 import { bitrateFor, probeFilm, type FilmProgress, type FilmReport, type FilmResult, type FilmTarget } from 'null-graph/film';
 import type { CameraView } from '../../runtime/camera-path';
-import { codecLabel, holdFilm, measureExport, recordExport, type FilmSettings } from '../../capture/film';
-import type { SceneRuntime } from '../../runtime/scene-runtime';
+import { codecLabel, holdFilm, measureFilmOf, recordFilmOf, type FilmSettings, type FilmSource } from '../../capture/film';
 import type { Viewport } from '../../runtime/viewport';
 import { download, h } from '../../shared/dom';
 import { fmtBytes, fmtClock, fmtInt, fmtMs } from '../../shared/format';
 import { icon, loader } from '../../shared/icons';
-import type { SceneSpec } from '../../contract/spec';
 import { FORMATS, frameSize, QUALITIES, type FormatId, type QualityId } from './formats';
 
 export interface ExportContext {
     viewport: Viewport;
-    /** The live runtime: read for its parameters, never stepped, resized or reset. */
-    runtime: SceneRuntime;
-    spec: SceneSpec;
+    /**
+     * What the film is made from: h1's spec built again with the live runtime's parameters (sceneFilm), or the agent
+     * world on the stage, built again from its candidate (EA5.5). The live world is never stepped, resized or reset.
+     */
+    film: FilmSource;
     title: string;
     seconds: number;
     format: FormatId;
@@ -54,6 +54,8 @@ export async function shareFile(file: File, title: string): Promise<void> {
 /** The library's refusal in the dialog's words; the library's own words stay in Developer view. */
 function plainWords(error: unknown, s: FilmSettings): string {
     const m = error instanceof Error ? error.message : String(error);
+    // An agent world's film refused by its own checks at this size (executor-design.md §11); the reason is Developer view's.
+    if (/^EA_FILM /.test(m)) return 'This world could not be filmed at this size; it is still on the stage.';
     if (/no WebCodecs encoder/.test(m)) return `This browser can't make a ${s.width}×${s.height} video. Pick a lower quality, or try Chrome or Edge.`;
     if (/per-submission limit|safety stop/.test(m)) return 'This quality is too heavy for this graphics card. Pick a lower quality.';
     if (/ran out of room|not enough storage/.test(m)) return "There isn't enough storage on this computer to finish the video. Free some space, or make it shorter or smaller.";
@@ -164,7 +166,7 @@ export class ExportDialog {
                 const { width, height, fps } = this.settings;
                 const resume = ctx.viewport.pause();
                 try {
-                    const { msPerFrame } = await measureExport(ctx.viewport.engine.device, ctx.spec, ctx.runtime, { width, height, fps }, ctx.pathFor(this.settings.seconds)(0));
+                    const { msPerFrame } = await measureFilmOf(ctx.film, ctx.viewport.engine.device, { width, height, fps }, ctx.pathFor(this.settings.seconds)(0));
                     if (!this.measureQueued && this.ctx === ctx && this.el.open) this.msPerFrame = msPerFrame;
                 } catch (e) {
                     if (!this.measureQueued && this.ctx === ctx && this.el.open) {
@@ -312,8 +314,8 @@ export class ExportDialog {
             }
             note.textContent = `${codecLabel(support.codecs[0])} · ${s.width}×${s.height} · ${s.fps} fps`;
             resume = ctx.viewport.pause();
-            const result = await recordExport({
-                device: ctx.viewport.engine.device, spec: ctx.spec, live: ctx.runtime, settings: s,
+            const result = await recordFilmOf(ctx.film, {
+                device: ctx.viewport.engine.device, settings: s,
                 path: ctx.pathFor(s.seconds), still: ctx.pathFor(s.seconds)(0), name: this.fileName(s), target, signal: abort.signal,
                 onProgress: p => this.showProgress(p, bar, frameLine, rate),
             });
