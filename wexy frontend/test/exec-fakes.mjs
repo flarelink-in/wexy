@@ -4,11 +4,22 @@
 // test file itself (the runner takes *.test.mjs).
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import * as materials from 'null-graph/materials';
 import { checkBody, compileBody } from '../src/contract/adapters/bodies.ts';
 import { deriveInterfaces } from '../src/contract/adapters/interfaces.ts';
 import { resolveProgram } from '../src/contract/adapters/resolve.ts';
 import { COVERAGE_SCHEMA, EXECUTOR_PROFILE, demandsOf } from '../src/exec/eligibility.ts';
 import { sealCandidate } from '../src/loop/snapshot.ts';
+
+/**
+ * Whether null-graph's own builder for a stock material takes the lights (11-02, the castle): asked of the engine's
+ * builders themselves, so the fake engine draws a lit shader exactly where the real one would.
+ */
+const SHADER_BUILDERS = {
+    basic: materials.buildBasicShader, lambert: materials.buildLambertShader, emissive: materials.buildEmissiveShader,
+    matcap: materials.buildMatcapShader, toon: materials.buildToonShader, pbr: materials.buildPBRShader,
+};
+const takesLights = kind => SHADER_BUILDERS[kind]({ useSkinning: false, lighting: { wgslStructs: '/*lights*/', wgslLogic: '' } }).includes('/*lights*/');
 
 export const node = (id, adapterId, config, inputs = []) => ({ id, adapterId, adapterVersion: 1, config: JSON.stringify(config), inputs });
 export const from = (port, nodeId, output) => ({ port, nodeId, output });
@@ -31,6 +42,15 @@ export async function sealed(nodes, bodies) {
 
 export const sealedLive = async name => {
     const f = live(name);
+    return sealed(f.program.nodes, Object.fromEntries(f.modules.map(m => [m.module, m.body])));
+};
+
+/** The coverage worlds of 11-02 (option B): written by hand, so that EA-G1 runs every value Tier 1 allows. */
+export const coverageWorld = name => JSON.parse(readFileSync(new URL(`./fixtures/coverage-worlds/${name}.json`, import.meta.url), 'utf8'));
+export const COVERAGE_WORLDS = ['cov-shapes', 'cov-materials', 'cov-effects-a', 'cov-effects-b', 'cov-effects-c', 'cov-compute', 'cov-compute-xl', 'cov-scale', 'cov-scale-xl',
+    'cov-custom', 'cov-custom-xl'];
+export const sealedCoverage = async name => {
+    const f = coverageWorld(name);
     return sealed(f.program.nodes, Object.fromEntries(f.modules.map(m => [m.module, m.body])));
 };
 
@@ -101,11 +121,14 @@ export function fakePort({ fail = () => false, hold = () => null, clock: time = 
         computeGroup: (stage, group, entries) => { log.push(`computeGroup ${stage.label} ${group} ${entries.map(e => `${e.binding}:${e.buffer.label}`).join(',')}`); return { kind: 'group', label: `${stage.label}/${group}/${entries.map(e => e.buffer.label).join('+')}` }; },
         useComputeGroup: (stage, group, g) => log.push(`useComputeGroup ${stage.label} ${group} ${g.label}`),
         removeComputeStage: s => { log.push(`removeComputeStage ${s.label}`); free(s, 'removeComputeStage'); },
-        primitive: (factory, params) => call(`primitive ${factory} ${params.join(',')}`, () => make('geometry', factory)),
+        primitive: (factory, params) => call(`primitive ${factory} ${params.join(',')}`, () => make('geometry', factory, { params })),
         destroyGeometry: g => { log.push(`destroyGeometry ${g.label}`); free(g, 'destroyGeometry'); },
+        // A cube of its largest parameter about the origin: what a fake geometry is (bounds.ts).
+        geometryBox: g => { const h = Math.max(...g.params) / 2; return { min: [-h, -h, -h], max: [h, h, h] }; },
         material: (cls, options) => call(`material ${cls} ${JSON.stringify(options)}`, () => make('material', cls)),
         destroyMaterial: m => { log.push(`destroyMaterial ${m.label}`); free(m, 'destroyMaterial'); },
-        stockShader: (material, lights) => `stock:${material}${lights ? '+lights' : ''}`,
+        // As null-graph's builders: lights given to a material that takes none are ignored (basic, emissive, matcap).
+        stockShader: (material, lights) => `stock:${material}${lights && takesLights(material) ? '+lights' : ''}`,
         lightSystem: capacity => call(`lightSystem ${JSON.stringify(capacity)}`, () => make('lights', 'lights')),
         uploadLights: (l, rig) => call(`uploadLights ${rig.points?.length ?? 0} points`, () => {}),
         destroyLights: l => { log.push('destroyLights'); free(l, 'destroyLights'); },
@@ -131,7 +154,12 @@ export function fakePort({ fail = () => false, hold = () => null, clock: time = 
         batchStorage: b => b.storage,
         setInstances: (b, count) => { b.instances = count; log.push(`setInstances ${b.label} ${count}`); },
         applyMaterial: (b, m) => log.push(`applyMaterial ${b.label} ${m.label}`),
-        applyLights: b => log.push(`applyLights ${b.label}`),
+        // As WebGPU: a shader that takes no lights (an unlit stock material's, a module's) has no group 2 to bind them to
+        // (the castle, 11-02); inside a checkpoint, its error is the checkpoint's.
+        applyLights: b => {
+            log.push(`applyLights ${b.label}`);
+            if (!b.request.shaderCode.endsWith('+lights')) throw new Error(`[Invalid BindGroupLayout] ${b.label}'s pipeline has no binding at group 2 for the lights`);
+        },
         batchGroup: (b, group, entries) => { log.push(`batchGroup ${b.label} ${group} ${entries.map(e => `${e.binding}:${e.buffer.label}`).join(',')}`); return { kind: 'group', label: `${b.label}/${group}/${entries.map(e => e.buffer.label).join('+')}` }; },
         useBatchGroup: (b, group, g) => log.push(`useBatchGroup ${b.label} ${group} ${g.label}`),
         clearBatch: (p, b) => {
@@ -154,7 +182,10 @@ export function fakePort({ fail = () => false, hold = () => null, clock: time = 
         offscreenTarget: (w, h) => { log.push(`offscreenTarget ${w}x${h}`); return make('target', `target ${w}x${h}`, { width: w, height: h }); },
         readTarget: async t => { log.push(`readTarget ${t.label}`); return pixels ? pixels(t) : new Uint8Array(t.width * t.height * 4).fill(96); },
         destroyTarget: t => { log.push(`destroyTarget ${t.label}`); free(t, 'destroyTarget'); },
-        readBuffer: async (b, bytes) => { log.push(`readBuffer ${b.label} ${bytes}`); return state ? state(b.label, bytes) : new ArrayBuffer(bytes); },
+        readBuffer: async (b, bytes, offset = 0) => {
+            log.push(`readBuffer ${b.label} ${bytes}${offset ? ` @${offset}` : ''}`);
+            return state ? state(b.label, bytes, offset) : new ArrayBuffer(bytes);
+        },
         settle: async () => { port.settles++; },
         // As the real port's: what the work throws is the checkpoint's error, said, never thrown on.
         checkpoint: async work => {

@@ -215,6 +215,15 @@ export async function checkGraph(x: Graph, policy: StaticPolicy): Promise<Checke
                 `${post.id} runs ${effects.join(', ')}; the engine's order is ${canonical.join(', ')} (Tonemap the pivot: HDR work before it, display-referred after)`);
         }
     }
+    // A rig wired to an unlit stock material's batch (contribute.ts's LIT_MATERIALS): the batch draws unlit, as null-graph
+    // draws that material, and the rig lights nothing of it.
+    for (const o of x.operations) {
+        if (o.call !== 'engine.createBatch') continue;
+        const shader = o.args.shader as { kind: string; material?: string; lights?: boolean };
+        if (shader.kind !== 'stock' || shader.lights || typeof o.args.lights !== 'string') continue;
+        add('output', 'warning', 'frame', o.id, 'lambert, toon or pbr', shader.material ?? null,
+            `${o.node}'s ${shader.material} material takes no lights, so ${o.args.lights} lights nothing of it: it draws unlit, as the engine draws ${shader.material}; unwire ${o.args.lights} from it, or light it with lambert, toon or pbr`);
+    }
 
     // Layout: what a copy moves fits where it lands, element for element (an adapter's slip, if it ever fires).
     for (const o of x.operations) {

@@ -1,0 +1,247 @@
+{
+  "note": "A coverage world of 2026-11-02 (EA-G1, option B): written by hand, not by the model, so that EA-G1 runs every stock material a Tier-1 world can make (matcap needs a texture), lit and unlit; basic and emissive wired to the rig too, which take no lights and draw unlit (11-02).",
+  "program": {
+    "nodes": [
+      {
+        "id": "orbs",
+        "adapterId": "ng.buffer.storage",
+        "adapterVersion": 1,
+        "config": "{\"elements\":9,\"layout\":\"instance14\",\"strideFloats\":14,\"pingPong\":false,\"init\":\"zero\"}",
+        "inputs": []
+      },
+      {
+        "id": "placeorbs",
+        "adapterId": "ng.compute.stage",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"placeOrbs\",\"entry\":\"placeOrbs\",\"workgroupSize\":64,\"invocations\":9,\"phase\":\"init\"}",
+        "inputs": [
+          {
+            "port": "writes",
+            "nodeId": "orbs",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "orb",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"sphere\",\"size\":1,\"segments\":48}",
+        "inputs": []
+      },
+      {
+        "id": "rig",
+        "adapterId": "ng.light.rig",
+        "adapterVersion": 1,
+        "config": "{\"ambient\":[0.12,0.12,0.14],\"directional\":{\"direction\":[0.3,-1,0.2],\"color\":[1,0.96,0.9],\"intensity\":2},\"points\":[{\"position\":[4,3,4],\"color\":[1,0.6,0.3],\"intensity\":8,\"range\":20},{\"position\":[-4,3,4],\"color\":[0.3,0.6,1],\"intensity\":8,\"range\":20},{\"position\":[4,3,-4],\"color\":[0.5,1,0.5],\"intensity\":8,\"range\":20},{\"position\":[-4,3,-4],\"color\":[1,0.4,0.8],\"intensity\":8,\"range\":20}]}",
+        "inputs": []
+      },
+      {
+        "id": "basicmat",
+        "adapterId": "ng.material.stock",
+        "adapterVersion": 1,
+        "config": "{\"kind\":\"basic\",\"baseColor\":[0.7,0.55,0.9,1]}",
+        "inputs": []
+      },
+      {
+        "id": "basicbatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":9}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "orb",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "basicmat",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "orbs",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "lambertmat",
+        "adapterId": "ng.material.stock",
+        "adapterVersion": 1,
+        "config": "{\"kind\":\"lambert\",\"baseColor\":[0.7,0.55,0.9,1]}",
+        "inputs": []
+      },
+      {
+        "id": "lambertbatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":9}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "orb",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "lambertmat",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "orbs",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "emissivemat",
+        "adapterId": "ng.material.stock",
+        "adapterVersion": 1,
+        "config": "{\"kind\":\"emissive\",\"baseColor\":[0.7,0.55,0.9,1]}",
+        "inputs": []
+      },
+      {
+        "id": "emissivebatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":9}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "orb",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "emissivemat",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "orbs",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "toonmat",
+        "adapterId": "ng.material.stock",
+        "adapterVersion": 1,
+        "config": "{\"kind\":\"toon\",\"baseColor\":[0.7,0.55,0.9,1]}",
+        "inputs": []
+      },
+      {
+        "id": "toonbatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":9}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "orb",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "toonmat",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "orbs",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "pbrmat",
+        "adapterId": "ng.material.stock",
+        "adapterVersion": 1,
+        "config": "{\"kind\":\"pbr\",\"baseColor\":[0.7,0.55,0.9,1]}",
+        "inputs": []
+      },
+      {
+        "id": "pbrbatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":9}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "orb",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "pbrmat",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "orbs",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "flatbatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":9}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "orb",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "lambertmat",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "orbs",
+            "output": "buffer"
+          }
+        ]
+      }
+    ]
+  },
+  "modules": [
+    {
+      "module": "placeOrbs",
+      "interfaceHash": "5a9c7ec585625e5cdb2574ea6af29b8bead4fd121ee55cbfcaa622ca5a23be32",
+      "codeHash": "06afe9d9226e22d7c86e0222afcb3969f90f0048dc05a942e303f51b52eb2c6f",
+      "body": "fn placeOrbs(index: u32) {\n    let base = index * B_orbs_STRIDE;\n    let col = f32(index % 3u);\n    let row = f32(index / 3u);\n    let half = f32(2u) * 0.5;\n    b_orbs[base + 0u] = 0.0;\n    b_orbs[base + 1u] = (col - half) * 3;\n    b_orbs[base + 2u] = 0.0;\n    b_orbs[base + 3u] = (row - half) * 3;\n    b_orbs[base + 4u] = 0.0;\n    b_orbs[base + 5u] = 0.0;\n    b_orbs[base + 6u] = 0.0;\n    b_orbs[base + 7u] = 1.0;\n    b_orbs[base + 8u] = 1;\n    b_orbs[base + 9u] = 1;\n    b_orbs[base + 10u] = 1;\n    b_orbs[base + 11u] = 0.55 + 0.4 * fract(col * 0.37);\n    b_orbs[base + 12u] = 0.55 + 0.4 * fract(row * 0.29);\n    b_orbs[base + 13u] = 0.7;\n}"
+    }
+  ]
+}

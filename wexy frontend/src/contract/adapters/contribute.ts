@@ -400,6 +400,14 @@ function adoptedBy(ctx: Context, instances: Wired | undefined): (Produced & { ki
     return instances && ctx.adoption.get(instances.nodeId) === ctx.node.id ? instances.from as Produced & { kind: 'storage_buffer' } : null;
 }
 
+/**
+ * The stock materials whose shader takes the lights: null-graph 1.2.1's lambert, toon and PBR builders put LightSystem's
+ * layout at group 2; its basic, emissive and matcap builders take none, so their pipelines have no group 2 to bind
+ * lights to, and binding them there is refused by WebGPU (the castle of 11-02). A material not named here draws unlit.
+ * Pinned against the engine's own builders (test/unlit-lights.test.mjs).
+ */
+export const LIT_MATERIALS: ReadonlySet<string> = new Set(['lambert', 'toon', 'pbr']);
+
 function meshBatch(ctx: Context): Contribution | Refusal {
     const c = ctx.node.config as { maxInstances: number };
     const id = ctx.node.id;
@@ -413,7 +421,9 @@ function meshBatch(ctx: Context): Contribution | Refusal {
     }
     const g = geometry.from as Produced & { kind: 'geometry' };
     const m = material.from as Produced & { kind: 'material' };
-    const l = lights ? (lights.from as Produced & { kind: 'lights' }) : null;
+    // A rig wired to an unlit material's batch stays named in its create, and the batch draws unlit: what null-graph
+    // draws for that material anyway. The checks say so (a warning); the shader takes no lights, the draw reads none.
+    const l = lights && LIT_MATERIALS.has(m.material) ? (lights.from as Produced & { kind: 'lights' }) : null;
     const adopted = adoptedBy(ctx, instances);
     const out = empty();
     let storage: string;

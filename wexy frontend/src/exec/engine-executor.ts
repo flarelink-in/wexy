@@ -353,7 +353,9 @@ class EngineConstruction implements Construction {
         const shader = a.shader as { kind: 'stock' | 'module' | 'fullscreen'; material?: string; module?: string; lights?: boolean };
         const geometry = typeof a.geometry === 'string' ? this.madeBy(`${a.geometry}#create`) : null;
         const material = typeof a.material === 'string' ? this.madeBy(`${a.material}#create`) : null;
-        const lights = typeof a.lights === 'string' ? this.madeBy(`${a.lights}#create`) : null;
+        // Lights only for a shader that takes them: an unlit stock material's batch names its rig in X and draws unlit
+        // (contribute.ts's LIT_MATERIALS), since its pipeline has no group 2 to bind them to.
+        const lights = typeof a.lights === 'string' && shader.lights ? this.madeBy(`${a.lights}#create`) : null;
         // Custom lighting stays gated (the candidate-loop design §6): the seal refuses it, and so does the executor, since
         // a module's interface declares no group 2 for LightSystem to bind (the EA5.2 review).
         if (lights && shader.kind !== 'stock') throw new Error(`EA_CALL ${op.id}: custom lighting is gated; a ${shader.kind} batch takes no lights`);
@@ -373,8 +375,19 @@ class EngineConstruction implements Construction {
         keep({ kind: 'batch', batch, pass: passMade.pass });
         // Its storage is what its create writes: its own, or the buffer it adopted (Q76(b)), bound by the stages after it.
         this.built.buffers.set(op.accesses[0].resource, [p.batchStorage(batch)]);
-        if (material?.kind === 'material') p.applyMaterial(batch, material.material);
-        if (lights?.kind === 'lights') p.applyLights(batch, lights.lights);
+        // Its material's and its lights' bind groups are made here, after createBatch's own error scope. A binding the
+        // device refuses is said now, in its own words, and the build stops: never left for the first frame to meet as
+        // "invalid due to a previous error" (the castle, 11-02). An engine that cannot check binds them unchecked.
+        const bind = () => {
+            if (material?.kind === 'material') p.applyMaterial(batch, material.material);
+            if (lights?.kind === 'lights') p.applyLights(batch, lights.lights);
+        };
+        if ((material?.kind === 'material' || lights?.kind === 'lights') && p.checkpoint) {
+            const error = await p.checkpoint(bind);
+            if (error !== null) throw new Error(`EA_CALL ${op.id}: binding its ${[material ? 'material' : '', lights ? 'lights' : ''].filter(Boolean).join(' and ')} failed: ${error}`);
+        } else {
+            bind();
+        }
         const draw = this.ops.get(`${op.node}#draw`);
         p.setInstances(batch, (draw?.args as { instances?: number } | undefined)?.instances ?? 0);
         // The host's own groups (a fullscreen's reads at group 1); group 0 is the engine's.
