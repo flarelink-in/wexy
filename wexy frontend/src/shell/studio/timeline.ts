@@ -81,10 +81,12 @@ export class Timeline {
         this.time.replaceChildren(this.timeNow, ` / ${fmtClock(seconds, true)}`);
         this.timeLabel = '';
         const major = seconds > 24 ? 5 : seconds > 10 ? 2 : 1;
+        // The last label reads to the left of its tick (studio.css); on a dense ruler the one before it gives way on a phone.
+        const crowded = seconds / major >= 8 ? Math.floor(seconds / major) * major - major : -1;
         const ticks: Node[] = [];
         for (let s = 0; s <= seconds + 1e-6; s += 1) {
             const isMajor = s % major === 0;
-            ticks.push(h('span', { class: isMajor ? 'tick major' : 'tick', style: `left:${(s / seconds) * 100}%` }, isMajor ? `${s}s` : ''));
+            ticks.push(h('span', { class: isMajor ? `tick major${s === crowded ? ' crowded' : ''}` : 'tick', style: `left:${(s / seconds) * 100}%` }, isMajor ? `${s}s` : ''));
         }
         this.ruler.replaceChildren(...ticks);
         this.renderKeys();
