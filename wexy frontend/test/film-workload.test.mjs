@@ -226,12 +226,15 @@ test('EA-F1 refusals: each an EA_FILM before any unprobed full-size work, with n
     assert.ok(!port.log.some(l => l.startsWith('render')), 'nothing submitted on the film\'s engine');
     released(f, port, 'superseded');
 
-    // Past eligibility at the film's size: the gate's own words, nothing built.
+    // Past measured coverage at the film's size: advisory, with a fresh probe at the requested target.
     f = await filmFor('galaxy', { pixels: 1280 * 720 });
-    await assert.rejects(runFilm(f, agentFilmWorkload(f.snap, f.deps, { fps: 60, still: VIEW }), { ...size, width: 1920, height: 1080 }),
-        /^Error: EA_FILM .* at 1920x1080: EA_ELIGIBILITY ng\.\S+ \(node \w+\): pixels 2073600 over 921600 /);
-    assert.equal(f.ports.size, 0);
-    released(f, null, 'past eligibility');
+    const reports = [];
+    f.deps.report = r => reports.push(r);
+    const uncovered = await runFilm(f, agentFilmWorkload(f.snap, f.deps, { fps: 60, still: VIEW }), { ...size, width: 1920, height: 1080 });
+    assert.equal(reports.length, 1);
+    assert.match(reports[0].coverageWarning, /EA_COVERAGE_UNVERIFIED.*pixels 2073600 over 921600/);
+    assert.ok(reports[0].probe, 'new target probed before full-size work');
+    released(f, uncovered.port, 'past measured coverage, successfully validated');
 
     // A probe over the cap at the film's size: the probe's refusal, and nothing of the world at full size on the film's engine.
     f = await filmFor('galaxy', { model: costs({ fixed: 0.05, perInvocation: 1e-5, perPixel: 8e-5 }) });

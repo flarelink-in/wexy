@@ -21,7 +21,7 @@ const VIEW = { target: [0, 0, 0], distance: 12, azimuth: 0.6, polar: 1.2, fov: 4
 const SIZE = { width: 1280, height: 720 };
 const LIGHT = costs({ fixed: 0.02, perInvocation: 1e-5, perPixel: 1e-7, perInstance: 1e-5 });
 
-async function stageFor(snapOrName, { model = LIGHT, pixels = null, headlessWrap = h => h, fail = () => false, headlessOptions = {}, quiet = undefined } = {}) {
+async function stageFor(snapOrName, { model = LIGHT, pixels = null, headlessWrap = h => h, fail = () => false, headlessOptions = {}, quiet = undefined, eligibility = undefined } = {}) {
     const snap = typeof snapOrName === 'string' ? await sealedLive(snapOrName) : snapOrName;
     const now = present();
     const time = clock();
@@ -37,7 +37,7 @@ async function stageFor(snapOrName, { model = LIGHT, pixels = null, headlessWrap
         port, headless: headlessWrap(headless), limits: DEFAULT_LIMITS, compiler: () => compiler, present: now, environment: ENV, gpu: 'Fake GPU',
         size: () => SIZE, maxPixels: 2_300_000, view: () => VIEW, restoreHeadCamera: () => port.log.push('head camera'),
         commit: r => { port.log.push('commit'); commits.push(r); }, now: () => time.t, onRefusal: m => refusals.push(m), ledger,
-        eligibility: eligibilityFor([snap], { pixels: envelope.width * envelope.height }), quiet,
+        eligibility: eligibility ?? eligibilityFor([snap], { pixels: envelope.width * envelope.height }), quiet,
     });
     return { snap, now, port, made, compiled, stage, commits, refusals, ledger, envelope };
 }
@@ -51,6 +51,29 @@ const allReleased = (s, what) => {
         assert.deepEqual([...h.port.live.values()], [], `${what}: every variant freed`);
     }
 };
+
+test('coverage-only misses reach bounded validation by default; warnings survive success and probe failure', async () => {
+    const missing = { ok: true, entries: [] };
+    const s = await stageFor('galaxy', { eligibility: missing });
+    s.stage.press(s.snap);
+    const r = await s.stage.run(s.snap, s.compiled);
+    assert.equal(r.status, 'installed', r.reason);
+    assert.match(r.report.coverageWarning, /EA_COVERAGE_UNVERIFIED.*bounded validation/);
+    assert.ok(s.made.length > 0, 'variants were probed, not bypassed');
+    assert.ok(r.report.probe);
+    r.runtime.destroy();
+    r.held.release();
+    allReleased(s, 'uncovered but runtime-validated candidate');
+
+    const failed = await stageFor('galaxy', { eligibility: missing, headlessOptions: { checkpointError: () => 'validation failed' } });
+    failed.stage.press(failed.snap);
+    const f = await failed.stage.run(failed.snap, failed.compiled);
+    assert.equal(f.status, 'failed');
+    assert.match(f.report.coverageWarning, /EA_COVERAGE_UNVERIFIED/);
+    assert.equal(failed.commits.length, 0);
+    assert.equal(failed.port.renders, 0, 'no full-size submission after failed probe');
+    allReleased(failed, 'uncovered candidate with failed probe');
+});
 
 test('EA-D14 the offscreen first frame: drawn into a private target, the Head\'s camera written back, the output at the screen only after its look passed', async () => {
     const s = await stageFor('galaxy');

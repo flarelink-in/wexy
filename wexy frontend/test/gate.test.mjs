@@ -35,7 +35,7 @@ const GTX_1650 = 'ea5-env.v2|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|
 const short = id => `${id.slice(0, 12)}…`;
 
 /** The world under test with its gate: a device compiler and its verdicts, the go, the ledger, eligibility for it. */
-async function setup(name = 'galaxy', { limits = DEFAULT_LIMITS, eligibility, environment = ENV, target = STAGE, ledger = createMemoryLedger(), bootstrap } = {}) {
+async function setup(name = 'galaxy', { limits = DEFAULT_LIMITS, eligibility, environment = ENV, target = STAGE, ledger = createMemoryLedger(), bootstrap, coveragePolicy = 'strict' } = {}) {
     const snap = await sealedLive(name);
     const now = present();
     const dev = cleanDevice();
@@ -44,7 +44,7 @@ async function setup(name = 'galaxy', { limits = DEFAULT_LIMITS, eligibility, en
     const goes = createGoLedger();
     const gate = createGate({
         limits, compiler: () => compiler, goes, present: now, ledger, target: () => target, environment, gpu: 'Fake GPU',
-        eligibility: eligibility ?? eligibilityFor([snap], { pixels: target.width * target.height }), bootstrap,
+        eligibility: eligibility ?? eligibilityFor([snap], { pixels: target.width * target.height }), bootstrap, coveragePolicy,
     });
     const authority = createAuthority(gate.gate);
     const admit = ({ press = true, verdicts = compiled, gpuGo } = {}) => {
@@ -53,6 +53,58 @@ async function setup(name = 'galaxy', { limits = DEFAULT_LIMITS, eligibility, en
     };
     return { snap, now, dev, compiler, compiled, goes, gate, authority, admit, ledger };
 }
+
+test('advisory coverage permits validation, not unsupported calls, malformed coverage, device limits or stale evidence', async () => {
+    for (const options of [
+        { eligibility: { ok: true, entries: [] } },
+        { eligibility: SHIPPED, environment: { unknown: 'browser hides its model' } },
+        { eligibility: SHIPPED, environment: { key: GTX_1650.replace('|windows|', '|android|') } },
+    ]) {
+        const s = await setup('galaxy', { ...options, coveragePolicy: 'advisory' });
+        const r = s.admit();
+        assert.equal(r.ok, true, r.reason);
+        assert.match(s.gate.coverageWarning(s.snap), /EA_COVERAGE_UNVERIFIED.*bounded validation/);
+        s.gate.claim(s.snap).release();
+        assert.equal(s.ledger.held(), 0);
+    }
+    const covered = await setup('galaxy', { coveragePolicy: 'advisory' });
+    assert.equal(covered.admit().ok, true);
+    assert.equal(covered.gate.coverageWarning(covered.snap), null);
+    covered.gate.claim(covered.snap).release();
+    const outside = await sealedLive('galaxy');
+    for (const eligibility of [
+        eligibilityFor([outside], { edit: entries => { entries.find(e => e.adapter === 'ng.buffer.storage').coverage.max.bytes = 1; return entries; } }),
+        eligibilityFor([outside], { edit: entries => { entries.find(e => e.adapter === 'ng.buffer.storage').coverage.values.layout = ['f32']; return entries; } }),
+    ]) {
+        const s = await setup('galaxy', { eligibility, coveragePolicy: 'advisory' });
+        assert.equal(s.admit().ok, true);
+        assert.match(s.gate.coverageWarning(s.snap), /EA_COVERAGE_UNVERIFIED/);
+        s.gate.claim(s.snap).release();
+    }
+    for (const options of [
+        { eligibility: { ok: false, reason: 'invalid coverage file' } },
+        { eligibility: { ok: true, entries: [] }, limits: { ...DEFAULT_LIMITS, maxBufferSize: 1 } },
+    ]) {
+        const s = await setup('galaxy', { ...options, coveragePolicy: 'advisory' });
+        assert.equal(s.admit().ok, false);
+        assert.equal(s.ledger.held(), 0);
+    }
+    const unsupported = await setup('galaxy', { eligibility: { ok: true, entries: [] }, coveragePolicy: 'advisory' });
+    const forged = structuredClone(unsupported.snap);
+    forged.x.operations[0].call = 'device.destroy';
+    unsupported.goes.press(forged.id, unsupported.now.turn(), unsupported.now.device());
+    assert.match(unsupported.gate.gate(forged, { compiled: unsupported.compiled, gpuGo: true }), /EA_CALL/);
+    assert.equal(unsupported.ledger.held(), 0);
+    const unknownDemand = structuredClone(unsupported.snap);
+    unknownDemand.x.nodes[0].adapterId = 'ng.unknown';
+    unsupported.goes.press(unknownDemand.id, unsupported.now.turn(), unsupported.now.device());
+    assert.match(unsupported.gate.gate(unknownDemand, { compiled: unsupported.compiled, gpuGo: true }), /EA_ELIGIBILITY/);
+    assert.equal(unsupported.ledger.held(), 0);
+    const stale = await setup('galaxy', { eligibility: { ok: true, entries: [] }, coveragePolicy: 'advisory' });
+    stale.now.d++;
+    assert.equal(stale.admit().ok, false);
+    assert.equal(stale.ledger.held(), 0);
+});
 
 test('EA-D3 the gate: limits, eligibility, the allowlist and the GPU go, each refused in its own words, nothing reserved', async () => {
     const ok = await setup('galaxy');

@@ -98,9 +98,10 @@ interface AgentWorld {
 /** A Run's numbers in one line for Developer view: the probe's predictions, the reservation, the first frame's look. */
 function runNumbers(report: AgentReport | null): string {
     const p = report?.probe;
-    if (!report || !p) return '';
+    if (!report || !p) return report?.coverageWarning ?? '';
     const ms = (v: number | undefined) => (v === undefined || Number.isNaN(v) ? 'not measured' : `${v.toFixed(1)} ms`);
     const parts = [`probe: init ${ms(p.initMs)}, step ${ms(p.computeMsPerFrame)}, frame ${ms(p.drawMsPerFrame)}`];
+    if (report.coverageWarning) parts.unshift(report.coverageWarning);
     if (p.maxSubmissionMs !== undefined) parts.push(`worst submission ${ms(p.maxSubmissionMs)} of ${p.budgetMs ?? 250} ms`);
     if (p.steadyFrameMs !== undefined) parts.push(`steady frame ${ms(p.steadyFrameMs)}`);
     parts.push(`reserved ${(report.reservation.total / 1e6).toFixed(0)} MB`);

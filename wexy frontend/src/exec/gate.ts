@@ -8,8 +8,8 @@
 //   - the allowlist (EA_CALL): every operation of X names a call the executor runs;
 //   - the device's limits (EA_ADMIT): allocations, bound ranges, bindings a stage, workgroups, dispatches, textures,
 //     formats and usages against this device's own limits. A requirement the gate does not know refuses;
-//   - eligibility (EA_ELIGIBILITY): every node covered for this environment (eligibility.ts), unless EA-G1's harness
-//     pinned this very candidate (the bootstrap, below);
+//   - coverage (2026-11-02): a missing prior measurement warns by default, permitting bounded validation, not full-size
+//     execution. Malformed coverage/demands still refuse. Strict coverage remains available to verification harnesses;
 //   - memory (EA_ADMIT): the peak overlap reserved atomically before anything is allocated (I7): every holder in the
 //     ledger (the Head among them), this candidate at the admitted target, its probe and its readback, within the 1 GiB
 //     device budget (Q90). P v1's 256 MiB stays the resolver's, at P's profile, and is not applied again here.
@@ -27,7 +27,7 @@ import type { DeepReadonly } from '../contract/engine/frozen';
 import type { Gate, Present } from '../loop/executor';
 import type { SealedCandidate } from '../loop/snapshot';
 import { EXECUTOR_CALLS } from './engine-executor';
-import { EXECUTOR_PROFILE, SHIPPED, eligibilityOf, type Environment, type Parsed } from './eligibility';
+import { EXECUTOR_PROFILE, SHIPPED, demandsOf, eligibilityOf, type Environment, type Parsed } from './eligibility';
 
 type Graph = DeepReadonly<ExecutionGraph>;
 type Snapshot = DeepReadonly<SealedCandidate>;
@@ -301,6 +301,8 @@ export interface GateOptions {
     gpu: string;
     /** The eligibility in force: the shipped file by default. */
     eligibility?: Parsed;
+    /** Prior measurements are advisory by default; strict is for coverage verification, not normal studio Run. */
+    coveragePolicy?: 'advisory' | 'strict';
     profile?: string;
     /** EA-G1's harness only (§7): never the studio's. */
     bootstrap?: Bootstrap;
@@ -310,6 +312,8 @@ export interface GateOptions {
 
 export interface CandidateGate {
     readonly gate: Gate;
+    /** Prior coverage is not a runtime verdict; retained for this exact snapshot, never written to eligibility.json. */
+    coverageWarning(snapshot: Snapshot): string | null;
     /** The reservation an admission of `snapshot` made, handed over once: its holder releases or keeps it. */
     claim(snapshot: Snapshot): Reservation | null;
 }
@@ -323,8 +327,10 @@ export function createGate(options: GateOptions): CandidateGate {
         throw new Error(`a bootstrap is EA-G1's harness's alone, for at most ${MAX_PINNED} pinned fixtures`);
     }
     const claims = new Map<Snapshot, Reservation[]>();
+    const warnings = new WeakMap<Snapshot, string>();
 
     const gate: Gate = (snapshot, evidence) => {
+        warnings.delete(snapshot);
         const id = short(snapshot.id);
         const compiler = options.compiler();
         if (!compiler) return `EA_EVIDENCE ${id}: no device compiler here, so no verdict says this device compiles it`;
@@ -342,10 +348,15 @@ export function createGate(options: GateOptions): CandidateGate {
         if (limit !== null) return limit;
         if (!bootstrap?.candidates.has(snapshot.id)) {
             if (!eligibility.ok) return `EA_ELIGIBILITY ${eligibility.reason}; static only`;
+            const demands = demandsOf(snapshot.x, target.width * target.height);
+            if (typeof demands === 'string') return `EA_ELIGIBILITY ${demands}; static only`;
             const why = eligibilityOf(snapshot.x, eligibility.entries, {
                 environment: options.environment, engineBundleHash: snapshot.x.identity.bundleHash, profile, pixels: target.width * target.height,
             });
-            if (why !== null) return why;
+            if (why !== null) {
+                if (options.coveragePolicy === 'strict') return why;
+                warnings.set(snapshot, `EA_COVERAGE_UNVERIFIED ${why.replace(/^EA_ELIGIBILITY /, '').replace(/; static only$/, '')}; attempting bounded validation on this device, not previously verified coverage`);
+            }
         }
         const need = reservationFor(snapshot.x, target, viewport);
         const reservation = options.ledger.reserve(`candidate ${id}`, need.total);
@@ -356,6 +367,7 @@ export function createGate(options: GateOptions): CandidateGate {
 
     return {
         gate,
+        coverageWarning: snapshot => warnings.get(snapshot) ?? null,
         claim(snapshot) {
             const list = claims.get(snapshot);
             const first = list?.shift() ?? null;

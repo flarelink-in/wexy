@@ -141,7 +141,7 @@ export function agentFilmWorkload(snapshot: Snapshot, deps: FilmDeps, { fps, sti
                     headless: deps.headless, now: deps.now, view: () => first, target, need, signal, stale, quiet: deps.quiet,
                     // The film's engine has a camera of its own: nothing of the Head's to write back.
                     restoreHeadCamera: () => {},
-                    report: r => deps.report?.(r),
+                    coverageWarning: gate.coverageWarning(snapshot), report: r => deps.report?.(r),
                 }),
                 onCommit: runtime => { got.runtime = runtime; },
             });

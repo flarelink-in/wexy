@@ -2,7 +2,7 @@
 // verdicts to the world on the stage, behind ?agent=1 in Developer view.
 //
 //   press      the developer's "Run on this GPU", for one id(C) in this turn on this device generation (the go)
-//   admit      the authority, with this file's gate: provenance, the go, the allowlist, limits, eligibility, memory
+//   admit      the authority: provenance, the go, allowlist, limits, coverage diagnostics (advisory), memory
 //   build      the coordinator (instantiate) runs X's init through the engine executor on the viewport's engine:
 //              allocations, async compiles, bounded uploads; init's GPU work queued, never submitted
 //   prepare    the probe on isolated variants, then (only if every submission is predicted under the cap) init's work at
@@ -41,6 +41,7 @@ type Snapshot = DeepReadonly<SealedCandidate>;
 /** What a preparation found, for Developer view: the probe's numbers, the sanity look's, the reservation, a refusal. */
 export interface PrepareReport {
     candidate: string;
+    coverageWarning: string | null;
     probe: WorldProbe | Partial<WorldProbe> | null;
     sanity: SanityNumbers | null;
     reservation: ReservationNeed;
@@ -60,6 +61,7 @@ export interface PrepareReport {
 }
 
 export interface PreparationDeps {
+    coverageWarning?: string | null;
     headless(width: number, height: number): Promise<HeadlessPort>;
     now(): number;
     view(): CameraView;
@@ -90,7 +92,7 @@ export function stagePreparation(snapshot: Snapshot, port: EnginePort, deps: Pre
     return async world => {
         const report: PrepareReport = {
             candidate: snapshot.id, probe: null, sanity: null, reservation: deps.need, firstFrame: null, actual: { initMs: null, firstFrameMs: null }, bounds: null,
-            refused: null,
+            refused: null, coverageWarning: deps.coverageWarning ?? null,
         };
         /** Still wanted: neither cancelled nor stale. A stop throws, and the coordinator, seeing the same, stops and releases. */
         const fresh = () => {
@@ -281,7 +283,7 @@ export function createStage(deps: StageDeps): Stage {
                         port: deps.port, maxPixels: envelope.width * envelope.height, onRefusal: deps.onRefusal,
                         prepare: stagePreparation(snapshot, deps.port, {
                             headless: deps.headless, now: deps.now, view: deps.view, target: envelope, need, signal, stale, restoreHeadCamera: deps.restoreHeadCamera, quiet: deps.quiet,
-                            report: r => { got.report = r; },
+                            coverageWarning: gate.coverageWarning(snapshot), report: r => { got.report = r; },
                         }),
                         onCommit: runtime => {
                             deps.commit(runtime);

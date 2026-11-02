@@ -1,8 +1,9 @@
-// Q75's deferred gate and Q88 (EA5.3; executor-design.md §7): which adapters may execute on this device, and within
-// what. Every node of X needs an entry for its adapter and version, this engine bundle, this executor profile and this
-// device's environment, whose coverage holds the node's demand: each work dimension at most the maximum EA-G1 exercised,
+// Recorded coverage (EA5.3; executor-design.md §7; revised 2026-11-02): which configurations have prior measurements.
+// A covered node has an entry for its adapter/version, engine bundle, executor profile and device environment,
+// whose coverage holds the node's demand: each work dimension at most the maximum EA-G1 exercised,
 // each config value one EA-G1 ran. The entries live in eligibility.json, written from EA-G1's results (EA5.4) and never
-// by hand from memory; until then it holds none, so every candidate stays static-only, with the reason named.
+// by hand from memory. Missing coverage warns in normal Run; the bounded probe still decides full-size work.
+// Strict verification harnesses may refuse coverage misses. Malformed records and unknown demand schemas still refuse.
 //
 // Coverage is the host's schema, not a predicate from JSON: the dimensions and values of each adapter are defined here,
 // how a node's demand is read from X is defined here, and an entry that names anything else, or leaves one out, makes
