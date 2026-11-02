@@ -1,0 +1,98 @@
+{
+  "note": "A coverage world of 2026-11-02 (EA-G1, option B): written by hand, not by the model, so that EA-G1 runs 1,048,576 icosahedra (a batch's most; 62.9M vertex invocations a frame, under P v1's 67.1M) and invocations, seeded at init and turned each fixed step.",
+  "program": {
+    "nodes": [
+      {
+        "id": "swarm",
+        "adapterId": "ng.buffer.storage",
+        "adapterVersion": 1,
+        "config": "{\"elements\":1048576,\"layout\":\"instance14\",\"strideFloats\":14,\"pingPong\":false,\"init\":\"zero\"}",
+        "inputs": []
+      },
+      {
+        "id": "seedswarm",
+        "adapterId": "ng.compute.stage",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"seedSwarm\",\"entry\":\"seedSwarm\",\"workgroupSize\":256,\"invocations\":1048576,\"phase\":\"init\"}",
+        "inputs": [
+          {
+            "port": "writes",
+            "nodeId": "swarm",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "turnswarm",
+        "adapterId": "ng.compute.stage",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"turnSwarm\",\"entry\":\"turnSwarm\",\"workgroupSize\":256,\"invocations\":1048576,\"phase\":\"fixedStep\"}",
+        "inputs": [
+          {
+            "port": "writes",
+            "nodeId": "swarm",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "mote",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"icosahedron\",\"size\":0.03,\"segments\":3}",
+        "inputs": []
+      },
+      {
+        "id": "glow",
+        "adapterId": "ng.material.stock",
+        "adapterVersion": 1,
+        "config": "{\"kind\":\"emissive\",\"baseColor\":[0.9,0.95,1,1]}",
+        "inputs": []
+      },
+      {
+        "id": "motes",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":1048576}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "mote",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "glow",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "swarm",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "look",
+        "adapterId": "ng.post.chain",
+        "adapterVersion": 1,
+        "config": "{\"effects\":[{\"effect\":\"Tonemap\",\"intensity\":1}]}",
+        "inputs": []
+      }
+    ]
+  },
+  "modules": [
+    {
+      "module": "seedSwarm",
+      "interfaceHash": "6ca683a326ba39fddebb070e30452354c3e2c3e5fc4829e8647f04e2bce9e726",
+      "codeHash": "74ca68919d31bf515f0d7bdb5af77e119841d5a3e992b12b3c4e9969549ebd0a",
+      "body": "fn seedSwarm(index: u32) {\n    let base = index * B_swarm_STRIDE;\n    let col = f32(index % 1024u);\n    let row = f32(index / 1024u);\n    let half = f32(1023u) * 0.5;\n    b_swarm[base + 0u] = 0.0;\n    b_swarm[base + 1u] = (col - half) * 0.029296875;\n    b_swarm[base + 2u] = 0.0;\n    b_swarm[base + 3u] = (row - half) * 0.029296875;\n    b_swarm[base + 4u] = 0.0;\n    b_swarm[base + 5u] = 0.0;\n    b_swarm[base + 6u] = 0.0;\n    b_swarm[base + 7u] = 1.0;\n    b_swarm[base + 8u] = 1;\n    b_swarm[base + 9u] = 1;\n    b_swarm[base + 10u] = 1;\n    b_swarm[base + 11u] = 0.55 + 0.4 * fract(col * 0.37);\n    b_swarm[base + 12u] = 0.55 + 0.4 * fract(row * 0.29);\n    b_swarm[base + 13u] = 0.7;\n}"
+    },
+    {
+      "module": "turnSwarm",
+      "interfaceHash": "32ebd46b725a6a9ab95ab162c0b0f6fda72620d68c002aabe91bff9b561487b7",
+      "codeHash": "a7ebae0249efd9fcdc848de527c09734a81615bc4f658d14a7d95f2f7f581068",
+      "body": "fn turnSwarm(index: u32) {\n    let base = index * B_swarm_STRIDE;\n    let half = 0.5 * (sim.time + f32(index % 97u) * 0.1);\n    b_swarm[base + 4u] = 0.0;\n    b_swarm[base + 5u] = sin(half);\n    b_swarm[base + 6u] = 0.0;\n    b_swarm[base + 7u] = cos(half);\n}"
+    }
+  ]
+}

@@ -1,0 +1,203 @@
+{
+  "note": "A coverage world of 2026-11-02 (EA-G1, option B): written by hand, not by the model, so that EA-G1 runs every buffer layout, a ping-pong pair, workgroup sizes from 1 to 256, 65,535 workgroups, every phase, and a fullscreen reading two buffers.",
+  "program": {
+    "nodes": [
+      {
+        "id": "field",
+        "adapterId": "ng.buffer.storage",
+        "adapterVersion": 1,
+        "config": "{\"elements\":16384,\"layout\":\"f32\",\"strideFloats\":4,\"pingPong\":true,\"init\":\"zero\"}",
+        "inputs": []
+      },
+      {
+        "id": "plain",
+        "adapterId": "ng.buffer.storage",
+        "adapterVersion": 1,
+        "config": "{\"elements\":4096,\"layout\":\"f32\",\"strideFloats\":1,\"pingPong\":false,\"init\":\"zero\"}",
+        "inputs": []
+      },
+      {
+        "id": "tags",
+        "adapterId": "ng.buffer.storage",
+        "adapterVersion": 1,
+        "config": "{\"elements\":65535,\"layout\":\"instance24\",\"strideFloats\":24,\"pingPong\":false,\"init\":\"zero\"}",
+        "inputs": []
+      },
+      {
+        "id": "swarm",
+        "adapterId": "ng.buffer.storage",
+        "adapterVersion": 1,
+        "config": "{\"elements\":16384,\"layout\":\"instance14\",\"strideFloats\":14,\"pingPong\":false,\"init\":\"zero\"}",
+        "inputs": []
+      },
+      {
+        "id": "stepfield",
+        "adapterId": "ng.compute.stage",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"stepField\",\"entry\":\"stepField\",\"workgroupSize\":128,\"invocations\":16384,\"phase\":\"fixedStep\"}",
+        "inputs": [
+          {
+            "port": "reads",
+            "nodeId": "field",
+            "output": "buffer"
+          },
+          {
+            "port": "writes",
+            "nodeId": "field",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "seedplain",
+        "adapterId": "ng.compute.stage",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"seedPlain\",\"entry\":\"seedPlain\",\"workgroupSize\":256,\"invocations\":4096,\"phase\":\"init\"}",
+        "inputs": [
+          {
+            "port": "writes",
+            "nodeId": "plain",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "tagall",
+        "adapterId": "ng.compute.stage",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"tagAll\",\"entry\":\"tagAll\",\"workgroupSize\":1,\"invocations\":65535,\"phase\":\"init\"}",
+        "inputs": [
+          {
+            "port": "writes",
+            "nodeId": "tags",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "seedswarm",
+        "adapterId": "ng.compute.stage",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"seedSwarm\",\"entry\":\"seedSwarm\",\"workgroupSize\":32,\"invocations\":16384,\"phase\":\"init\"}",
+        "inputs": [
+          {
+            "port": "writes",
+            "nodeId": "swarm",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "driftswarm",
+        "adapterId": "ng.compute.stage",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"driftSwarm\",\"entry\":\"driftSwarm\",\"workgroupSize\":256,\"invocations\":16384,\"phase\":\"frame\"}",
+        "inputs": [
+          {
+            "port": "reads",
+            "nodeId": "field",
+            "output": "buffer"
+          },
+          {
+            "port": "writes",
+            "nodeId": "swarm",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "mote",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"cube\",\"size\":0.08,\"segments\":3}",
+        "inputs": []
+      },
+      {
+        "id": "glow",
+        "adapterId": "ng.material.stock",
+        "adapterVersion": 1,
+        "config": "{\"kind\":\"emissive\",\"baseColor\":[1,0.85,0.6,1]}",
+        "inputs": []
+      },
+      {
+        "id": "motes",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":16384}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "mote",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "glow",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "swarm",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "view",
+        "adapterId": "ng.render.fullscreen",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"fieldView\",\"fragmentEntry\":\"fieldView\"}",
+        "inputs": [
+          {
+            "port": "reads",
+            "nodeId": "field",
+            "output": "buffer"
+          },
+          {
+            "port": "reads",
+            "nodeId": "plain",
+            "output": "buffer"
+          }
+        ]
+      }
+    ]
+  },
+  "modules": [
+    {
+      "module": "driftSwarm",
+      "interfaceHash": "d8742016f3c06adfbca91d1d3c7224bfeed84b8e5481dfd40fb660e179c70904",
+      "codeHash": "c0489674ede6d55cfb4a25c2a0ae7b78e2db462dad2cd0784ac9f1b5f488bfc9",
+      "body": "fn driftSwarm(index: u32) {\n    let base = index * B_swarm_STRIDE;\n    let cell = index * B_field_STRIDE;\n    b_swarm[base + 2u] = b_field_current[cell + 0u] * 2.0;\n    b_swarm[base + 11u] = 0.6 + 0.4 * b_field_current[cell + 1u];\n}"
+    },
+    {
+      "module": "fieldView",
+      "interfaceHash": "e55e84956b698367198ec9046bc658faf8eddfd5cf016fb16998c5bc27f15d7f",
+      "codeHash": "202bc6a487e1ddff47d950f0bcccb390ad976fdc2c756e59be7cfbdd1276eb7a",
+      "body": "fn fieldView(uv: vec2<f32>) -> vec4<f32> {\n    let col = min(u32(clamp(uv.x, 0.0, 1.0) * 128.0), 127u);\n    let row = min(u32(clamp(uv.y, 0.0, 1.0) * 128.0), 127u);\n    let cell = col + row * 128u;\n    let v = b_field_current[cell * B_field_STRIDE];\n    let p = b_plain[(cell % 4096u) * B_plain_STRIDE];\n    return vec4<f32>(0.04 + 0.2 * v, 0.03 + 0.1 * p, 0.12, 1.0);\n}"
+    },
+    {
+      "module": "seedPlain",
+      "interfaceHash": "98c73e7177026977c9d76a0a0cc1691fbf9f495dae75fc31b63ec084ff7f1ff6",
+      "codeHash": "d06612596a730f486d0c93f009ffe714d7a980780b43b2614c3e6d6536592e67",
+      "body": "fn seedPlain(index: u32) {\n    b_plain[index * B_plain_STRIDE] = fract(f32(index) * 0.618034);\n}"
+    },
+    {
+      "module": "seedSwarm",
+      "interfaceHash": "5a1a862fd4e5c1e7628cff07778a2cc8c9c2aa0adce0d96094c5736e559e831e",
+      "codeHash": "fa73dd9703ebfe581fa212deb464fbd0528a81844759a56b17d17fa505cec370",
+      "body": "fn seedSwarm(index: u32) {\n    let base = index * B_swarm_STRIDE;\n    let col = f32(index % 128u);\n    let row = f32(index / 128u);\n    let half = f32(127u) * 0.5;\n    b_swarm[base + 0u] = 0.0;\n    b_swarm[base + 1u] = (col - half) * 0.15;\n    b_swarm[base + 2u] = 0.0;\n    b_swarm[base + 3u] = (row - half) * 0.15;\n    b_swarm[base + 4u] = 0.0;\n    b_swarm[base + 5u] = 0.0;\n    b_swarm[base + 6u] = 0.0;\n    b_swarm[base + 7u] = 1.0;\n    b_swarm[base + 8u] = 1;\n    b_swarm[base + 9u] = 1;\n    b_swarm[base + 10u] = 1;\n    b_swarm[base + 11u] = 0.55 + 0.4 * fract(col * 0.37);\n    b_swarm[base + 12u] = 0.55 + 0.4 * fract(row * 0.29);\n    b_swarm[base + 13u] = 0.7;\n}"
+    },
+    {
+      "module": "stepField",
+      "interfaceHash": "48dfcb69288dd972b089dc5121a47f1402d35b52645bcd98b7d84b77e5e4e75c",
+      "codeHash": "1868acba30ad1dcce297080891c05a96add6c02151d93b06759539459ed8d96a",
+      "body": "fn stepField(index: u32) {\n    let base = index * B_field_STRIDE;\n    let wave = f32(index % 128u) * 0.05 + sim.time;\n    let prev = b_field_current[base + 0u];\n    b_field_next[base + 0u] = mix(prev, 0.5 + 0.5 * sin(wave), 0.25);\n    b_field_next[base + 1u] = 0.5 + 0.5 * cos(wave * 0.7);\n    b_field_next[base + 2u] = f32(sim.step % 1000u) * 0.001;\n    b_field_next[base + 3u] = sim.dt;\n}"
+    },
+    {
+      "module": "tagAll",
+      "interfaceHash": "dcc9611434097223f62ea46c74e50ee298ade61426d681f77789cc895be096df",
+      "codeHash": "d8fd1d29c36683282c448f335d0df805ffbab2e9783926c90a3fd59cc44f27d8",
+      "body": "fn tagAll(index: u32) {\n    let base = index * B_tags_STRIDE;\n    for (var k = 0u; k < 24u; k++) {\n        b_tags[base + k] = f32(k) * 0.01 + f32(index % 7u);\n    }\n}"
+    }
+  ]
+}

@@ -1,0 +1,504 @@
+{
+  "note": "A coverage world of 2026-11-02 (EA-G1, option B): written by hand, not by the model, so that EA-G1 runs every primitive shape (the curved at 128 segments, 32-bit indices) lit by a full rig (4 points, a directional, ambient).",
+  "program": {
+    "nodes": [
+      {
+        "id": "cells",
+        "adapterId": "ng.buffer.storage",
+        "adapterVersion": 1,
+        "config": "{\"elements\":16,\"layout\":\"instance14\",\"strideFloats\":14,\"pingPong\":false,\"init\":\"zero\"}",
+        "inputs": []
+      },
+      {
+        "id": "placecells",
+        "adapterId": "ng.compute.stage",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"placeCells\",\"entry\":\"placeCells\",\"workgroupSize\":64,\"invocations\":16,\"phase\":\"init\"}",
+        "inputs": [
+          {
+            "port": "writes",
+            "nodeId": "cells",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "stone",
+        "adapterId": "ng.material.stock",
+        "adapterVersion": 1,
+        "config": "{\"kind\":\"lambert\",\"baseColor\":[0.85,0.8,0.75,1]}",
+        "inputs": []
+      },
+      {
+        "id": "rig",
+        "adapterId": "ng.light.rig",
+        "adapterVersion": 1,
+        "config": "{\"ambient\":[0.12,0.12,0.14],\"directional\":{\"direction\":[0.3,-1,0.2],\"color\":[1,0.96,0.9],\"intensity\":2},\"points\":[{\"position\":[4,3,4],\"color\":[1,0.6,0.3],\"intensity\":8,\"range\":20},{\"position\":[-4,3,4],\"color\":[0.3,0.6,1],\"intensity\":8,\"range\":20},{\"position\":[4,3,-4],\"color\":[0.5,1,0.5],\"intensity\":8,\"range\":20},{\"position\":[-4,3,-4],\"color\":[1,0.4,0.8],\"intensity\":8,\"range\":20}]}",
+        "inputs": []
+      },
+      {
+        "id": "cubegeo",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"cube\",\"size\":0.7,\"segments\":3}",
+        "inputs": []
+      },
+      {
+        "id": "cubebatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":16}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "cubegeo",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "stone",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "cells",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "octahedrongeo",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"octahedron\",\"size\":0.7,\"segments\":3}",
+        "inputs": []
+      },
+      {
+        "id": "octahedronbatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":16}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "octahedrongeo",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "stone",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "cells",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "planegeo",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"plane\",\"size\":0.7,\"segments\":3}",
+        "inputs": []
+      },
+      {
+        "id": "planebatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":16}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "planegeo",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "stone",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "cells",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "pyramidgeo",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"pyramid\",\"size\":0.7,\"segments\":3}",
+        "inputs": []
+      },
+      {
+        "id": "pyramidbatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":16}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "pyramidgeo",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "stone",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "cells",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "icosahedrongeo",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"icosahedron\",\"size\":0.7,\"segments\":3}",
+        "inputs": []
+      },
+      {
+        "id": "icosahedronbatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":16}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "icosahedrongeo",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "stone",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "cells",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "spheregeo",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"sphere\",\"size\":0.7,\"segments\":128}",
+        "inputs": []
+      },
+      {
+        "id": "spherebatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":16}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "spheregeo",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "stone",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "cells",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "torusgeo",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"torus\",\"size\":0.7,\"segments\":128}",
+        "inputs": []
+      },
+      {
+        "id": "torusbatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":16}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "torusgeo",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "stone",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "cells",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "cylindergeo",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"cylinder\",\"size\":0.7,\"segments\":128}",
+        "inputs": []
+      },
+      {
+        "id": "cylinderbatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":16}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "cylindergeo",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "stone",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "cells",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "capsulegeo",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"capsule\",\"size\":0.7,\"segments\":128}",
+        "inputs": []
+      },
+      {
+        "id": "capsulebatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":16}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "capsulegeo",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "stone",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "cells",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "conegeo",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"cone\",\"size\":0.7,\"segments\":128}",
+        "inputs": []
+      },
+      {
+        "id": "conebatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":16}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "conegeo",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "stone",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "cells",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "ringgeo",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"ring\",\"size\":0.7,\"segments\":128}",
+        "inputs": []
+      },
+      {
+        "id": "ringbatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":16}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "ringgeo",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "stone",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "cells",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "tetrahedrongeo",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"tetrahedron\",\"size\":0.7,\"segments\":3}",
+        "inputs": []
+      },
+      {
+        "id": "tetrahedronbatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":16}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "tetrahedrongeo",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "stone",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "cells",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "dodecahedrongeo",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"dodecahedron\",\"size\":0.7,\"segments\":3}",
+        "inputs": []
+      },
+      {
+        "id": "dodecahedronbatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":16}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "dodecahedrongeo",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "stone",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "cells",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      }
+    ]
+  },
+  "modules": [
+    {
+      "module": "placeCells",
+      "interfaceHash": "d20fd09b5454b6f18ea18f92675f28cde15520f973b6ff957597a61ee18de6fd",
+      "codeHash": "36d7dfae67bab34f03e290f2d35bca6438008bb0f65f5168ec81682d060ac958",
+      "body": "fn placeCells(index: u32) {\n    let base = index * B_cells_STRIDE;\n    let col = f32(index % 4u);\n    let row = f32(index / 4u);\n    let half = f32(3u) * 0.5;\n    b_cells[base + 0u] = 0.0;\n    b_cells[base + 1u] = (col - half) * 2.5;\n    b_cells[base + 2u] = 0.0;\n    b_cells[base + 3u] = (row - half) * 2.5;\n    b_cells[base + 4u] = 0.0;\n    b_cells[base + 5u] = 0.0;\n    b_cells[base + 6u] = 0.0;\n    b_cells[base + 7u] = 1.0;\n    b_cells[base + 8u] = 1;\n    b_cells[base + 9u] = 1;\n    b_cells[base + 10u] = 1;\n    b_cells[base + 11u] = 0.55 + 0.4 * fract(col * 0.37);\n    b_cells[base + 12u] = 0.55 + 0.4 * fract(row * 0.29);\n    b_cells[base + 13u] = 0.7;\n}"
+    }
+  ]
+}

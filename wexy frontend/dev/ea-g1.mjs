@@ -1,12 +1,14 @@
 // EA5.4's EA-G1 and part of EA-G2 on one real GPU (executor-design.md §10, §13): dev/ea-g1.html in headless Chrome, the
 // live candidates and their ×4 and ×16 variants run through the stage as the studio's Run runs them, with the gate pinned
-// to each candidate in turn (the EA-G1 bootstrap), then ten replacements and a cancel (and, with --lose, a device loss).
-// Chrome runs with its WebGPU developer features, so the adapter reports its model and the environment has a key
-// (eligibility.ts, ea5-env.v2). No model is called and nothing is spent. Results: dev/out/ea-g1/<time>/<gpu>.json, and
-// the eligibility entries it wrote, <gpu>.eligibility.json, for the developer to review before they ship. Exit 0 when
-// every live world installs at scale 1 with no uncaptured error, no prediction under what ran, the engine back at its
-// baseline after each world and the ten replacements, and the cancel leaving nothing; 1 otherwise; 2 when Chrome or Vite
-// cannot start. One GPU a run (the GTX 1650 through --force_high_performance_gpu, gotchas). On the charger only.
+// to each candidate in turn (the EA-G1 bootstrap), then ten replacements and a cancel, then the coverage worlds of 11-02
+// (and, with --lose, a device loss). Chrome runs with its WebGPU developer features, so the adapter reports its model and
+// the environment has a key (eligibility.ts, ea5-env.v2). No model is called and nothing is spent. Results:
+// dev/out/ea-g1/<time>/<gpu>.json, and the eligibility entries it wrote, <gpu>.eligibility.json, for the developer to
+// review before they ship. Exit 0 when every live world installs at scale 1 with no uncaptured error, no prediction under
+// what ran, the engine back at its baseline after each world and the ten replacements, and the cancel leaving nothing; 1
+// otherwise; 2 when Chrome or Vite cannot start. A coverage world that is not clean is reported and adds nothing to
+// eligibility, never a failure. One GPU a run (the GTX 1650 through --force_high_performance_gpu, gotchas). On the
+// charger only.
 //   node dev/ea-g1.mjs --gpu amd|nvidia [--small] [--lose] [--chrome path] [--out dir]
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -124,7 +126,10 @@ try {
             if (!l.replay || l.replay === 'INSTALLED') problems.push(`the device loss: the next Run was ${l.replay ?? 'not tried'}, not refused`);
         }
     }
-    if (!flag('lose') && result.uncaptured.length && !problems.some(p => p.includes('uncaptured'))) problems.push(`${result.uncaptured.length} uncaptured device error(s)`);
+    // A coverage world's own errors are its record's (reported below, never a failure); any other is the gate's.
+    const coverageErrors = result.coverage.reduce((n, r) => n + r.uncaptured.length, 0);
+    const unattributed = result.uncaptured.length - coverageErrors;
+    if (!flag('lose') && unattributed > 0 && !problems.some(p => p.includes('uncaptured'))) problems.push(`${unattributed} uncaptured device error(s)`);
     if (result.lost && !flag('lose')) problems.push(`the device was lost: ${result.lost}`);
     if (!('key' in result.environment)) problems.push(`no environment key (${result.environment.unknown}): no eligibility written`);
     const errors = consoleLines.filter(l => /^(error|exception)/.test(l));
@@ -134,19 +139,30 @@ try {
     writeFileSync(join(OUT, `${gpu}.eligibility.json`), `${JSON.stringify({ format: 'wexy-eligibility.v1', note: `Written by dev/ea-g1.mjs on ${result.stamp} (${result.gpu}): review before it ships in src/exec/eligibility.json.`, entries: result.eligibility }, null, 2)}\n`);
     console.log(`ea-g1 (${gpu}): ${result.gpu}; ${result.browser.match(/Chrome\/[\d.]+/)?.[0] ?? result.browser}; canvas ${result.canvas.width}×${result.canvas.height}, envelope ${result.envelope.width}×${result.envelope.height}`);
     console.log(`environment: ${result.environment.key ?? `unknown (${result.environment.unknown})`}`);
-    console.log('world ×scale: status · predicted init/step/frame/first frame · ran init, first frame · steady step/frame/canvas frame (ms) · reserved MB (an estimate)');
-    for (const r of result.runs) {
+    console.log('world ×scale: status · predicted init/step/frame/first frame · ran init, first frame · steady step/frame/canvas frame (ms) · reserved MB (an estimate) · the Run (s)');
+    const line = r => {
         const p = r.report?.probe;
         const a = r.report?.actual;
-        console.log(`  ${r.world} ×${r.scale}: ${r.status}${r.status === 'installed' ? '' : ` (${r.reason})`}`
+        return `  ${r.world} ×${r.scale}: ${r.status}${r.status === 'installed' ? '' : ` (${r.reason})`}`
             + (p ? ` · ${ms(p.initMs)}/${ms(p.computeMsPerFrame)}/${ms(p.drawMsPerFrame)}/${ms(p.firstFrameMs)}` : '')
             + (a ? ` · ${ms(a.initMs)}, ${ms(a.firstFrameMs)}` : '')
             + (r.measured ? ` · ${ms(r.measured.stepMs)}/${ms(r.measured.frameMs)}/${ms(r.measured.canvasFrameMs)}` : '')
-            + (r.report ? ` · ${(r.report.reservation.total / 1e6).toFixed(0)}` : ''));
-    }
+            + (r.report ? ` · ${(r.report.reservation.total / 1e6).toFixed(0)}` : '')
+            + (r.runMs !== null ? ` · ${(r.runMs / 1000).toFixed(1)}` : '');
+    };
+    for (const r of result.runs) console.log(line(r));
+    // The coverage worlds: each clean, or why not (it then adds nothing to eligibility).
+    const unclean = r => (r.status !== 'installed' ? `${r.status}: ${r.reason}`
+        : [...r.underPredicted.map(u => `under-predicted ${u}`), ...(r.uncaptured.length ? [`${r.uncaptured.length} uncaptured error(s): ${r.uncaptured[0]}`] : []),
+            ...(r.baseline ? [r.baseline] : []), ...(r.retireError ? [r.retireError] : []), ...(r.demands ? [] : ['no demands read'])].join('; ') || null);
+    console.log('coverage worlds (11-02; not the gate\'s):');
+    for (const r of result.coverage) console.log(line(r));
+    const notClean = result.coverage.filter(r => unclean(r));
+    console.log(`coverage: ${result.coverage.length - notClean.length}/${result.coverage.length} clean${notClean.length ? `; not clean, so not in eligibility: ${notClean.map(r => `${r.world} (${unclean(r)})`).join('; ')}` : ''}`);
     console.log(`ten replacements: ${result.replacements.installed}/10; the cancel during the probe: ${result.cancelled.record.status} (${result.cancelled.record.reason}); `
         + `during the compiles (a Head on the stage): ${c.record.status} (${c.record.reason}), the Head ${c.headKept ? 'kept' : 'LOST'}`);
-    console.log(`over budget (foggy-dusk, its fog ×2048 stacked across the screen): ${o.record.status}${o.record.reason ? ` (${o.record.reason})` : ''}${o.refused ? `, the Head ${o.headKept ? 'kept' : 'LOST'}` : ''}`);
+    console.log(`over budget (foggy-dusk, its fog ×2048 stacked across the screen): ${o.record.status}${o.record.reason ? ` (${o.record.reason})` : ''}${o.refused ? `, the Head ${o.headKept ? 'kept' : 'LOST'}` : ''}`
+        + `; the Run ${o.record.runMs !== null ? `${(o.record.runMs / 1000).toFixed(1)} s` : '—'}, the frame batches ${o.record.report?.probe?.phases?.frame?.runs?.join('/') ?? '—'}`);
     if (result.loss) console.log(`the device loss (a Head on the stage): ${result.loss.record.status} (${result.loss.record.reason}); the Head ${result.loss.headKept ? 'kept' : 'LOST'}; the next Run: ${result.loss.replay}`);
     console.log(`eligibility: ${result.eligibility.length} entries written`);
     console.log(problems.length ? `FAILED:\n  ${problems.join('\n  ')}`

@@ -1,0 +1,78 @@
+{
+  "note": "A coverage world of 2026-11-02 (EA-G1, option B): written by hand, not by the model, so that EA-G1 runs one dispatch's most, 16,776,960 invocations in 65,535 workgroups of 256, over a 64 MiB buffer: at init, and each fixed step.",
+  "program": {
+    "nodes": [
+      {
+        "id": "grid",
+        "adapterId": "ng.buffer.storage",
+        "adapterVersion": 1,
+        "config": "{\"elements\":16776960,\"layout\":\"f32\",\"strideFloats\":1,\"pingPong\":false,\"init\":\"zero\"}",
+        "inputs": []
+      },
+      {
+        "id": "seedgrid",
+        "adapterId": "ng.compute.stage",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"seedGrid\",\"entry\":\"seedGrid\",\"workgroupSize\":256,\"invocations\":16776960,\"phase\":\"init\"}",
+        "inputs": [
+          {
+            "port": "writes",
+            "nodeId": "grid",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "stepgrid",
+        "adapterId": "ng.compute.stage",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"stepGrid\",\"entry\":\"stepGrid\",\"workgroupSize\":256,\"invocations\":16776960,\"phase\":\"fixedStep\"}",
+        "inputs": [
+          {
+            "port": "reads",
+            "nodeId": "grid",
+            "output": "buffer"
+          },
+          {
+            "port": "writes",
+            "nodeId": "grid",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "view",
+        "adapterId": "ng.render.fullscreen",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"gridView\",\"fragmentEntry\":\"gridView\"}",
+        "inputs": [
+          {
+            "port": "reads",
+            "nodeId": "grid",
+            "output": "buffer"
+          }
+        ]
+      }
+    ]
+  },
+  "modules": [
+    {
+      "module": "gridView",
+      "interfaceHash": "3578accfdf8dc2ee6bef33f55bc07fb3e50e0827fa5cda7835574d712cbefe39",
+      "codeHash": "184dc176b1b6549aea55bed93af5a6c4450b3f6be269eeda6e77bbef3c7986bd",
+      "body": "fn gridView(uv: vec2<f32>) -> vec4<f32> {\n    let col = min(u32(clamp(uv.x, 0.0, 1.0) * 4096.0), 4095u);\n    let row = min(u32(clamp(uv.y, 0.0, 1.0) * 4095.0), 4094u);\n    let v = b_grid[(col + row * 4096u) * B_grid_STRIDE];\n    return vec4<f32>(0.1 + 0.5 * v, 0.2, 0.35 - 0.2 * v, 1.0);\n}"
+    },
+    {
+      "module": "seedGrid",
+      "interfaceHash": "6254896715c6f7a751c673e2dbf6289301dc166580e493f5bbc1d3c82bfb7553",
+      "codeHash": "c3565d75db5fd5d0f0dac91da802f5bc68bcee7f81c579d8d4657f2476497f43",
+      "body": "fn seedGrid(index: u32) {\n    b_grid[index * B_grid_STRIDE] = fract(f32(index % 4096u) * 0.0137 + f32(index / 4096u) * 0.0071);\n}"
+    },
+    {
+      "module": "stepGrid",
+      "interfaceHash": "de6eaf82b9b616dadd2c3ed3810065b67f928811cec9d5449d6ef49df3c5ea97",
+      "codeHash": "61d966706e66324a06e672650982610663561df21ba1df3b1bf4984cbd776d4d",
+      "body": "fn stepGrid(index: u32) {\n    let cell = index * B_grid_STRIDE;\n    b_grid[cell] = fract(b_grid[cell] + sim.dt * 0.1);\n}"
+    }
+  ]
+}

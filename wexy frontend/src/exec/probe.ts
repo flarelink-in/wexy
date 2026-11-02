@@ -15,8 +15,9 @@
 // that raises a validation or memory error voids its timing and the probe (the EA5.3 review, H1). After every await the
 // probe checks it is still wanted (a cancel, a newer turn, another device generation) and stops submitting if not (M1).
 // Each phase's first operation is timed alone and fenced; if that single 1/8 operation is near the cap, nothing repeats it.
-// Only then the bounded untimed warm-up and the timed runs. Init and a step are pure work, scaled from the two fractions
-// by a two-point fit floored by direct scaling (eight times the 1/8, four times the 1/4); a frame is part work, part
+// Only then the bounded untimed warm-up and the timed runs, a step's and a frame's in batches; each warm-up and batch is
+// sized to the work, so none holds much more than the cap (batchRuns). Init and a step are pure work, scaled from the two
+// fractions by a two-point fit floored by direct scaling (eight times the 1/8, four times the 1/4); a frame is part work, part
 // pixels (the post chain, a fullscreen pass), so it is fitted in both, as h1's probe does: direct work scaling would
 // multiply the pixel-bound part by four to eight and refuse slow but safe worlds (Q90). Every prediction carries the
 // 1.25 margin. Timings within the timer's floor band (both at most 1 ms, the browser's 0.1 ms grain) are bounded by
@@ -53,13 +54,13 @@ export const WORLD_PROBE = {
     // and 640×360 made it thirteen, and one noisy timing thirteen times a frame's prediction.
     small: { width: 640, height: 360 },
     large: PROBE_FRAME,
-    /** Untimed runs after a phase's first, before the timed ones. */
+    /** Untimed runs after a phase's first, before the timed ones; a step's or a frame's fewer where two would not fit in the cap. */
     warm: 2,
-    /** Timed runs in a batch: init's each fenced, a step's together. */
+    /** Timed runs in a batch: init's each fenced; a step's together, at most this many (`batchRuns`). */
     runs: 6,
     /**
-     * Frames in a batch, fenced once (EA-G1, 11-01): each frame's share of the fence's latency, about 3 ms on the AMD iGPU,
-     * is a twenty-fourth, so smaller differences of work show.
+     * Frames in a batch, fenced once, at most (EA-G1, 11-01): each frame's share of the fence's latency, about 3 ms on the
+     * AMD iGPU, is a twenty-fourth, so smaller differences of work show. A heavy frame's batch holds fewer (`batchRuns`).
      */
     frameRuns: 24,
     /** Batches of a step or a frame, and of init's runs the median, so a spike in one moves nothing (EA-G1, 11-01). */
@@ -89,6 +90,8 @@ const SCALED: Readonly<Record<string, readonly string[]>> = {
     'ng.buffer.storage': ['elements'],
     'ng.compute.stage': ['invocations'],
     'ng.render.mesh_batch': ['maxInstances'],
+    // Its instances, and the buffer wired to them divided alike, so it never holds more than the batch draws.
+    'ng.render.custom_batch': ['maxInstances'],
 };
 /** The adapters a variant keeps as they are: no count of their own (the frame's size is the probe's). */
 const KEPT: ReadonlySet<string> = new Set(['ng.geometry.primitive', 'ng.material.stock', 'ng.light.rig', 'ng.render.fullscreen', 'ng.post.chain']);
@@ -181,6 +184,18 @@ export function median(values: readonly number[]): number {
 }
 
 /**
+ * The runs of a timed batch, sized to the work (11-02): as many as fit in the cap at the pace `ms` over `runs` ran, at
+ * least one and at most `most`. EA-G1 calibrated 24 frames a batch on light frames, which fill a few tens of milliseconds;
+ * its over-budget world drew 106 ms a frame, so the same 24 kept the AMD iGPU busy 2.5 s a batch, about 15 s before the
+ * probe refused it, and in the studio each batch is a quiet window the Head holds through. So no batch holds much more
+ * than one submission may (Q90's 250 ms); every live world's frame still fits 24.
+ */
+export function batchRuns(ms: number, runs: number, most: number): number {
+    const pace = ms / runs;
+    return pace > 0 ? Math.max(1, Math.min(most, Math.floor(WORLD_PROBE.maxSubmissionMs / pace))) : most;
+}
+
+/**
  * A pure-work phase (init, a fixed step) at full size from its 1/8 and 1/4 timings: within the floor band, floor scaling;
  * above it, the two-point fit floored by direct scaling, with the margin; non-finite, negative, or falling as the work
  * doubles, inconclusive (EA-X15). The band is the device's own (`floorMs`): at least the timer's, and twice an empty
@@ -203,6 +218,8 @@ export interface FrameTimings {
     touched?: number;
     /** The same at the smaller frame, after the larger: what of a first touch grows with pixels is the rise between them. */
     touchedSmall?: number;
+    /** The frames in each timed batch at the smaller frame and the larger (`batchRuns`); EA-G1's 24 where absent. */
+    runs?: { small: number; large: number };
 }
 
 /**
@@ -210,21 +227,25 @@ export interface FrameTimings {
  * work and in pixels with slopes and the fixed part never below zero, as h1's probe does; never below the largest frame
  * measured, nor a timer grain's worth; with the margin. Above the floor, a timing that falls as the work or the pixels
  * grow is inconclusive. A frame is timed in batches, so its share of the fence's latency, and its band, is `floorMs`
- * divided by the batch's frames.
+ * divided by its batch's frames: a heavy frame's batch holds fewer (`batchRuns`), so each of its frames has a larger share.
  */
 export function predictFrame(a: FrameTimings, b: FrameTimings, pixels: number, floorMs: number = WORLD_PROBE.timerFloorMs): Prediction {
     const { timerFloorMs, timerGrainMs, margin, small, large, frameRuns } = WORLD_PROBE;
     const all = [a.small, a.large, b.small, b.large];
     if (!finiteNonNegative(...all)) return { inconclusive: `frame timings ${all.join(', ')} ms are not finite and non-negative` };
-    // A frame's share of the device's floor: what a batch's fence adds to each of its frames, and what may hide in one.
-    const share = floorMs / frameRuns;
-    const band = Math.max(timerFloorMs, share);
-    if (all.some(v => v > band)) {
-        const tolerance = (v: number) => 2 * timerGrainMs + share / 2 + 0.1 * v;
-        if (b.small < a.small - tolerance(a.small) || b.large < a.large - tolerance(a.large)) {
+    // A frame's share of the device's floor: what its batch's fence adds to each of its frames, and what may hide in one.
+    const sa = { small: floorMs / (a.runs?.small ?? frameRuns), large: floorMs / (a.runs?.large ?? frameRuns) };
+    const sb = { small: floorMs / (b.runs?.small ?? frameRuns), large: floorMs / (b.runs?.large ?? frameRuns) };
+    const band = (share: number) => Math.max(timerFloorMs, share);
+    const floorOnly = a.small <= band(sa.small) && a.large <= band(sa.large) && b.small <= band(sb.small) && b.large <= band(sb.large);
+    if (!floorOnly) {
+        // The timing compared against may read high by half its own share: its batch's fence, spread over its frames. A
+        // batch of more frames (the other timing's, when it is cheaper) reads less high, so the gap is never more.
+        const tolerance = (v: number, share: number) => 2 * timerGrainMs + share / 2 + 0.1 * v;
+        if (b.small < a.small - tolerance(a.small, sa.small) || b.large < a.large - tolerance(a.large, sa.large)) {
             return { inconclusive: 'a frame measured cheaper with twice the work, above the floor' };
         }
-        if (a.large < a.small - tolerance(a.small)) return { inconclusive: 'a frame measured cheaper at four times the pixels, above the floor' };
+        if (a.large < a.small - tolerance(a.small, sa.small)) return { inconclusive: 'a frame measured cheaper at four times the pixels, above the floor' };
     }
     const S = small.width * small.height;
     const L = large.width * large.height;
@@ -244,9 +265,9 @@ export function predictFrame(a: FrameTimings, b: FrameTimings, pixels: number, f
     // A difference of work smaller than the noise cannot be seen, so the worst within it is assumed: each step of work
     // between the variants may hide a frame's share of the floor (EA-G1: foggy-dusk's 1/4 timed under its 1/8, and its
     // full frame ran 3.7 times the full-work frame the fit saw at 1280×720).
-    const fullAtLarge = a.large + 7 * (Math.max(0, b.large - a.large) + share);
+    const fullAtLarge = a.large + 7 * (Math.max(0, b.large - a.large) + Math.max(sa.large, sb.large));
     const linear = fullAtLarge * Math.max(1, pixels / L);
-    return { ms: Math.max(fit, linear, ...all, timerGrainMs * 8) * margin, rule: all.every(v => v <= band) ? 'floor' : 'fit' };
+    return { ms: Math.max(fit, linear, ...all, timerGrainMs * 8) * margin, rule: floorOnly ? 'floor' : 'fit' };
 }
 
 /**
@@ -310,6 +331,8 @@ export interface ProbeDeps {
 export interface PhaseProbe {
     first: number[];
     measured: number[];
+    /** A step's or a frame's: the runs in each timed batch behind `measured`, one for one (`batchRuns`). */
+    runs?: number[];
     /** A frame's only: each variant's first frame after its targets were made again, at the smaller frame and the larger. */
     touched?: number[];
     ms: number;
@@ -499,23 +522,29 @@ export async function probeCandidate(snapshot: Snapshot, deps: ProbeDeps): Promi
                 if (typeof t === 'string') return refuse(t);
                 stepFirst.push(t);
             }
-            const stepMedian = async (b: Built) => {
-                await checked(b, 'one fixed step', () => { for (let i = 0; i < warm; i++) b.variant.world.runtime.step(); });
+            // Sized to the work (batchRuns), as a frame's: the warm-up by the pace of the first run before it, each batch by
+            // the warm-up's.
+            const stepMedian = async (b: Built, first: number) => {
+                const w = batchRuns(first, 1, warm);
+                const n = batchRuns(await checked(b, 'one fixed step', () => { for (let i = 0; i < w; i++) b.variant.world.runtime.step(); }), w, runs);
                 const batches: number[] = [];
                 for (let j = 0; j < WORLD_PROBE.batches; j++) {
-                    batches.push((await checked(b, 'one fixed step', () => { for (let i = 0; i < runs; i++) b.variant.world.runtime.step(); })) / runs);
+                    batches.push((await checked(b, 'one fixed step', () => { for (let i = 0; i < n; i++) b.variant.world.runtime.step(); })) / n);
                 }
-                return median(batches);
+                return { ms: median(batches), runs: n };
             };
             let stepMeasured: number[] = [];
+            let stepRuns: number[] = [];
             let p: Prediction = { inconclusive: 'not measured' };
             for (let attempt = 0; attempt <= retries; attempt++) {
-                stepMeasured = [await stepMedian(A), await stepMedian(B)];
+                const both = [await stepMedian(A, stepFirst[0]), await stepMedian(B, stepFirst[1])];
+                stepMeasured = both.map(s => s.ms);
+                stepRuns = both.map(s => s.runs);
                 p = predictPair(stepMeasured[0], stepMeasured[1], floorMs);
                 if (!('inconclusive' in p)) break;
             }
             const j = judged('one fixed step', p);
-            step = { first: stepFirst, measured: stepMeasured, ms: 'ms' in p ? p.ms : NaN, rule: 'rule' in p ? p.rule : 'fit' };
+            step = { first: stepFirst, measured: stepMeasured, runs: stepRuns, ms: 'ms' in p ? p.ms : NaN, rule: 'rule' in p ? p.rule : 'fit' };
             partial.phases.step = step;
             if (typeof j === 'string') return refuse(j);
         }
@@ -538,14 +567,22 @@ export async function probeCandidate(snapshot: Snapshot, deps: ProbeDeps): Promi
             if (typeof t === 'string') return refuse(t);
             frameFirst.push(t);
         }
-        const frameMedian = async (b: Built): Promise<FrameTimings> => {
+        const frameMedian = async (b: Built, first: number): Promise<FrameTimings> => {
             const frames = (n: number) => () => { for (let i = 0; i < n; i++) frame(b); };
-            const batched = async () => {
+            /**
+             * Sized to the frame (batchRuns, 11-02): an untimed warm-up of as many of its two frames as fit in the cap at
+             * the pace of the single frame timed before it, then the batch's frames from the warm-up's own pace.
+             */
+            const warmed = async (pace: number) => {
+                const w = batchRuns(pace, 1, warm);
+                return batchRuns(await checked(b, 'one frame', frames(w)), w, WORLD_PROBE.frameRuns);
+            };
+            const batched = async (n: number) => {
                 const batches: number[] = [];
-                for (let j = 0; j < WORLD_PROBE.batches; j++) batches.push((await checked(b, 'one frame', frames(WORLD_PROBE.frameRuns))) / WORLD_PROBE.frameRuns);
+                for (let j = 0; j < WORLD_PROBE.batches; j++) batches.push((await checked(b, 'one frame', frames(n))) / n);
                 return median(batches);
             };
-            await checked(b, 'one frame', frames(warm));
+            const smallRuns = await warmed(first);
             // The first frame at the larger frame right after its targets are made again: their first touch, with warm
             // pipelines, timed alone (the cold first frame's model, predictFirstFrame).
             const touched = await checked(b, 'one frame', () => { size(b, large); frame(b); });
@@ -554,22 +591,22 @@ export async function probeCandidate(snapshot: Snapshot, deps: ProbeDeps): Promi
             if (touched * margin > maxSubmissionMs) {
                 throw new Refusal(`EA_PROBE one frame: its 1/${b.fraction} variant alone took ${touched.toFixed(1)} ms at ${large.width}×${large.height}, near the ${maxSubmissionMs} ms cap; nothing repeated it`);
             }
-            await checked(b, 'one frame', frames(warm));
-            const largeMs = await batched();
+            const largeRuns = await warmed(touched);
+            const largeMs = await batched(largeRuns);
             const touchedSmall = await checked(b, 'one frame', () => { size(b, small); frame(b); });
-            return { small: await batched(), large: largeMs, touched, touchedSmall };
+            return { small: await batched(smallRuns), large: largeMs, touched, touchedSmall, runs: { small: smallRuns, large: largeRuns } };
         };
         let frames: FrameTimings[] = [];
         let fp: Prediction = { inconclusive: 'not measured' };
         for (let attempt = 0; attempt <= retries; attempt++) {
-            frames = [await frameMedian(A), await frameMedian(B)];
+            frames = [await frameMedian(A, frameFirst[0]), await frameMedian(B, frameFirst[1])];
             fp = predictFrame(frames[0], frames[1], pixels, floorMs);
             if (!('inconclusive' in fp)) break;
         }
         const fj = judged('one frame', fp);
         partial.phases.frame = {
-            first: frameFirst, measured: frames.flatMap(f => [f.small, f.large]), touched: frames.flatMap(f => [f.touchedSmall ?? NaN, f.touched ?? NaN]),
-            ms: 'ms' in fp ? fp.ms : NaN, rule: 'rule' in fp ? fp.rule : 'fit',
+            first: frameFirst, measured: frames.flatMap(f => [f.small, f.large]), runs: frames.flatMap(f => [f.runs?.small ?? NaN, f.runs?.large ?? NaN]),
+            touched: frames.flatMap(f => [f.touchedSmall ?? NaN, f.touched ?? NaN]), ms: 'ms' in fp ? fp.ms : NaN, rule: 'rule' in fp ? fp.rule : 'fit',
         };
         if (typeof fj === 'string') return refuse(fj);
         partial.drawMsPerFrame = fj.ms;

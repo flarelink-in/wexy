@@ -1,0 +1,98 @@
+{
+  "note": "A coverage world of 2026-11-02 (EA-G1, option B): written by hand, not by the model, so that EA-G1 runs 262,144 cubes and invocations, seeded at init and turned each fixed step.",
+  "program": {
+    "nodes": [
+      {
+        "id": "swarm",
+        "adapterId": "ng.buffer.storage",
+        "adapterVersion": 1,
+        "config": "{\"elements\":262144,\"layout\":\"instance14\",\"strideFloats\":14,\"pingPong\":false,\"init\":\"zero\"}",
+        "inputs": []
+      },
+      {
+        "id": "seedswarm",
+        "adapterId": "ng.compute.stage",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"seedSwarm\",\"entry\":\"seedSwarm\",\"workgroupSize\":256,\"invocations\":262144,\"phase\":\"init\"}",
+        "inputs": [
+          {
+            "port": "writes",
+            "nodeId": "swarm",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "turnswarm",
+        "adapterId": "ng.compute.stage",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"turnSwarm\",\"entry\":\"turnSwarm\",\"workgroupSize\":256,\"invocations\":262144,\"phase\":\"fixedStep\"}",
+        "inputs": [
+          {
+            "port": "writes",
+            "nodeId": "swarm",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "mote",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"cube\",\"size\":0.03,\"segments\":3}",
+        "inputs": []
+      },
+      {
+        "id": "glow",
+        "adapterId": "ng.material.stock",
+        "adapterVersion": 1,
+        "config": "{\"kind\":\"emissive\",\"baseColor\":[0.9,0.95,1,1]}",
+        "inputs": []
+      },
+      {
+        "id": "motes",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":262144}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "mote",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "glow",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "swarm",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "look",
+        "adapterId": "ng.post.chain",
+        "adapterVersion": 1,
+        "config": "{\"effects\":[{\"effect\":\"Tonemap\",\"intensity\":1}]}",
+        "inputs": []
+      }
+    ]
+  },
+  "modules": [
+    {
+      "module": "seedSwarm",
+      "interfaceHash": "18cd1c82556a3c7297d22ec6c0cf3fec458ddddaf04dbcf0ea7f172cdb118d1a",
+      "codeHash": "1a387aabb05226269a6f0280aa67bac8ad858af67198ad9532ba3f220363b228",
+      "body": "fn seedSwarm(index: u32) {\n    let base = index * B_swarm_STRIDE;\n    let col = f32(index % 512u);\n    let row = f32(index / 512u);\n    let half = f32(511u) * 0.5;\n    b_swarm[base + 0u] = 0.0;\n    b_swarm[base + 1u] = (col - half) * 0.05859375;\n    b_swarm[base + 2u] = 0.0;\n    b_swarm[base + 3u] = (row - half) * 0.05859375;\n    b_swarm[base + 4u] = 0.0;\n    b_swarm[base + 5u] = 0.0;\n    b_swarm[base + 6u] = 0.0;\n    b_swarm[base + 7u] = 1.0;\n    b_swarm[base + 8u] = 1;\n    b_swarm[base + 9u] = 1;\n    b_swarm[base + 10u] = 1;\n    b_swarm[base + 11u] = 0.55 + 0.4 * fract(col * 0.37);\n    b_swarm[base + 12u] = 0.55 + 0.4 * fract(row * 0.29);\n    b_swarm[base + 13u] = 0.7;\n}"
+    },
+    {
+      "module": "turnSwarm",
+      "interfaceHash": "59f4a1020359c61dfaa3ff9417a8e7d83c44c7d4b4baf69ae3a16be70d1fda72",
+      "codeHash": "a7ebae0249efd9fcdc848de527c09734a81615bc4f658d14a7d95f2f7f581068",
+      "body": "fn turnSwarm(index: u32) {\n    let base = index * B_swarm_STRIDE;\n    let half = 0.5 * (sim.time + f32(index % 97u) * 0.1);\n    b_swarm[base + 4u] = 0.0;\n    b_swarm[base + 5u] = sin(half);\n    b_swarm[base + 6u] = 0.0;\n    b_swarm[base + 7u] = cos(half);\n}"
+    }
+  ]
+}

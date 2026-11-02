@@ -30,6 +30,9 @@ export const COVERAGE_SCHEMA: Readonly<Record<string, { readonly max: readonly s
     'ng.material.stock': { max: [], values: ['class'] },
     'ng.light.rig': { max: ['lights'], values: [] },
     'ng.render.mesh_batch': { max: ['instances', 'vertexInvocations'], values: ['material', 'lights'] },
+    // A module's own draw: with StandardLayout's geometry or none (three vertices an instance), lit or not (custom
+    // lighting is gated, so `false` alone runs until it is not).
+    'ng.render.custom_batch': { max: ['instances', 'vertexInvocations'], values: ['vertexLayout', 'lights'] },
     'ng.render.fullscreen': { max: ['pixels'], values: [] },
     'ng.post.chain': { max: ['effects', 'pixels'], values: ['effect'] },
 };
@@ -227,15 +230,17 @@ function demandOf(x: Graph, n: DeepReadonly<XNode>, pixels: number, ops: Readonl
             const capacity = (create.args as { capacity: Record<string, number> }).capacity;
             return { ...base, max: { lights: Object.values(capacity).reduce((a, b) => a + b, 0) }, values: {} };
         }
-        case 'ng.render.mesh_batch': {
+        case 'ng.render.mesh_batch':
+        case 'ng.render.custom_batch': {
             const create = need('create');
             const draw = need('draw');
             if (typeof create === 'string') return create;
             if (typeof draw === 'string') return draw;
-            const a = create.args as { maxInstances: number; shader: { material?: string; lights?: boolean } };
+            const a = create.args as { maxInstances: number; vertexLayout?: string | null; shader: { material?: string; lights?: boolean } };
+            const lights = [String(!!a.shader.lights)];
             return {
                 ...base, max: { instances: a.maxInstances, vertexInvocations: (draw.work.vertices ?? 0) * (draw.work.instances ?? 0) },
-                values: { material: [a.shader.material ?? 'none'], lights: [String(!!a.shader.lights)] },
+                values: n.adapterId === 'ng.render.mesh_batch' ? { material: [a.shader.material ?? 'none'], lights } : { vertexLayout: [a.vertexLayout ?? 'none'], lights },
             };
         }
         case 'ng.render.fullscreen': return { ...base, max: { pixels }, values: {} };

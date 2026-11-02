@@ -15,6 +15,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { POLICY_V1 } from '../src/contract/adapters/graph.ts';
+import { resolveProgram } from '../src/contract/adapters/resolve.ts';
 import { createDeviceCompiler } from '../src/exec/device-compiler.ts';
 import {
     COVERAGE_SCHEMA, EXECUTOR_PROFILE, SHIPPED, adapterIdentity, browserOf, demandsOf, eligibilityFrom, eligibilityOf, environmentOf, osOf, parseEligibility,
@@ -23,7 +24,9 @@ import { DEVICE_BUDGET, createGate, createGoLedger, createMemoryLedger, limitsOf
 import { envelopeOf } from '../src/exec/stage.ts';
 import { createAuthority, instantiate } from '../src/loop/executor.ts';
 import { MAX_LIVE_PIXELS } from '../src/runtime/viewport.ts';
-import { DEFAULT_LIMITS, ENV, ENVIRONMENT, cleanDevice, compileAll, eligibilityFor, present, sealedLive } from './exec-fakes.mjs';
+import {
+    COVERAGE_WORLDS, DEFAULT_LIMITS, ENV, ENVIRONMENT, cleanDevice, compileAll, eligibilityFor, from, node, present, sealedCoverage, sealedLive,
+} from './exec-fakes.mjs';
 
 const STAGE = { width: 1280, height: 720 };
 /** This laptop's two GPUs as EA-G1 keyed them (dev/out/ea-g1, 11-01), with Chrome's WebGPU developer features on. */
@@ -219,7 +222,8 @@ test('EA-D10 eligibility: outside coverage, unknown adapter info, one fixture fo
         [{ ...entry, extra: 1 }, 'an unknown key'],
         [{ ...entry, coverage: { ...entry.coverage, max: {} } }, 'a missing range'],
         [{ ...entry, coverage: { ...entry.coverage, max: { ...entry.coverage.max, bytes: -1 } } }, 'a negative range'],
-        [{ ...entry, adapter: 'ng.render.custom_batch' }, 'an adapter with no schema (custom_batch stays static-only)'],
+        [{ ...entry, adapter: 'ng.render.odd' }, 'an adapter with no schema'],
+        [{ ...entry, adapter: 'ng.render.custom_batch' }, 'another adapter\'s ranges (a buffer\'s, under custom_batch)'],
         [{ ...entry, environment: ' ' }, 'no environment'],
         [{ ...entry, coverage: { ...entry.coverage, values: { ...entry.coverage.values, layout: [] } } }, 'an empty value list'],
     ]) {
@@ -228,8 +232,8 @@ test('EA-D10 eligibility: outside coverage, unknown adapter info, one fixture fo
         await refused(parsed, /^EA_ELIGIBILITY eligibility refused: entry 1[ ']/, `the gate under a refused file: ${what}`);
     }
     assert.equal(parseEligibility('{').ok, false);
-    assert.deepEqual(Object.keys(COVERAGE_SCHEMA).sort(), ['ng.buffer.storage', 'ng.compute.stage', 'ng.geometry.primitive', 'ng.light.rig', 'ng.material.stock', 'ng.post.chain', 'ng.render.fullscreen', 'ng.render.mesh_batch'],
-        'the eight adapters the live worlds use (Q88); custom_batch has none');
+    assert.deepEqual(Object.keys(COVERAGE_SCHEMA).sort(), ['ng.buffer.storage', 'ng.compute.stage', 'ng.geometry.primitive', 'ng.light.rig', 'ng.material.stock', 'ng.post.chain',
+        'ng.render.custom_batch', 'ng.render.fullscreen', 'ng.render.mesh_batch'], 'Tier 1\'s nine: the eight the live worlds use (Q88), and custom_batch, which the coverage worlds run (11-02)');
 
     // The EA-G1 bootstrap: the pinned candidate admits with no entry at all, under every other rule; nothing else does.
     const pinned = await setup('galaxy', { eligibility: SHIPPED, bootstrap: { harness: 'EA-G1', candidates: new Set([galaxy.id]) } });
@@ -262,13 +266,18 @@ test('EA-D10 eligibility as EA-G1 writes it: one entry an adapter from the clean
     const stage = entries.find(e => e.adapter === 'ng.compute.stage');
     assert.equal(stage.coverage.max.invocations, 12032, 'the largest demand that ran, never widened');
     assert.deepEqual(stage.coverage.values.phase, ['fixedStep', 'frame', 'init'], 'every value that ran, sorted');
-    assert.throws(() => eligibilityFrom([{ node: 'water', adapter: 'ng.render.custom_batch', adapterVersion: 1, max: {}, values: {} }], { environment: ENVIRONMENT, engineBundleHash: 'x', evidence: 'x' }),
-        /custom_batch has no coverage schema here/, 'custom_batch is never written (Q88)');
+    assert.throws(() => eligibilityFrom([{ node: 'odd', adapter: 'ng.render.odd', adapterVersion: 1, max: {}, values: {} }], { environment: ENVIRONMENT, engineBundleHash: 'x', evidence: 'x' }),
+        /ng\.render\.odd has no coverage schema here/, 'an adapter with no schema is never written');
 });
 
-test('EA5.4: the shipped eligibility, written by EA-G1, covers each live world on the two GPUs at every envelope the stage computes, and nothing past what ran', async () => {
-    assert.ok(SHIPPED.entries.every(e => /^EA-G1 2026-11-01 on .+; dev\/out\/ea-g1\/[0-9T-]+\/(amd|nvidia)\.json$/.test(e.evidence)), 'each entry names its run and its result');
-    const worlds = await Promise.all(['block-film', 'galaxy', 'foggy-dusk'].map(n => sealedLive(n)));
+test('EA5.4 and option B: the shipped eligibility, written by EA-G1, covers each live world and each coverage world on the two GPUs at every envelope the stage computes, and nothing past what ran', async () => {
+    assert.ok(SHIPPED.entries.every(e => /^EA-G1 (2026-\d\d-\d\d) on .+; dev\/out\/ea-g1\/\1T[0-9-]+\/(amd|nvidia)\.json$/.test(e.evidence)), 'each entry names its run, of its date, and its result');
+    // The coverage worlds ran clean on both GPUs (11-02, dev/out/ea-g1/2026-11-02T06-29-30 and …T06-31-07), so every
+    // adapter of Tier 1 has an entry on each, custom_batch among them.
+    for (const key of [AMD_IGPU, GTX_1650]) {
+        assert.deepEqual(SHIPPED.entries.filter(e => e.environment === key).map(e => e.adapter).sort(), Object.keys(COVERAGE_SCHEMA).sort(), `${key.split('|')[1]}: one entry an adapter`);
+    }
+    const worlds = [...await Promise.all(['block-film', 'galaxy', 'foggy-dusk'].map(n => sealedLive(n))), ...await Promise.all(COVERAGE_WORLDS.map(sealedCoverage))];
     const at = (x, key, pixels) => eligibilityOf(x, SHIPPED.entries, { environment: { key }, engineBundleHash: x.identity.bundleHash, profile: EXECUTOR_PROFILE, pixels });
     // The stage admits for its live cap at the canvas's shape, whatever the shape; EA-G1 rendered 2048×1152, over each.
     const envelopes = [4 / 3, 16 / 10, 16 / 9, 21 / 9, 3].map(aspect => envelopeOf({ width: Math.round(720 * aspect), height: 720 }, MAX_LIVE_PIXELS));
@@ -281,6 +290,14 @@ test('EA5.4: the shipped eligibility, written by EA-G1, covers each live world o
     assert.match(at(worlds[1].x, AMD_IGPU, 2048 * 1152 + 1), /^EA_ELIGIBILITY ng\.render\.fullscreen@1 \(node backdrop\): pixels 2359297 over 2359296 /);
     assert.match(at(worlds[1].x, AMD_IGPU.replace('0x1638|AMD Radeon(TM) Graphics', '0x15d8|AMD Radeon(TM) Vega 8 Graphics'), 2048 * 1152), /has no coverage for/);
     assert.match(at(worlds[1].x, GTX_1650.replace('chrome/156', 'chrome/157'), 2048 * 1152), /has no coverage for/, 'another browser version');
+    // A value no run verified: custom lighting is gated, so no run lit a custom batch, and none is covered.
+    const lit = await resolveProgram([
+        node('ball', 'ng.geometry.primitive', { shape: 'sphere', size: 1, segments: 16 }),
+        node('rig', 'ng.light.rig', { ambient: [0.1, 0.1, 0.1], directional: null, points: [] }),
+        node('glow', 'ng.render.custom_batch', { module: 'glow', vertexEntry: 'v', fragmentEntry: 'f', maxInstances: 1 }, [from('geometry', 'ball', 'geometry'), from('lights', 'rig', 'lights')]),
+    ]);
+    assert.equal(lit.ok, true, JSON.stringify(lit.diagnostics));
+    assert.match(at(lit.graph, GTX_1650, 2048 * 1152), /^EA_ELIGIBILITY ng\.render\.custom_batch@1 \(node glow\): lights true has no coverage for /);
 });
 
 test('EA-D11 the reservation: B admits and B+1 refuses, the Head counts, an alias counts once, two builds count twice, each returned once', async () => {

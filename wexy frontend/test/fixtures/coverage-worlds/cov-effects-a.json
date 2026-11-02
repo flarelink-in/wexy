@@ -1,0 +1,104 @@
+{
+  "note": "A coverage world of 2026-11-02 (EA-G1, option B): written by hand, not by the model, so that EA-G1 runs eight post effects in the engine's order: AutoExposure, Bokeh, Halation, GodRays, Tonemap, CelShade, Kuwahara, FXAA.",
+  "program": {
+    "nodes": [
+      {
+        "id": "cells",
+        "adapterId": "ng.buffer.storage",
+        "adapterVersion": 1,
+        "config": "{\"elements\":16,\"layout\":\"instance14\",\"strideFloats\":14,\"pingPong\":false,\"init\":\"zero\"}",
+        "inputs": []
+      },
+      {
+        "id": "placecells",
+        "adapterId": "ng.compute.stage",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"placeCells\",\"entry\":\"placeCells\",\"workgroupSize\":64,\"invocations\":16,\"phase\":\"init\"}",
+        "inputs": [
+          {
+            "port": "writes",
+            "nodeId": "cells",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "ball",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"sphere\",\"size\":1,\"segments\":32}",
+        "inputs": []
+      },
+      {
+        "id": "stone",
+        "adapterId": "ng.material.stock",
+        "adapterVersion": 1,
+        "config": "{\"kind\":\"lambert\",\"baseColor\":[0.9,0.85,0.8,1]}",
+        "inputs": []
+      },
+      {
+        "id": "rig",
+        "adapterId": "ng.light.rig",
+        "adapterVersion": 1,
+        "config": "{\"ambient\":[0.12,0.12,0.14],\"directional\":{\"direction\":[0.3,-1,0.2],\"color\":[1,0.96,0.9],\"intensity\":2},\"points\":[{\"position\":[4,3,4],\"color\":[1,0.6,0.3],\"intensity\":8,\"range\":20},{\"position\":[-4,3,4],\"color\":[0.3,0.6,1],\"intensity\":8,\"range\":20},{\"position\":[4,3,-4],\"color\":[0.5,1,0.5],\"intensity\":8,\"range\":20},{\"position\":[-4,3,-4],\"color\":[1,0.4,0.8],\"intensity\":8,\"range\":20}]}",
+        "inputs": []
+      },
+      {
+        "id": "balls",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":16}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "ball",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "stone",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "cells",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "sky",
+        "adapterId": "ng.render.fullscreen",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"skyDome\",\"fragmentEntry\":\"skyDome\"}",
+        "inputs": []
+      },
+      {
+        "id": "look",
+        "adapterId": "ng.post.chain",
+        "adapterVersion": 1,
+        "config": "{\"effects\":[{\"effect\":\"AutoExposure\",\"intensity\":0.8},{\"effect\":\"Bokeh\",\"intensity\":0.8},{\"effect\":\"Halation\",\"intensity\":0.8},{\"effect\":\"GodRays\",\"intensity\":0.8},{\"effect\":\"Tonemap\",\"intensity\":0.8},{\"effect\":\"CelShade\",\"intensity\":0.8},{\"effect\":\"Kuwahara\",\"intensity\":0.8},{\"effect\":\"FXAA\",\"intensity\":0.8}]}",
+        "inputs": []
+      }
+    ]
+  },
+  "modules": [
+    {
+      "module": "placeCells",
+      "interfaceHash": "d20fd09b5454b6f18ea18f92675f28cde15520f973b6ff957597a61ee18de6fd",
+      "codeHash": "36d7dfae67bab34f03e290f2d35bca6438008bb0f65f5168ec81682d060ac958",
+      "body": "fn placeCells(index: u32) {\n    let base = index * B_cells_STRIDE;\n    let col = f32(index % 4u);\n    let row = f32(index / 4u);\n    let half = f32(3u) * 0.5;\n    b_cells[base + 0u] = 0.0;\n    b_cells[base + 1u] = (col - half) * 2.5;\n    b_cells[base + 2u] = 0.0;\n    b_cells[base + 3u] = (row - half) * 2.5;\n    b_cells[base + 4u] = 0.0;\n    b_cells[base + 5u] = 0.0;\n    b_cells[base + 6u] = 0.0;\n    b_cells[base + 7u] = 1.0;\n    b_cells[base + 8u] = 1;\n    b_cells[base + 9u] = 1;\n    b_cells[base + 10u] = 1;\n    b_cells[base + 11u] = 0.55 + 0.4 * fract(col * 0.37);\n    b_cells[base + 12u] = 0.55 + 0.4 * fract(row * 0.29);\n    b_cells[base + 13u] = 0.7;\n}"
+    },
+    {
+      "module": "skyDome",
+      "interfaceHash": "7d91a452d1b3600d9da5a37b56d5b76a87ec9ddd3bede0f49449e293c9691f2b",
+      "codeHash": "0417edca78b898bfd76b4d537bf30dfba647dde10aac0a03ad7c454b1d21f204",
+      "body": "fn skyDome(uv: vec2<f32>) -> vec4<f32> {\n    let top = vec3<f32>(0.05, 0.07, 0.16);\n    let low = vec3<f32>(0.22, 0.16, 0.2);\n    let shade = mix(low, top, clamp(uv.y, 0.0, 1.0));\n    let pulse = 0.02 * sin(camera.simTime * 0.5);\n    return vec4<f32>(shade + vec3<f32>(pulse), 1.0);\n}"
+    }
+  ]
+}

@@ -1,0 +1,150 @@
+{
+  "note": "A coverage world of 2026-11-02 (EA-G1, option B): written by hand, not by the model, so that EA-G1 runs custom batches with geometry and with none (three vertices an instance), their instances from an instance14 buffer, an f32 buffer, or none; unlit (custom lighting is gated).",
+  "program": {
+    "nodes": [
+      {
+        "id": "cells",
+        "adapterId": "ng.buffer.storage",
+        "adapterVersion": 1,
+        "config": "{\"elements\":64,\"layout\":\"instance14\",\"strideFloats\":14,\"pingPong\":false,\"init\":\"zero\"}",
+        "inputs": []
+      },
+      {
+        "id": "placecells",
+        "adapterId": "ng.compute.stage",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"placeCells\",\"entry\":\"placeCells\",\"workgroupSize\":64,\"invocations\":64,\"phase\":\"init\"}",
+        "inputs": [
+          {
+            "port": "writes",
+            "nodeId": "cells",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "sparks",
+        "adapterId": "ng.buffer.storage",
+        "adapterVersion": 1,
+        "config": "{\"elements\":4096,\"layout\":\"f32\",\"strideFloats\":4,\"pingPong\":false,\"init\":\"zero\"}",
+        "inputs": []
+      },
+      {
+        "id": "stirsparks",
+        "adapterId": "ng.compute.stage",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"stirSparks\",\"entry\":\"stirSparks\",\"workgroupSize\":64,\"invocations\":4096,\"phase\":\"frame\"}",
+        "inputs": [
+          {
+            "port": "writes",
+            "nodeId": "sparks",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "orb",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"sphere\",\"size\":1,\"segments\":32}",
+        "inputs": []
+      },
+      {
+        "id": "orbs",
+        "adapterId": "ng.render.custom_batch",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"orbShade\",\"vertexEntry\":\"orbVertex\",\"fragmentEntry\":\"orbFragment\",\"maxInstances\":64}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "orb",
+            "output": "geometry"
+          },
+          {
+            "port": "instances",
+            "nodeId": "cells",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "ground",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"plane\",\"size\":40,\"segments\":3}",
+        "inputs": []
+      },
+      {
+        "id": "floor",
+        "adapterId": "ng.render.custom_batch",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"floorShade\",\"vertexEntry\":\"floorVertex\",\"fragmentEntry\":\"floorFragment\",\"maxInstances\":1}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "ground",
+            "output": "geometry"
+          }
+        ]
+      },
+      {
+        "id": "sparkle",
+        "adapterId": "ng.render.custom_batch",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"sparkShade\",\"vertexEntry\":\"sparkVertex\",\"fragmentEntry\":\"sparkFragment\",\"maxInstances\":4096}",
+        "inputs": [
+          {
+            "port": "instances",
+            "nodeId": "sparks",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "pennants",
+        "adapterId": "ng.render.custom_batch",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"pennantShade\",\"vertexEntry\":\"pennantVertex\",\"fragmentEntry\":\"pennantFragment\",\"maxInstances\":8}",
+        "inputs": []
+      }
+    ]
+  },
+  "modules": [
+    {
+      "module": "floorShade",
+      "interfaceHash": "9129087a8b1dee80c885f63644635ad3be31e62005e8cd4150a313581ed81211",
+      "codeHash": "9f70633fa09ef4d5df20f6befc1a5f24f5b6fb0e3accfb93286f9626bd5020ab",
+      "body": "fn floorVertex(position: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>, instance: u32) -> VertexOut {\n    let spot = position + vec3<f32>(0.0, -1.5, 0.0);\n    var o: VertexOut;\n    o.clipPos = camera.viewProj * vec4<f32>(spot, 1.0);\n    o.worldPos = spot;\n    o.worldNormal = normal;\n    o.uv = uv;\n    o.ecsColor = vec3<f32>(ecs[instance * EA_ECS_STRIDE], 0.0, 0.0);\n    return o;\n}\n\nfn floorFragment(input: VertexOut) -> vec4<f32> {\n    let grid = abs(fract(input.uv * 20.0) - vec2<f32>(0.5));\n    let edge = step(0.46, max(grid.x, grid.y));\n    return vec4<f32>(vec3<f32>(0.08, 0.09, 0.11) + vec3<f32>(0.25) * edge + input.ecsColor, 1.0);\n}"
+    },
+    {
+      "module": "orbShade",
+      "interfaceHash": "5a5aa5f950ae89b9ece941669234724f74460cf84d22bf2def5c037c530551d9",
+      "codeHash": "f63b4e4d026c58ee08c06918208581bbab4859ec6a8b1c202c7dbf8e74eb0bdd",
+      "body": "fn orbVertex(position: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>, instance: u32) -> VertexOut {\n    let base = instance * EA_ECS_STRIDE;\n    let center = vec3<f32>(ecs[base + 1u], ecs[base + 2u], ecs[base + 3u]);\n    let spot = center + position * ecs[base + 8u];\n    var o: VertexOut;\n    o.clipPos = camera.viewProj * vec4<f32>(spot, 1.0);\n    o.worldPos = spot;\n    o.worldNormal = normal;\n    o.uv = uv;\n    o.ecsColor = vec3<f32>(ecs[base + 11u], ecs[base + 12u], ecs[base + 13u]);\n    return o;\n}\n\nfn orbFragment(input: VertexOut) -> vec4<f32> {\n    let sun = normalize(vec3<f32>(0.3, 1.0, 0.2));\n    let shade = 0.25 + 0.75 * max(dot(normalize(input.worldNormal), sun), 0.0);\n    return vec4<f32>(input.ecsColor * shade, 1.0);\n}"
+    },
+    {
+      "module": "pennantShade",
+      "interfaceHash": "948c94393b2978c9ce13a7120c00b4afe19b461d7f9fb7c928574da5b12326af",
+      "codeHash": "7523f09ef7d66efc5d629188e459c11c1646b0c9890b4f5710a8a66fdface001",
+      "body": "fn pennantVertex(corner: u32, instance: u32) -> VertexOut {\n    let slot = f32(instance) * 0.25 - 0.875;\n    let cx = select(select(0.0, 0.08, corner == 1u), 0.04, corner == 2u);\n    let cy = select(0.0, 0.1, corner == 2u);\n    var o: VertexOut;\n    o.clipPos = vec4<f32>(slot + cx, 0.8 + cy, 0.5, 1.0);\n    o.worldPos = vec3<f32>(0.0);\n    o.worldNormal = vec3<f32>(0.0, 0.0, 1.0);\n    o.uv = vec2<f32>(cx * 12.5, cy * 10.0);\n    o.ecsColor = vec3<f32>(0.3 + 0.08 * f32(instance), 0.5, 0.9) + vec3<f32>(ecs[instance * EA_ECS_STRIDE]);\n    return o;\n}\n\nfn pennantFragment(input: VertexOut) -> vec4<f32> {\n    return vec4<f32>(input.ecsColor * (0.6 + 0.4 * input.uv.y), 1.0);\n}"
+    },
+    {
+      "module": "placeCells",
+      "interfaceHash": "9d803204e2f5dcbde12718449ec94d406c6f4a4c0440c52633063bef5533ca42",
+      "codeHash": "263db20e042e7457a22c7bee68c1107a44bc66eaa9d35a9b1dfd1436234c8697",
+      "body": "fn placeCells(index: u32) {\n    let base = index * B_cells_STRIDE;\n    let col = f32(index % 8u);\n    let row = f32(index / 8u);\n    let half = f32(7u) * 0.5;\n    b_cells[base + 0u] = 0.0;\n    b_cells[base + 1u] = (col - half) * 2;\n    b_cells[base + 2u] = 0.0;\n    b_cells[base + 3u] = (row - half) * 2;\n    b_cells[base + 4u] = 0.0;\n    b_cells[base + 5u] = 0.0;\n    b_cells[base + 6u] = 0.0;\n    b_cells[base + 7u] = 1.0;\n    b_cells[base + 8u] = 1;\n    b_cells[base + 9u] = 1;\n    b_cells[base + 10u] = 1;\n    b_cells[base + 11u] = 0.55 + 0.4 * fract(col * 0.37);\n    b_cells[base + 12u] = 0.55 + 0.4 * fract(row * 0.29);\n    b_cells[base + 13u] = 0.7;\n}"
+    },
+    {
+      "module": "sparkShade",
+      "interfaceHash": "302a0f37019f32bfd36d15357edff8c78355a5adc9e8a63a136538227945ece9",
+      "codeHash": "221dd5b2a1544a4555c09da0eed89083051a4a80f3fd409d91812d4c770ea41b",
+      "body": "fn sparkVertex(corner: u32, instance: u32) -> VertexOut {\n    let base = instance * EA_ECS_STRIDE;\n    let center = vec3<f32>(ecs[base + 0u], ecs[base + 1u], ecs[base + 2u]);\n    let angle = f32(corner) * 2.0943951;\n    let spot = center + vec3<f32>(cos(angle), sin(angle), 0.0) * 0.06;\n    var o: VertexOut;\n    o.clipPos = camera.viewProj * vec4<f32>(spot, 1.0);\n    o.worldPos = spot;\n    o.worldNormal = vec3<f32>(0.0, 0.0, 1.0);\n    o.uv = vec2<f32>(cos(angle), sin(angle)) * 0.5 + vec2<f32>(0.5);\n    o.ecsColor = vec3<f32>(1.0, 0.6 + 0.4 * ecs[base + 3u], 0.3);\n    return o;\n}\n\nfn sparkFragment(input: VertexOut) -> vec4<f32> {\n    return vec4<f32>(input.ecsColor, 1.0);\n}"
+    },
+    {
+      "module": "stirSparks",
+      "interfaceHash": "0b5401439cdcef6289b08f46343d015383195a9e8822d0694d65c1182a2f3fc4",
+      "codeHash": "05be5b995a34ad22143313801890fa560e95afa9afa255ce572846a07a54b87b",
+      "body": "fn stirSparks(index: u32) {\n    let base = index * B_sparks_STRIDE;\n    let fi = f32(index);\n    let turn = fi * 0.0153 + camera.simTime * 0.4;\n    let reach = 2.0 + 6.0 * fract(fi * 0.618034);\n    b_sparks[base + 0u] = cos(turn) * reach;\n    b_sparks[base + 1u] = 0.5 + 2.0 * fract(fi * 0.137 + camera.simTime * 0.1);\n    b_sparks[base + 2u] = sin(turn) * reach;\n    b_sparks[base + 3u] = fract(fi * 0.271);\n}"
+    }
+  ]
+}

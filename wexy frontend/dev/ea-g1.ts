@@ -6,7 +6,9 @@
 // writes, so it cannot be what admits it; every other rule holds. Once installed, each world's steady step and frame are
 // measured on the device and held, with the full init and the first frame, to the probe's predictions; after it goes, the
 // engine's own bookkeeping is held to its baseline (P5). Then EA-G2's ordinary stops: ten replacements back to back, and a
-// cancel during the probe; and, asked for alone, a device loss during one (it ends the page's device). The result holds
+// cancel during the probe; then the coverage worlds of 11-02 (test/fixtures/coverage-worlds: written by hand, so that
+// every value Tier 1 allows runs here), each at scale 1 through the same Run, evidence for eligibility and never a
+// failure of the gate; and, asked for alone, a device loss during one (it ends the page's device). The result holds
 // every run's numbers, the environment, and eligibility entries for this environment written from the clean runs, which
 // the developer reviews before they ship in src/exec/eligibility.json. dev/ea-g1.mjs drives it and keeps the result.
 
@@ -33,8 +35,14 @@ interface Fixture { program: { nodes: { id: string; adapterId: string; config: s
 
 const FIXTURES: [string, Fixture][] = [['block-film', JSON.parse(blockFilm)], ['galaxy', JSON.parse(galaxy)], ['foggy-dusk', JSON.parse(foggyDusk)]];
 const SCALES = [1, 4, 16];
+/** The coverage worlds, each at scale 1, the largest (`-xl`) last: what they leave behind is the least to cost the rest. */
+const COVERAGE: [string, Fixture][] = Object.entries(import.meta.glob<string>('../test/fixtures/coverage-worlds/*.json', { query: '?raw', import: 'default', eager: true }))
+    .map(([path, text]): [string, Fixture] => [path.replace(/^.*\/|\.json$/g, ''), JSON.parse(text) as Fixture])
+    .sort(([a], [b]) => Number(a.endsWith('-xl')) - Number(b.endsWith('-xl')) || (a < b ? -1 : a > b ? 1 : 0));
 /** The config fields that hold a node's work, as the probe's projection scales them (probe.ts). */
-const WORK: Readonly<Record<string, readonly string[]>> = { 'ng.buffer.storage': ['elements'], 'ng.compute.stage': ['invocations'], 'ng.render.mesh_batch': ['maxInstances'] };
+const WORK: Readonly<Record<string, readonly string[]>> = {
+    'ng.buffer.storage': ['elements'], 'ng.compute.stage': ['invocations'], 'ng.render.mesh_batch': ['maxInstances'], 'ng.render.custom_batch': ['maxInstances'],
+};
 
 const logEl = document.getElementById('log')!;
 const log = (line: string) => { logEl.textContent += `\n${line}`; console.log(`[g1] ${line}`); };
@@ -72,6 +80,8 @@ interface RunRecord {
     status: string;
     reason: string | null;
     l3: { module: string; ok: boolean; ms: number }[];
+    /** The Run's wall time, from its press to its outcome: the probe, and for a world installed its full init and first frame. */
+    runMs: number | null;
     report: PrepareReport | null;
     /**
      * The installed world at the canvas's size, each the median of three batches after a warm-up, each to its fence: a
@@ -176,7 +186,7 @@ async function run(options: { lose?: boolean } = {}) {
     } = {}): Promise<RunRecord> => {
         const { keep = false, signal, headless, portWrap } = opts;
         const record: RunRecord = {
-            world, scale: k, candidate: null, status: 'not sealed', reason: null, l3: [], report: null, measured: null, underPredicted: [], uncaptured: [],
+            world, scale: k, candidate: null, status: 'not sealed', reason: null, l3: [], runMs: null, report: null, measured: null, underPredicted: [], uncaptured: [],
             baseline: null, retireError: null, demands: null,
         };
         if ('reason' in snapOrReason) {
@@ -192,7 +202,9 @@ async function run(options: { lose?: boolean } = {}) {
         record.l3 = rows;
         const stage = stageFor(snap, headless, portWrap);
         stage.press(snap);
+        const t0 = performance.now();
         const r = await stage.run(snap, verdicts, signal);
+        record.runMs = round(performance.now() - t0);
         record.status = r.status;
         record.report = r.report;
         if (r.status !== 'installed') {
@@ -356,6 +368,24 @@ async function run(options: { lose?: boolean } = {}) {
     overBudgetResult.held = ledger.held();
     log(`over budget on this device: ${overBudget.status}${overBudget.reason ? ` (${overBudget.reason})` : ''}; ${overBudgetResult.baseline ?? 'the engine at its baseline'}`);
 
+    // The coverage worlds (11-02, option B): every value Tier 1 allows, each through the same Run at scale 1. Evidence for
+    // eligibility alone: one that is not clean adds nothing to it, and is reported, never a failure of the gate.
+    const coverage: RunRecord[] = [];
+    for (const [name, f] of COVERAGE) {
+        try {
+            coverage.push(await one(name, 1, await seal(name, f, 1)));
+        } catch (e) {
+            // Kept as what it is, so the worlds after it, and the result, still come back.
+            const reason = String((e as Error)?.message ?? e).slice(0, 300);
+            log(`${name} ×1: THREW: ${reason}`);
+            coverage.push({
+                world: name, scale: 1, candidate: null, status: 'threw', reason, l3: [], runMs: null, report: null, measured: null, underPredicted: [], uncaptured: [],
+                baseline: null, retireError: null, demands: null,
+            });
+        }
+    }
+    log(`coverage worlds: ${coverage.filter(r => r.status === 'installed').length}/${coverage.length} installed`);
+
     // A device loss during the probe, with a Head on the stage, asked for alone: it ends this page's device. The candidate
     // stops as device-lost and installs nothing; the stage leaves the Head where it is (a shared device stops both: the
     // studio's own recovery, a reload to h1, is EA-E's); the ledger keeps the Head's share alone; every compile verdict is
@@ -385,9 +415,9 @@ async function run(options: { lose?: boolean } = {}) {
             + `installed ${loss.installed ? 'SOMETHING' : 'nothing'}; the next Run: ${replay}`);
     }
 
-    // Eligibility for this environment, from the clean runs alone: installed, no uncaptured error, no prediction under what
-    // ran, the engine at its baseline after it.
-    const clean = runs.filter(r => r.status === 'installed' && !r.uncaptured.length && !r.underPredicted.length && !r.baseline && !r.retireError && r.demands);
+    // Eligibility for this environment, from the clean runs alone, the live worlds' and the coverage worlds': installed,
+    // no uncaptured error, no prediction under what ran, the engine at its baseline after it.
+    const clean = [...runs, ...coverage].filter(r => r.status === 'installed' && !r.uncaptured.length && !r.underPredicted.length && !r.baseline && !r.retireError && r.demands);
     const stamp = new Date().toISOString();
     const eligibility = 'key' in environment && clean.length && bundleHash
         ? eligibilityFrom(clean.flatMap(r => r.demands!), {
@@ -398,7 +428,7 @@ async function run(options: { lose?: boolean } = {}) {
     return {
         stamp, gpu: vp.gpuLabel, identity, environment, browser: navigator.userAgent, canvas: size(), envelope, limits: limitsOf(device), baseline,
         runs, replacements: { installed: replacements.filter(r => r.status === 'installed').length, records: replacements, after: afterReplacements },
-        cancelled: { record: cancelled, after: afterCancel }, cancelDuringCompiles, overBudget: overBudgetResult, loss, uncaptured, lost, eligibility,
+        cancelled: { record: cancelled, after: afterCancel }, cancelDuringCompiles, overBudget: overBudgetResult, coverage, loss, uncaptured, lost, eligibility,
     };
 }
 

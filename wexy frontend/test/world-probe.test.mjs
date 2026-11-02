@@ -14,7 +14,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildVariant } from '../src/exec/engine-executor.ts';
-import { WORLD_PROBE, median, predictFirstFrame, predictFrame, predictPair, probeCandidate, project, sanityLook } from '../src/exec/probe.ts';
+import { WORLD_PROBE, batchRuns, median, predictFirstFrame, predictFrame, predictPair, probeCandidate, project, sanityLook } from '../src/exec/probe.ts';
 import { clock, costs, fakeHeadless, fakePort, node, sealed, sealedLive } from './exec-fakes.mjs';
 
 const VIEW = { target: [0, 0, 0], distance: 12, azimuth: 0.6, polar: 1.2, fov: 45 };
@@ -177,14 +177,23 @@ test('EA-D15 empty phases, the timer\'s floor, inconclusive pairs, NaN in typed 
 
 test('the EA5.3 review (H1): every probe submission is checked for errors; one that raises refuses, its timing never used; an engine that cannot check refuses', async () => {
     const snap = await sealedLive('galaxy');
-    // An error at the very first checked submission (the empty one that measures the device's floor): refused there.
-    const first = probeDeps(costs(), { options: { checkpointError: () => 'a validation error' } });
+    // An error at the very first checked submission (the empty one that measures the device's floor): refused there. The
+    // build's own bindings, checked since 11-02, pass here.
+    const submissions = message => port => (/^apply(Material|Lights) /.test(port.log.at(-1) ?? '') ? null : message);
+    const first = probeDeps(costs(), { options: { checkpointError: submissions('a validation error') } });
     let out = await probeCandidate(snap, first.deps);
     assert.equal(out.ok, false);
     assert.equal(out.reason, 'EA_PROBE_UNVERIFIED the fence on the 1/8 variant raised an error: a validation error; no full-size work submitted');
     assert.equal(out.probe.phases, undefined, 'nothing measured');
     assert.equal(first.made[0].port.renders, 0);
     released(first.made);
+    // 11-02 (the castle): a binding the device refuses while a variant builds is said there, in the device's own words,
+    // and nothing is submitted; the half-built variant and its engine are released.
+    const atBinding = probeDeps(costs(), { options: { checkpointError: port => (port.log.at(-1)?.startsWith('applyMaterial galaxy#create') ? 'a validation error: the layout has no binding 2' : null) } });
+    out = await probeCandidate(snap, atBinding.deps);
+    assert.equal(out.reason, 'EA_PROBE_UNVERIFIED the 1/8 variant did not build: EA_CALL galaxy#create: binding its material failed: a validation error: the layout has no binding 2; no full-size work submitted');
+    assert.equal(atBinding.made.length, 1, 'the second variant never built');
+    assert.ok(atBinding.made[0].destroyed && atBinding.made[0].port.live.size === 0 && atBinding.made[0].port.renders === 0, 'nothing submitted, everything released');
     // An error at init's first run: refused there, its timing never used.
     const atInit = probeDeps(costs(), { options: { checkpointError: port => (port.log.at(-1)?.startsWith('render [seed#create]') ? 'a validation error' : null) } });
     out = await probeCandidate(snap, atInit.deps);
@@ -414,7 +423,119 @@ test('the EA5.4 review\'s over-budget run: a variant\'s first frame at the large
     released(heavy.made);
 });
 
-test('the projection: unknown work and a projection that changes an interface beyond its counts are never tried', async () => {
+test('11-02, after EA-G1\'s over-budget world: each warm-up and timed batch is sized to its work, so none holds much more than the cap, and every prediction still covers the full world', async () => {
+    const { maxSubmissionMs: cap, frameRuns, runs, warm, margin } = WORLD_PROBE;
+    // The rule: as many runs as fit in the cap at the pace measured; one at least, the calibrated count at most.
+    assert.equal(batchRuns(0, 2, frameRuns), frameRuns, 'a warm-up that took no time: the calibrated count');
+    assert.equal(batchRuns(2 * 3, 2, frameRuns), frameRuns, 'a 3 ms frame: 83 would fit, 24 run');
+    assert.equal(batchRuns(2 * 57, 2, frameRuns), 4, 'the over-budget world\'s 1/8 at 1280×720 on the AMD iGPU (EA-G1, 11-01)');
+    assert.equal(batchRuns(2 * 106, 2, frameRuns), 2, 'and its 1/4');
+    assert.equal(batchRuns(300, 1, warm), 1, 'one alone past the cap: one, never none');
+    assert.equal(batchRuns(2 * 60, 2, runs), 4, 'a step\'s batch the same');
+    // The heaviest live variant frame on either GPU (EA-G1, 11-01: foggy-dusk ×16's 1/4 at 1280×720 on the AMD iGPU,
+    // 8.24 ms, its warm-up's fence 2.7 ms more) still fills EA-G1's 24: every live world is timed as it was calibrated.
+    assert.equal(batchRuns(2 * 8.24 + 2.7, 2, frameRuns), frameRuns);
+
+    // A frame's share of the floor is its own batch's: with 24 everywhere, as before; with fewer, larger.
+    const near = (x, y) => Math.abs(x - y) < 1e-9;
+    const P = 2048 * 1152;
+    const L = WORLD_PROBE.large.width * WORLD_PROBE.large.height;
+    const [a, b] = [{ small: 1.233, large: 1.583 }, { small: 1.2, large: 1.567 }];
+    const calibrated = { small: frameRuns, large: frameRuns };
+    assert.deepEqual(predictFrame({ ...a, runs: calibrated }, { ...b, runs: calibrated }, P, 5.4), predictFrame(a, b, P, 5.4), 'EA-G1\'s 24 is the default');
+    // A heavy pixel-bound frame, 150 ms a variant at 1280×720, one frame a batch there for the 1/8, two for the 1/4: each
+    // step of work may hide the larger share, the whole floor.
+    const heavyA = { small: 40, large: 150, runs: { small: 6, large: 1 } };
+    const heavyB = { small: 40, large: 150, runs: { small: 6, large: 2 } };
+    assert.ok(near(predictFrame(heavyA, heavyB, L, 5.4).ms, (150 + 7 * 5.4) * margin), String(predictFrame(heavyA, heavyB, L, 5.4).ms));
+    assert.ok(near(predictFrame(heavyB, heavyA, L, 5.4).ms, (150 + 7 * 5.4) * margin), 'either variant\'s');
+    // The contract: a timing within its own batch's share of the floor is noise there.
+    const one = { small: 1, large: 1 };
+    assert.equal(predictFrame({ small: 3, large: 3, runs: one }, { small: 3, large: 3, runs: one }, L, 5.4).rule, 'floor');
+    assert.equal(predictFrame({ small: 3, large: 3 }, { small: 3, large: 3 }, L, 5.4).rule, 'fit');
+    // And a cheaper timing is judged against the share of the one it is compared with: 130 ms in a batch of one may read
+    // 2.7 ms high (half the 5.4 ms floor), so 115 ms beside it is within noise; judged by the other's share, it would not be.
+    for (const [x, y] of [
+        [{ small: 130, large: 140, runs: { small: 1, large: 1 } }, { small: 115, large: 140, runs: { small: 2, large: 1 } }], // twice the work, 640×360
+        [{ small: 100, large: 130, runs: { small: 2, large: 1 } }, { small: 100, large: 115, runs: { small: 2, large: 2 } }], // twice the work, 1280×720
+        [{ small: 130, large: 115, runs: { small: 1, large: 2 } }, { small: 130, large: 115, runs: { small: 1, large: 2 } }], // four times the pixels
+    ]) {
+        const p = predictFrame(x, y, L, 5.4);
+        assert.ok(!('inconclusive' in p), `${JSON.stringify([x, y])}: ${p.inconclusive}`);
+    }
+
+    const snap = await sealedLive('galaxy');
+    const target = { width: 2048, height: 1152 };
+    /** The probe over `model(sequence, port, made)`, with what the work in each timing's quiet window cost. */
+    const windowed = async model => {
+        const time = clock();
+        const { headless, made } = fakeHeadless(time, (seq, port) => model(seq, port, made));
+        const held = [];
+        const quiet = () => { const t0 = time.t; return () => held.push(time.t - t0); };
+        const out = await probeCandidate(snap, { headless, now: () => time.t, view: () => VIEW, signal: new AbortController().signal, target, shared: true, quiet });
+        return { out, made, held };
+    };
+    // Light work, as every live world's: EA-G1's counts, unchanged.
+    const light = await windowed(costs({ fixed: 0.05, perInvocation: 1e-4, perPixel: 2e-7, perInstance: 1e-5 }));
+    assert.equal(light.out.ok, true, light.out.reason);
+    assert.deepEqual(light.out.probe.phases.frame.runs, [frameRuns, frameRuns, frameRuns, frameRuns]);
+    assert.deepEqual(light.out.probe.phases.step.runs, [runs, runs]);
+    released(light.made);
+
+    // A pixel-bound frame heavy enough to refuse at 2048×1152: 80 ns a pixel a pass, about 147 ms a frame at 1280×720
+    // for either variant (as EA-G1's stacked fog drew 57 and 106 ms on the AMD iGPU). The same refusal as before.
+    const pixelModel = costs({ fixed: 0.05, perInvocation: 1e-5, perPixel: 8e-5 });
+    const heavy = await windowed(pixelModel);
+    assert.equal(heavy.out.ok, false);
+    assert.match(heavy.out.reason, /^EA_PROBE one frame: \d+\.\d ms predicted, over the 250 ms cap$/);
+    const f = heavy.out.probe.phases.frame;
+    assert.equal(f.runs.length, 4);
+    assert.ok(f.runs.every((n, i) => Number.isInteger(n) && n >= 1 && n * f.measured[i] <= cap), `each batch within the cap: ${JSON.stringify({ runs: f.runs, measured: f.measured })}`);
+    assert.ok(f.runs[1] === 1 && f.runs[3] === 1, `one frame a batch at 1280×720: ${f.runs}`);
+    assert.ok(Math.max(...heavy.held) <= cap, `no quiet window held more than the cap: ${Math.max(...heavy.held).toFixed(1)} ms`);
+    assert.ok(f.ms >= (await fullCosts(snap, pixelModel, target)).frame, 'and the prediction still over what the full frame costs');
+    for (const [i, m] of heavy.made.entries()) {
+        // At the larger frame: the first touch, one warm-up frame (two would pass the cap), three batches of one; EA-G1's
+        // 24 drew 75 there, about 11 s at this pace. Back at the smaller: its first touch, then three batches of its count.
+        const log = m.port.log;
+        const from = log.indexOf('postResize 1280x720');
+        const back = log.indexOf('postResize 640x360', from);
+        const drawn = (start, end) => log.slice(start, end).filter(e => e.startsWith('render')).length;
+        assert.equal(drawn(from, back), 1 + 1 + WORLD_PROBE.batches * 1);
+        assert.equal(drawn(back), 1 + WORLD_PROBE.batches * f.runs[2 * i]);
+    }
+    released(heavy.made);
+
+    // A step heavy enough to refuse: galaxy's spin at 20 µs an invocation, about 31 and 60 ms a step at 1/8 and 1/4. Six
+    // to a batch would hold 361 ms for the 1/4; four fit.
+    const base = costs({ fixed: 0.05, perInvocation: 1e-5, perPixel: 2e-7 });
+    const stepModel = (seq, port) => base(seq, port) + seq.reduce((s, h) => s + (h.kind === 'stage' && h.label.startsWith('spin') ? h.workgroups.reduce((x, y) => x * y, 1) * h.size * 0.02 : 0), 0);
+    const stepping = await windowed(stepModel);
+    assert.equal(stepping.out.ok, false);
+    assert.match(stepping.out.reason, /^EA_PROBE one fixed step: \d+\.\d ms predicted, over the 250 ms cap$/);
+    const s = stepping.out.probe.phases.step;
+    assert.deepEqual(s.runs, [runs, 4], JSON.stringify(s));
+    assert.ok(s.runs.every((n, i) => n * s.measured[i] <= cap));
+    assert.ok(Math.max(...stepping.held) <= cap, `no quiet window held more than the cap: ${Math.max(...stepping.held).toFixed(1)} ms`);
+    assert.ok(s.ms >= (await fullCosts(snap, stepModel, target)).step, 'and the prediction still over what the full step costs');
+    released(stepping.made);
+
+    // A device whose 1/8 variant times slower than its 1/4, as the GTX 1650's stacked fog did in every EA-G1 run (11-01):
+    // 140 ms a frame (or a step) for the 1/8, 70 for the 1/4. Each first run passes its rule, but two more of the 1/8's
+    // would pass the cap: its warm-up is one, sized by the first run before it. Measured again, then refused, unverified.
+    for (const [what, costly] of [['one frame', h => h.kind === 'pass'], ['one fixed step', h => h.kind === 'stage' && h.label.startsWith('spin')]]) {
+        const inverted = await windowed((seq, port, made) => (seq.some(costly) ? (port === made[0].port ? 140 : 70) : 0.05));
+        assert.equal(inverted.out.ok, false);
+        assert.ok(inverted.out.reason.startsWith(`EA_PROBE_UNVERIFIED ${what}: `), inverted.out.reason);
+        assert.ok(Math.max(...inverted.held) <= cap, `${what}: no quiet window held more than the cap: ${Math.max(...inverted.held).toFixed(1)} ms`);
+        // The 1/8's batches one (140 ms), the 1/4's three: its warm-up's two ran 140 ms, 70 a run.
+        const phase = what === 'one frame' ? inverted.out.probe.phases.frame : inverted.out.probe.phases.step;
+        assert.deepEqual(phase.runs, what === 'one frame' ? [1, 1, 3, 3] : [1, 3]);
+        released(inverted.made);
+    }
+});
+
+test('the projection: a custom batch\'s instances scale; unknown work and a projection that changes an interface beyond its counts are never tried', async () => {
     const snap = await sealedLive('galaxy');
     const p = await project(snap, 8);
     assert.notEqual(typeof p, 'string', p);
@@ -423,7 +544,7 @@ test('the projection: unknown work and a projection that changes an interface be
     assert.notEqual(p.source.x.hash, snap.x.hash, 'another X, never claimed to be C\'s');
     const water = await sealed([
         node('cube', 'ng.geometry.primitive', { shape: 'cube', size: 1, segments: 3 }),
-        node('water', 'ng.render.custom_batch', { module: 'water', vertexEntry: 'wave', fragmentEntry: 'shade', maxInstances: 1 }, [{ port: 'geometry', nodeId: 'cube', output: 'geometry' }]),
+        node('water', 'ng.render.custom_batch', { module: 'water', vertexEntry: 'wave', fragmentEntry: 'shade', maxInstances: 61 }, [{ port: 'geometry', nodeId: 'cube', output: 'geometry' }]),
     ], {
         water: [
             'fn wave(position: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>, instance: u32) -> VertexOut {',
@@ -441,7 +562,18 @@ test('the projection: unknown work and a projection that changes an interface be
             '}',
         ].join('\n'),
     });
-    assert.equal(await project(water, 8), 'EA_PROBE_UNVERIFIED ng.render.custom_batch (node water): its work has no projection here; no full-size work submitted');
+    // A custom batch is scaled as a mesh batch is (11-02, option B): its instances, rounded up; its module unchanged.
+    for (const [fraction, instances] of [[8, 8], [4, 16]]) {
+        const v = await project(water, fraction);
+        assert.notEqual(typeof v, 'string', v);
+        const op = id => v.source.x.operations.find(o => o.id === id);
+        assert.deepEqual([op('water#create').args.maxInstances, op('water#draw').work.instances], [instances, instances], `1/${fraction}: 61 instances, rounded up`);
+        assert.deepEqual(v.changed, [], 'no host constant moved');
+    }
+    // Work no table here scales or keeps is never tried, whatever resolves.
+    const odd = structuredClone(snap);
+    odd.program = [...odd.program, { id: 'odd', adapterId: 'ng.render.odd', adapterVersion: 1, config: '{}', inputs: [] }];
+    assert.equal(await project(odd, 8), 'EA_PROBE_UNVERIFIED ng.render.odd (node odd): its work has no projection here; no full-size work submitted');
     const forged = structuredClone(snap);
     forged.program = 'not a program';
     assert.equal(await project(forged, 8), 'EA_PROBE_UNVERIFIED this candidate holds no program to project; no full-size work submitted');

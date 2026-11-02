@@ -1,0 +1,86 @@
+{
+  "note": "A coverage world of 2026-11-02 (EA-G1, option B): written by hand, not by the model, so that EA-G1 runs custom batches at a batch's most instances, 1,048,576, with geometry and with none.",
+  "program": {
+    "nodes": [
+      {
+        "id": "motes",
+        "adapterId": "ng.buffer.storage",
+        "adapterVersion": 1,
+        "config": "{\"elements\":1048576,\"layout\":\"f32\",\"strideFloats\":4,\"pingPong\":false,\"init\":\"zero\"}",
+        "inputs": []
+      },
+      {
+        "id": "seedmotes",
+        "adapterId": "ng.compute.stage",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"seedMotes\",\"entry\":\"seedMotes\",\"workgroupSize\":256,\"invocations\":1048576,\"phase\":\"init\"}",
+        "inputs": [
+          {
+            "port": "writes",
+            "nodeId": "motes",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "mote",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"cube\",\"size\":0.02,\"segments\":3}",
+        "inputs": []
+      },
+      {
+        "id": "cloud",
+        "adapterId": "ng.render.custom_batch",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"cloudShade\",\"vertexEntry\":\"cloudVertex\",\"fragmentEntry\":\"cloudFragment\",\"maxInstances\":1048576}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "mote",
+            "output": "geometry"
+          },
+          {
+            "port": "instances",
+            "nodeId": "motes",
+            "output": "buffer"
+          }
+        ]
+      },
+      {
+        "id": "glints",
+        "adapterId": "ng.render.custom_batch",
+        "adapterVersion": 1,
+        "config": "{\"module\":\"glintShade\",\"vertexEntry\":\"glintVertex\",\"fragmentEntry\":\"glintFragment\",\"maxInstances\":1048576}",
+        "inputs": []
+      },
+      {
+        "id": "look",
+        "adapterId": "ng.post.chain",
+        "adapterVersion": 1,
+        "config": "{\"effects\":[{\"effect\":\"Tonemap\",\"intensity\":1}]}",
+        "inputs": []
+      }
+    ]
+  },
+  "modules": [
+    {
+      "module": "cloudShade",
+      "interfaceHash": "7f335ab713435a1f1baa8d2534404a2bc1c8c9b257b8b44a20335e2bb1570f09",
+      "codeHash": "016b01527a525613ce42e962e98b007cc5bfc92d05dcfdd17b1f1b64e5eb0974",
+      "body": "fn cloudVertex(position: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>, instance: u32) -> VertexOut {\n    let base = instance * EA_ECS_STRIDE;\n    let spot = vec3<f32>(ecs[base + 0u], ecs[base + 1u], ecs[base + 2u]) + position;\n    var o: VertexOut;\n    o.clipPos = camera.viewProj * vec4<f32>(spot, 1.0);\n    o.worldPos = spot;\n    o.worldNormal = normal;\n    o.uv = uv;\n    o.ecsColor = vec3<f32>(0.4 + 0.6 * ecs[base + 3u], 0.7, 1.0);\n    return o;\n}\n\nfn cloudFragment(input: VertexOut) -> vec4<f32> {\n    let sun = normalize(vec3<f32>(0.3, 1.0, 0.2));\n    let shade = 0.3 + 0.7 * max(dot(normalize(input.worldNormal), sun), 0.0);\n    return vec4<f32>(input.ecsColor * shade, 1.0);\n}"
+    },
+    {
+      "module": "glintShade",
+      "interfaceHash": "f261754a5dd8360a955d421d0424f1ee686512a6375af9a7dec19e5a6c29f583",
+      "codeHash": "1a5f419a1bb0c847655fe2cb240b27ff72320ca9b68b69e1a2e16adfcb84ef8d",
+      "body": "fn glintVertex(corner: u32, instance: u32) -> VertexOut {\n    let col = f32(instance % 1024u);\n    let row = f32(instance / 1024u);\n    let angle = f32(corner) * 2.0943951;\n    let lift = 2.0 + 0.3 * fract(f32(instance) * 0.618034);\n    let spot = vec3<f32>((col - 511.5) * 0.03, lift, (row - 511.5) * 0.03) + vec3<f32>(cos(angle), 0.0, sin(angle)) * 0.01;\n    var o: VertexOut;\n    o.clipPos = camera.viewProj * vec4<f32>(spot, 1.0);\n    o.worldPos = spot;\n    o.worldNormal = vec3<f32>(0.0, 1.0, 0.0);\n    o.uv = vec2<f32>(0.5);\n    o.ecsColor = vec3<f32>(1.0, 0.85, 0.5) + vec3<f32>(ecs[instance * EA_ECS_STRIDE]);\n    return o;\n}\n\nfn glintFragment(input: VertexOut) -> vec4<f32> {\n    return vec4<f32>(input.ecsColor, 1.0);\n}"
+    },
+    {
+      "module": "seedMotes",
+      "interfaceHash": "152ca4cb476735034e2b2257c4d49ad32c89a685facb8108cb153cff4543c617",
+      "codeHash": "fd21f010bf22baa99a56e857880fabb02931d4f50753f8c611e72c3e72cd8915",
+      "body": "fn seedMotes(index: u32) {\n    let base = index * B_motes_STRIDE;\n    let col = f32(index % 1024u);\n    let row = f32(index / 1024u);\n    b_motes[base + 0u] = (col - 511.5) * 0.03;\n    b_motes[base + 1u] = 0.5 * sin(col * 0.05) * cos(row * 0.05);\n    b_motes[base + 2u] = (row - 511.5) * 0.03;\n    b_motes[base + 3u] = fract(col * 0.37 + row * 0.11);\n}"
+    }
+  ]
+}
