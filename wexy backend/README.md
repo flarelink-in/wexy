@@ -52,10 +52,14 @@ Runtime prompt Markdown, host rules and Maven wrapper distribution properties ar
 ## Deploy
 
 Images are built from the packaged jars by each module's `Dockerfile` (`forge-gateway`, `forge-service`,
-`platform-service`). `bash deploy.sh` runs every test (`clean validate install -Predis-tests`, so Docker must be
-running), then builds the three images, tags each with the next version (the registry's newest, its patch bumped)
+`platform-service`). `bash deploy.sh` first merges the stacks the host runs (`docker compose … config`, with
+stand-ins for their secrets), then runs every test (`clean validate install -Predis-tests`, so Docker must be
+running), builds the three images, tags each with the next version (the registry's newest, its patch bumped)
 and `latest`, and pushes the version, then `latest`. `bash deploy.sh forge-gateway` releases one image;
 `WEXY_VERSION` sets the version, `WEXY_REGISTRY` the registry, and `WEXY_DRY_RUN=1` builds without pushing.
+After the host's `up -d`, `bash deploy.sh smoke` asks the running stack, through its SSH tunnel, what any visitor
+can: that the gateway reaches forge and the platform service, that the guarded routes refuse a request with no
+token, and that CORS lets the studio's origin `PATCH` a profile. It sends no token and spends nothing.
 
 On the host, `compose.dev.yaml` (dev, on `latest`) and `compose.prod.yaml` (prod, pinned to a version) each
 run Redis, the gateway and the service; `compose.platform.yaml` adds MariaDB and the platform service, and
