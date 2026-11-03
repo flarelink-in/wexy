@@ -207,3 +207,58 @@ test('PL-FE3 the loopback dev identity signs in as a link does: dev.google with 
         assert.equal(createIdentity({ firebase: null, appCheckSiteKey: null, dev: false, apiOrigin: 'http://localhost:8400' }).account, undefined);
     });
 });
+
+/** A hint the test reads: what the session last wrote. */
+function memoryHint(initial = false) {
+    const hint = { value: initial, writes: [], read: () => hint.value, write(google) { hint.value = google; hint.writes.push(google); } };
+    return hint;
+}
+
+test('W2 the session keeps one bit, "a Google session is here", for a reload to show the account at once; no identity in it', async () => {
+    const port = fakePort({ uid: 'u1', provider: 'anonymous' });
+    const hint = memoryHint(false);
+    const session = new AccountSession(port, hint);
+    assert.equal(session.hinted, false, 'a fresh browser holds no hint: a page view loads nothing');
+
+    await session.refresh();
+    assert.equal(hint.value, false, 'an anonymous caller is no Google session');
+    port.linkGoogle = async () => { port.set({ uid: 'u1', provider: 'google' }); return { kind: 'linked' }; };
+    await session.linkGoogle();
+    assert.equal(hint.value, true);
+    assert.equal(session.hinted, true);
+    assert.ok(hint.writes.every(w => typeof w === 'boolean'), 'one bit, never a uid');
+
+    await session.signOut();
+    assert.equal(hint.value, false, 'signed out: the next page view loads nothing again');
+});
+
+test('W2 a stale hint corrects itself: a reload that finds no Google session clears it', async () => {
+    const hint = memoryHint(true);
+    const session = new AccountSession(fakePort(null), hint);
+    assert.equal(session.hinted, true);
+    await session.refresh();
+    assert.equal(hint.value, false);
+});
+
+test('W2 the browser\'s hint is one key, "1" or absent, and blocked storage is just no hint', async () => {
+    const { browserHint, GOOGLE_HINT_KEY } = await import('../src/platform/session.ts');
+    await withStorage(async map => {
+        assert.equal(browserHint.read(), false);
+        browserHint.write(true);
+        assert.deepEqual([...map.entries()], [[GOOGLE_HINT_KEY, '1']]);
+        assert.equal(browserHint.read(), true);
+        browserHint.write(false);
+        assert.equal(map.size, 0);
+        // Only "1" is a hint: anything else another script might leave there is none.
+        map.set(GOOGLE_HINT_KEY, 'true');
+        assert.equal(browserHint.read(), false);
+    });
+    const kept = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, get() { throw new Error('blocked'); } });
+    try {
+        assert.equal(browserHint.read(), false);
+        browserHint.write(true);
+    } finally {
+        if (kept) Object.defineProperty(globalThis, 'localStorage', kept); else delete globalThis.localStorage;
+    }
+});

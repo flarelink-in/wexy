@@ -382,6 +382,8 @@ function sentenceFor(code: ErrorCode): string {
         case 'upstream': return COPY.candidate.stream;
         case 'bad-request':
         case 'not-found':
+        // W2's conflict is the platform's (a profile at another version, a handle taken): a forge route never answers it.
+        case 'conflict':
         case 'too-large':
         case 'internal': return COPY.candidate.refused;
     }

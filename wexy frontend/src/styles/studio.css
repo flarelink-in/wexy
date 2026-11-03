@@ -46,11 +46,12 @@
     border: 1px solid var(--line-2); background: var(--panel); color: var(--text-2);
     font: 500 12px/26px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 340px;
 }
-.account-who { font-size: 12px; color: var(--text-3-strong); white-space: nowrap; }
+.account-who { font-size: 12px; color: var(--text-3-strong); white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .account [hidden] { display: none; }
-/* Sign in's short label, and the chip's line under the idea box: phones only (below). */
-.acct-short, .account-line { display: none; }
-.account-line { margin: 8px 2px 0; font: 500 12px/1.4 var(--mono); color: var(--text-2); }
+/* Sign in's short label, the chip's line under the idea box and its handle claim: phones only (below). */
+.acct-short, .account-line, .account-line-claim { display: none; }
+.account-line { margin: 8px 2px 0; font: 500 12px/1.4 var(--mono); color: var(--text-2); overflow-wrap: anywhere; }
+.account-line-claim { margin: 6px 2px 0; }
 
 /* The account's dialogs: a refusal's sign-in, the day's reset, a link collision. */
 .account-dialog {
@@ -62,6 +63,19 @@
 .account-dialog h2 { font: 600 16px/1.3 var(--display); letter-spacing: -0.03em; }
 .account-dialog .acct-body { margin-top: 8px; font-size: 13.5px; line-height: 1.5; color: var(--text-2); }
 .account-dialog .acct-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+/* The handle's field (W2): an "@" before it, the rule under it, a refusal's sentence after. */
+.account-dialog .acct-label { display: block; margin-top: 14px; font-size: 12px; color: var(--text-2); }
+.account-dialog .acct-field {
+    display: flex; align-items: center; gap: 2px; margin-top: 6px; padding: 0 12px; height: 38px;
+    border: 1px solid var(--line-2); border-radius: 12px; background: var(--bg);
+}
+.account-dialog .acct-field:focus-within { border-color: var(--text-2); }
+.account-dialog .acct-at { font: 500 14px var(--mono); color: var(--text-3-strong); }
+.account-dialog .acct-input {
+    flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: 500 14px var(--mono);
+}
+.account-dialog .acct-error { margin-top: 8px; font-size: 13px; line-height: 1.45; color: var(--text); }
+.account-dialog .acct-error[hidden] { display: none; }
 
 /* ---------------------------------------------------------------- workspace */
 
@@ -690,9 +704,11 @@
     /* W1, phones (the user's choice, 2026-11-02): the header holds the brand, Sign in and Make video only, so it fits
        at 320 px. Sign in says so in two words, "Signed in with Google" gives way (Sign out says it), and the chip
        reads as a line under the idea box. With the chip in the header the page was 516 px wide at any phone width. */
-    .account-who, .account-chip, .account .acct-long { display: none; }
+    .account-who, .account-chip, .account .acct-long, .account .account-claim { display: none; }
     .account .acct-short { display: inline; }
     .account-line:not([hidden]) { display: block; }
+    /* W2: the handle's claim moves out of the header with the chip, under the idea box. */
+    .account-line-claim:not([hidden]) { display: inline-flex; }
     /* The HUD: the title gives way on one line with its source; the reassurance chip takes the camera hint's row
        (`.hud .hud-cam`: `.hud > div` would outrank a bare `.hud-cam`). */
     .hud .hud-cam { display: none; }

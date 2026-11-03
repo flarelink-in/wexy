@@ -258,11 +258,14 @@ class Studio {
             this.accountControl = new AccountControl(new AccountSession(identity.account), api, text => this.showToast(text, null),
                 changing => { this.forgeBtn.disabled = this.busy || !this.viewport || changing; });
             $('#btn-snapshot').before(this.accountControl.el);
+            // W2: a browser that held a Google session shows its account at once; any other page view loads nothing.
+            void this.accountControl.restore();
         }
         const agent = params.get('agent') === '1';
         this.mountLeft();
-        // On phones the allowance chip reads as a line under the idea box, not in the header (studio.css).
-        if (this.accountControl) this.prompt.parentElement?.after(this.accountControl.line);
+        // On phones the allowance chip, and since W2 the handle and its claim, read as a line under the idea box, not in
+        // the header (studio.css).
+        if (this.accountControl) this.prompt.parentElement?.after(this.accountControl.line, this.accountControl.lineClaim);
         this.mountRight();
         $('#timeline-slot').replaceWith(this.timeline.el);
         this.mountEmpty();
