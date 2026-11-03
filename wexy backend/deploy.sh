@@ -193,7 +193,7 @@ echo "  MARIADB_PASSWORD, WEXY_ACCOUNT_HMAC_KEY (compose stops at the first one 
 echo "  together, as one pull does: forge refuses a token that does not name it (W2's audience)."
 echo "    infisical run --env=dev -- docker compose -f compose.dev.yaml -f compose.platform.yaml -f compose.tunnel.yaml pull"
 echo "    infisical run --env=dev -- docker compose -f compose.dev.yaml -f compose.platform.yaml -f compose.tunnel.yaml up -d"
-echo "  then, on the host, the gate (W2's exit): docker compose ps; docker stats --no-stream; free -m"
+echo "  then, on the host, the gate (W2's exit): docker ps (each container up, healthy); docker stats --no-stream; free -m"
 echo "  then, on the laptop, through dev's tunnel (ssh -L 8400:127.0.0.1:8500 \"\$WEXY_SSH\"): bash deploy.sh smoke"
 echo "  then the studio's half (wexy frontend): npm run build:dev; firebase deploy --only hosting:dev --project wexy-bf8f8"
 echo "  prod, pinned, once $NEW has run on dev (the platform stays dev's until W2 has run there):"
