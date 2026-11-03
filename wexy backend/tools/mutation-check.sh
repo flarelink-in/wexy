@@ -613,5 +613,75 @@ mutate "two accounts for one subject" "$M" platform-service JdbcAccountStoreTest
 mutate "two owners for one handle" "$M" platform-service JdbcAccountStoreTest \
     's/\n\s*UNIQUE KEY profile_handle \(handle_normalized\),//'
 
+# W3 (2026-11-03 evening; the creations platform design §5, §7, §10, PL-T2, PL-T4 to PL-T8): a saved world's checks, the
+# store's ownership, compare-and-set, caps and reservations, retention and cleanup. The store's need Docker (MariaDB).
+V=platform-service/src/main/resources/db/migration/V2__worlds.sql
+mutate "W3 a text not its hash saved" "$P/world/WorldCheck.java" platform-service WorldCheckTest \
+    's/if \(!sha256\.equals\(claimedSha256\)\) \{/if (false) {/'
+mutate "W3 a text not canonical saved" "$P/world/WorldCheck.java" platform-service WorldCheckTest \
+    's/if \(problem != null\) \{/if (false) {/'
+mutate "W3 an h1 world saved" "$P/world/WorldCheck.java" platform-service WorldCheckTest \
+    's/if \("h1"\.equals\(world\.path\("kind"\)\.asText\(null\)\)\) \{/if (false) {/'
+mutate "W3 the world's schema not checked" "$P/world/WorldCheck.java" platform-service WorldCheckTest \
+    's/if \(!problems\.isEmpty\(\)\) \{/if (false) {/'
+mutate "W3 a hash of another shape kept" "$P/world/WorldCheck.java" platform-service WorldCheckTest \
+    's/if \(value == null \|\| !HEX64\.matcher\(value\.asText\(\)\)\.matches\(\)\) \{/if (false) {/'
+mutate "W3 a text past the cap kept" "$P/world/WorldCheck.java" platform-service WorldCheckTest \
+    's/if \(bytes\.length > MAX_BYTES\) \{/if (false) {/'
+mutate "W3 keys kept in their own order" "$P/world/CanonicalText.java" platform-service CanonicalTextTest \
+    's/Map<String, Object> sorted = new TreeMap<>\(object\);/Map<String, Object> sorted = object;/'
+mutate "W3 an integer past 2^53 written" "$P/world/CanonicalText.java" platform-service CanonicalTextTest \
+    's/if \(d == Math\.rint\(d\) && Math\.abs\(d\) >= SAFE_LIMIT\) \{/if (false) {/'
+mutate "W3 a duplicate key kept" "$P/world/CanonicalText.java" platform-service CanonicalTextTest \
+    's/if \(object\.containsKey\(key\)\) \{/if (false) {/'
+mutate "W3 the farther decimal written" "$P/world/CanonicalText.java" platform-service CanonicalTextTest \
+    's/return nearer < 0 \? below : above;/return below;/'
+mutate "W3 a deep text read without a bound" "$P/world/CanonicalText.java" platform-service CanonicalTextTest \
+    's/if \(depth > MAX_DEPTH\) \{/if (false) {/'
+mutate "W3 a lone surrogate written raw" "$P/world/CanonicalText.java" platform-service CanonicalTextTest \
+    's/\} else if \(Character\.isSurrogate\(c\)\) \{\n(\s*)unicode\(c, out\);/} else if (Character.isSurrogate(c)) {\n${1}out.append(c);/'
+mutate "W3 a revision committed on a moved head" "$P/world/JdbcWorldStore.java" platform-service WorldRoutesTest \
+    's/if \(world\.isEmpty\(\) \|\| !world\.get\(\)\.head\(\)\.equals\(save\.baseRevisionId\(\)\)\n\s*\|\| world\.get\(\)\.rowVersion\(\) != save\.expectedVersion\(\)\) \{/if (world.isEmpty()) {/'
+mutate "W3 a stale base begun" "$P/world/JdbcWorldStore.java" platform-service WorldRoutesTest \
+    's/if \(!world\.head\(\)\.equals\(s\.baseRevisionId\(\)\) \|\| world\.rowVersion\(\) != s\.expectedVersion\(\)\) \{/if (false) {/'
+mutate "W3 another owner's world read" "$P/world/JdbcWorldStore.java" platform-service WorldRoutesTest \
+    's/WHERE c\.id = :id AND c\.owner_id = :owner AND c\.status = \x27ACTIVE\x27/WHERE c.id = :id AND c.status = \x27ACTIVE\x27/'
+mutate "W3 another owner's revision read" "$P/world/JdbcWorldStore.java" platform-service WorldRoutesTest \
+    's/AND r\.creation_id = :world AND c\.owner_id = :owner AND c\.status = \x27ACTIVE\x27/AND r.creation_id = :world AND c.status = \x27ACTIVE\x27/'
+mutate "W3 another owner's world renamed" "$P/world/JdbcWorldStore.java" platform-service WorldRoutesTest \
+    's/WHERE id = :id AND owner_id = :owner AND status = \x27ACTIVE\x27 AND row_version = :expected/WHERE id = :id AND status = \x27ACTIVE\x27 AND row_version = :expected/'
+mutate "W3 a key's other body answered as the first" "$P/world/JdbcWorldStore.java" platform-service WorldRoutesTest \
+    's/if \(!op\.requestHash\(\)\.equals\(s\.requestHash\(\)\)\) \{/if (false) {/'
+mutate "W3 past an account's worlds" "$P/world/JdbcWorldStore.java" platform-service WorldRoutesTest \
+    's/if \(worlds >= limits\.maxWorlds\(\)\) \{/if (false) {/'
+mutate "W3 past an account's bytes" "$P/world/JdbcWorldStore.java" platform-service WorldRoutesTest \
+    's/if \(account\.used\(\) \+ account\.reserved\(\) \+ s\.bytes\(\) > limits\.maxBytes\(\)\) \{/if (false) {/'
+mutate "W3 a failed write's bytes given back as used ones" "$P/world/JdbcWorldStore.java" platform-service WorldRoutesTest \
+    's/String counter = object\.charge\(\)\.equals\("USED"\) \? "used" : "reserved";/String counter = "used";/'
+mutate "W3 a third save under way" "$P/world/JdbcWorldStore.java" platform-service WorldRoutesTest \
+    's/if \(pending >= limits\.pendingSaves\(\)\) \{/if (false) {/'
+mutate "W3 a dead save left running" "$P/world/JdbcWorldStore.java" platform-service WorldRoutesTest \
+    's/AND route LIKE \x27POST %\x27 AND updated_at < :before/AND route LIKE \x27POST %\x27 AND updated_at < :before AND 1 = 0/'
+mutate "W3 a deleted world's bytes kept" "$P/world/JdbcWorldStore.java" platform-service WorldRoutesTest \
+    's/for \(String object : objects\) \{\n\s*queueDeletion\(object, now\);/for (String object : objects) {/'
+mutate "W3 an old head kept" "$P/world/JdbcWorldStore.java" platform-service WorldRoutesTest \
+    's/\n\s*queueDeletion\(oldObject, save\.now\(\)\);//'
+mutate "W3 a conflicted save's bytes kept" "$P/world/JdbcWorldStore.java" platform-service WorldRoutesTest \
+    's/\n\s*queueDeletion\(started\.objectId\(\), save\.now\(\)\);(\n\s*finish\(started\.operationId\(\), ErrorCode\.CONFLICT)/$1/'
+mutate "W3 a missing or altered object served" "$P/world/Worlds.java" platform-service WorldRoutesTest \
+    's/if \(bytes == null \|\| bytes\.length != r\.head\(\)\.bytes\(\) \|\| !WorldCheck\.sha256\(bytes\)\.equals\(r\.head\(\)\.sha256\(\)\)\) \{/if (bytes == null) {/'
+mutate "W3 an inactive account's world saved" "$P/world/Worlds.java" platform-service WorldRoutesTest \
+    's/if \(account\.status\(\) != Account\.Status\.ACTIVE\) \{/if (false) {/'
+mutate "W3 a control character in a title" "$P/world/Worlds.java" platform-service WorldRoutesTest \
+    's/if \(title\.codePoints\(\)\.anyMatch\(c -> Character\.getType\(c\) == Character\.CONTROL\)\) \{/if (false) {/'
+mutate "W3 a save without its key" "$P/world/Worlds.java" platform-service WorldRoutesTest \
+    's/if \(key == null \|\| !KEY\.matcher\(key\)\.matches\(\)\) \{/if (false) {/'
+mutate "W3 bytes given back before B2 confirms" "$P/world/CleanupWorker.java" platform-service WorldRoutesTest \
+    's/\} catch \(ObjectStore\.StorageUnavailable e\) \{\n(\s*)return false;/} catch (ObjectStore.StorageUnavailable e) {\n${1}store.objectDeleted(job, token, object, now);\n${1}return true;/'
+mutate "W3 one key, two saves" "$V" platform-service WorldRoutesTest \
+    's/\n\s*UNIQUE KEY operation_key \(owner_id, route, idempotency_key\),//'
+mutate "W3 a running operation's status read as 0" "$P/world/JdbcWorldStore.java" platform-service WorldRoutesTest \
+    's/Integer status = row\.wasNull\(\) \? null : raw;/Integer status = raw;/'
+
 echo "$ran mutation(s)${DRY:+, a dry run}"
 exit $status

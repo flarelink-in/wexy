@@ -46,6 +46,31 @@ wexy:
     hmac-version: 1
     key-required: false
     policy-version: 1
+  # W3: the private bucket for saved worlds (StorageProperties), under the names the user put in Infisical
+  # (2026-11-03). Without any of the five the world routes answer 503 and accounts keep working.
+  storage:
+    threads: 4
+    queued-calls: 32
+    b2:
+      endpoint: ${B2_ENDPOINT:}
+      region: ${B2_REGION:}
+      # Taken to be the private bucket's name (to confirm): never the public assets bucket.
+      bucket: ${B2_BUCKET_KEY:}
+      access-key: ${B2_ACCESS_KEY:}
+      secret-key: ${B2_SECRET_KEY:}
+      attempt-timeout: 5s
+      call-timeout: 15s
+  # W3's bounds (the creations platform design §11; WorldProperties): proposals for qualification.
+  worlds:
+    max-worlds: 50
+    max-bytes: 104857600
+    environment-bytes: 1073741824
+    pending-saves: 2
+    operation-life: 24h
+    stale-after: 2m
+    cleanup-every: 15s
+    cleanup-batch: 10
+    cleanup-enabled: true
 
 management:
   endpoints:

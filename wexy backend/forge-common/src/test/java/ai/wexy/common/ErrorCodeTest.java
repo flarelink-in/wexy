@@ -20,18 +20,19 @@ class ErrorCodeTest {
 
     /**
      * Backend architecture §12, with the five rows added on 2026-10-26, W1's content-refused and
-     * quota (2026-11-02, the creations platform design §10), and W2's conflict (2026-11-03). A change here is a
-     * contract change: the frontend's test/errors.test.mjs pins the same table.
+     * quota (2026-11-02, the creations platform design §10), W2's conflict (2026-11-03) and W3's storage-full
+     * (2026-11-03 evening). A change here is a contract change: the frontend's test/errors.test.mjs pins the same table.
      */
     @Test
     void theSetIsExactlyTheContract() {
         assertThat(Arrays.stream(ErrorCode.values()).map(ErrorCode::code))
                 .containsExactlyInAnyOrder("bad-request", "auth", "appcheck", "account-required", "forbidden",
-                        "not-found", "conflict", "too-large", "content-refused", "rate", "quota", "internal", "upstream",
-                        "budget", "paused", "unavailable", "timeout");
+                        "storage-full", "not-found", "conflict", "too-large", "content-refused", "rate", "quota", "internal",
+                        "upstream", "budget", "paused", "unavailable", "timeout");
         assertThat(ErrorCode.CONTENT_REFUSED.status()).isEqualTo(422);
         assertThat(ErrorCode.QUOTA.status()).isEqualTo(429);
         assertThat(ErrorCode.CONFLICT.status()).isEqualTo(409);
+        assertThat(ErrorCode.STORAGE_FULL.status()).isEqualTo(403);
     }
 
     @Test
@@ -58,5 +59,7 @@ class ErrorCodeTest {
         assertThat(ErrorCode.forStatus(422)).isEqualTo(ErrorCode.BAD_REQUEST);
         // W2: a bare 409 is the one code that status has.
         assertThat(ErrorCode.forStatus(409)).isEqualTo(ErrorCode.CONFLICT);
+        // W3: a bare 403 is never a full storage, which only the platform can say.
+        assertThat(ErrorCode.forStatus(403)).isNotEqualTo(ErrorCode.STORAGE_FULL);
     }
 }

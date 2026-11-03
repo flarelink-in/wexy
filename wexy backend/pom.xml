@@ -42,6 +42,12 @@
 			gate failed with Docker running (gotchas, 2026-10-27). 1.21.4 is the last 1.x and works with 29.
 		-->
 		<testcontainers.version>1.21.4</testcontainers.version>
+		<!--
+			W3 (the creations platform design §3, §8): the S3 client pointed at B2. v2, since v1 reached end of support
+			[S1]; at least 2.30, which brought the checksum settings B2 needs set to WHEN_REQUIRED [S14]. 2.57.0, released
+			2026-10-19.
+		-->
+		<awssdk.version>2.57.0</awssdk.version>
 	</properties>
 
 	<dependencyManagement>
@@ -72,6 +78,13 @@
 				<groupId>com.networknt</groupId>
 				<artifactId>json-schema-validator</artifactId>
 				<version>${json-schema-validator.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>software.amazon.awssdk</groupId>
+				<artifactId>bom</artifactId>
+				<version>${awssdk.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
 			</dependency>
 		</dependencies>
 	</dependencyManagement>
