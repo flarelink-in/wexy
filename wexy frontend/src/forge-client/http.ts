@@ -31,6 +31,12 @@ export function needsSingleUseAppCheck(method: string, path: string): boolean {
     return SINGLE_USE_PATTERNS.some(route => route.method === verb && route.path.test(pathname));
 }
 
+/**
+ * An `Idempotency-Key` (W3; the creations platform designs §10): 16 to 64 letters, digits and hyphens, such as a
+ * `crypto.randomUUID()`. The platform answers a retry with the same key and body as it answered the first.
+ */
+export const IDEMPOTENCY_KEY = /^[A-Za-z0-9-]{16,64}$/;
+
 export interface ApiRequest {
     /** PATCH and DELETE since W2: the platform's profile and world edits and deletions. */
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -38,6 +44,8 @@ export interface ApiRequest {
     path: string;
     /** Sent as JSON. */
     body?: unknown;
+    /** Sent as `Idempotency-Key` (W3): a world's saves and its deletion. The same key on every try of one request. */
+    idempotencyKey?: string;
     /**
      * Whether the route signs the caller in. The forge and publishing routes do, and they are also the ones that
      * check App Check; the public reads do neither, so they get no tokens at all (backend §11).
@@ -58,11 +66,16 @@ export function createApi(config: PublicConfig, identity: Identity, fetchImpl: t
             req.signal?.throwIfAborted();
             const url = gatewayUrl(config.apiOrigin, req.path);
             const body = req.body === undefined ? undefined : JSON.stringify(req.body);
+            if (req.idempotencyKey !== undefined && !IDEMPOTENCY_KEY.test(req.idempotencyKey)) {
+                throw new Error(`api: "${String(req.idempotencyKey).slice(0, 80)}" is not an idempotency key (16 to 64 of A-Z, a-z, 0-9 and -).`);
+            }
 
             const attempt = async (refreshIdentity: boolean): Promise<Response> => {
                 req.signal?.throwIfAborted();
                 const headers = new Headers({ Accept: req.accept ?? 'application/json' });
                 if (body !== undefined) headers.set('Content-Type', 'application/json');
+                // The same key on the second try after a 401: one request, tried twice, is still one save.
+                if (req.idempotencyKey !== undefined) headers.set('Idempotency-Key', req.idempotencyKey);
                 if (req.auth) {
                     const authorization = await untilAborted(identity.authorization(refreshIdentity), req.signal);
                     req.signal?.throwIfAborted();

@@ -1,0 +1,487 @@
+{
+  "title": "Wexy saved world, v1",
+  "description": "An agent world's source as the platform keeps it (W3; the creations platform designs, §5): one canonical JSON text. Its format is the layout, its line the builds that run it as made, its pins what it was made under (Q125). Nothing else is in it: no idea's text, call, charge, original body or device verdict (F6). An h1 world is never saved (Q123).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "kind",
+    "line",
+    "pins",
+    "design",
+    "program",
+    "graph",
+    "candidate",
+    "modules",
+    "view",
+    "keyframes"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "enum": [
+        "wexy-world.v1"
+      ]
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "agent"
+      ]
+    },
+    "line": {
+      "type": "string",
+      "maxLength": 32,
+      "description": "The compatibility line, such as ea.v1: a build opens the lines it lists."
+    },
+    "pins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actionSchema",
+        "abi",
+        "checker",
+        "bundle",
+        "manifest",
+        "policy"
+      ],
+      "properties": {
+        "actionSchema": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "The agent action schema the program was checked under, such as agent-action.v3."
+        },
+        "abi": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "The module ABI, such as ea-abi.v2."
+        },
+        "checker": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "The body checker, such as ea4-body.v1."
+        },
+        "bundle": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "The engine bundle's hash (X.identity.bundleHash): 64 lowercase hex digits (checked in code on both sides)."
+        },
+        "manifest": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "The adapter manifest's hash (X.identity.manifestHash): 64 lowercase hex digits (checked in code on both sides)."
+        },
+        "policy": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "The static policy's hash (X.identity.policyHash): 64 lowercase hex digits (checked in code on both sides)."
+        }
+      }
+    },
+    "design": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intent",
+        "interpretation",
+        "assumptions",
+        "visualElements",
+        "motion",
+        "animated",
+        "techniques",
+        "resourceFlow",
+        "cameraAndTiming",
+        "controls",
+        "successCriteria",
+        "unresolved"
+      ],
+      "properties": {
+        "intent": {
+          "type": "string",
+          "maxLength": 400,
+          "description": "The creator's idea restated: what is there, and how it moves."
+        },
+        "interpretation": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 400
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How an ambiguous request was read; null when it is plain."
+        },
+        "assumptions": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "maxLength": 240
+          }
+        },
+        "visualElements": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "description"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 60
+              },
+              "description": {
+                "type": "string",
+                "maxLength": 300
+              }
+            }
+          }
+        },
+        "motion": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "techniques": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "purpose",
+              "symbols",
+              "docIds"
+            ],
+            "properties": {
+              "purpose": {
+                "type": "string",
+                "maxLength": 240
+              },
+              "symbols": {
+                "type": "array",
+                "maxItems": 12,
+                "items": {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                "description": "Engine exports as family:Name."
+              },
+              "docIds": {
+                "type": "array",
+                "maxItems": 6,
+                "items": {
+                  "type": "string",
+                  "maxLength": 60
+                }
+              }
+            }
+          }
+        },
+        "resourceFlow": {
+          "type": "array",
+          "maxItems": 12,
+          "items": {
+            "type": "string",
+            "maxLength": 240
+          }
+        },
+        "cameraAndTiming": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "controls": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "effect"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 40
+              },
+              "effect": {
+                "type": "string",
+                "maxLength": 200
+              }
+            }
+          }
+        },
+        "successCriteria": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "maxLength": 240
+          }
+        },
+        "unresolved": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "animated": {
+          "type": "boolean",
+          "description": "Whether anything moves besides the host's camera; an animated world needs a node that moves it."
+        }
+      }
+    },
+    "program": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nodes"
+      ],
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "description": "The world as adapter nodes, in any order; a node names what feeds it in its inputs.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "adapterId",
+              "adapterVersion",
+              "config",
+              "inputs"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 40,
+                "description": "Unique in the program: a lower-case letter, then letters, digits, - or _."
+              },
+              "adapterId": {
+                "type": "string",
+                "maxLength": 64,
+                "description": "The adapter, as the manifest the world was made under names it; this build's resolver says whether it exists."
+              },
+              "adapterVersion": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 99,
+                "description": "Exactly the adapter's version, as the adapters list it."
+              },
+              "config": {
+                "type": "string",
+                "maxLength": 4096,
+                "description": "The adapter's config as JSON text, matching its config schema."
+              },
+              "inputs": {
+                "type": "array",
+                "maxItems": 16,
+                "description": "What feeds this node: each of its input ports wired to another node's output.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "port",
+                    "nodeId",
+                    "output"
+                  ],
+                  "properties": {
+                    "port": {
+                      "type": "string",
+                      "maxLength": 40,
+                      "description": "One of this node's adapter's input ports."
+                    },
+                    "nodeId": {
+                      "type": "string",
+                      "maxLength": 40,
+                      "description": "The id of the node that feeds it."
+                    },
+                    "output": {
+                      "type": "string",
+                      "maxLength": 40,
+                      "description": "That node's output port."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "graph": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "X's hash when saved: provenance, recomputed on load: 64 lowercase hex digits (checked in code on both sides)."
+    },
+    "candidate": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "id(C) when saved: provenance, recomputed on load: 64 lowercase hex digits (checked in code on both sides)."
+    },
+    "modules": {
+      "type": "array",
+      "maxItems": 32,
+      "description": "One body for each of X's modules, as sealed.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "module",
+          "interfaceHash",
+          "codeHash",
+          "body"
+        ],
+        "properties": {
+          "module": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "interfaceHash": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "The interface the body was written for: 64 lowercase hex digits (checked in code on both sides)."
+          },
+          "codeHash": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "The SHA-256 of the body's text: 64 lowercase hex digits (checked in code on both sides)."
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 12000
+          }
+        }
+      }
+    },
+    "view": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "target",
+            "distance",
+            "azimuth",
+            "polar",
+            "fov"
+          ],
+          "properties": {
+            "target": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": {
+                "type": "number",
+                "minimum": -1000000,
+                "maximum": 1000000
+              },
+              "description": "The point the camera orbits, in world units."
+            },
+            "distance": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000,
+              "description": "From the target, in world units."
+            },
+            "azimuth": {
+              "type": "number",
+              "minimum": -1000000,
+              "maximum": 1000000,
+              "description": "Degrees."
+            },
+            "polar": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 180,
+              "description": "Degrees from +Y."
+            },
+            "fov": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 179,
+              "description": "The vertical field of view, degrees."
+            }
+          }
+        }
+      ],
+      "description": "The camera when saved; null: framed on the world's bounds."
+    },
+    "keyframes": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "t",
+          "target",
+          "distance",
+          "azimuth",
+          "polar",
+          "fov"
+        ],
+        "properties": {
+          "t": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Normalized film time; seconds = t times the film's length."
+          },
+          "target": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "number",
+              "minimum": -1000000,
+              "maximum": 1000000
+            },
+            "description": "The point the camera orbits, in world units."
+          },
+          "distance": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000000,
+            "description": "From the target, in world units."
+          },
+          "azimuth": {
+            "type": "number",
+            "minimum": -1000000,
+            "maximum": 1000000,
+            "description": "Degrees."
+          },
+          "polar": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 180,
+            "description": "Degrees from +Y."
+          },
+          "fov": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 179,
+            "description": "The vertical field of view, degrees."
+          }
+        }
+      },
+      "description": "The studio's keyframes for this world (Q119)."
+    }
+  }
+}

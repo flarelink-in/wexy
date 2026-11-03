@@ -1,0 +1,18 @@
+{
+  "pins": {
+    "actionSchema": "agent-action.v3",
+    "abi": "ea-abi.v2",
+    "checker": "ea4-body.v1",
+    "bundle": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+    "manifest": "3c7775588fb816ce8ccd3660e16d8ae6bfa9526f83174ecf666f8c66ab4c4c77",
+    "policy": "e9c5e17c3547945855c6075956766777026677846a90093f63d8b35b3915579b"
+  },
+  "worlds": {
+    "castle": {
+      "sha256": "e87914fdfe0dcae929a4d11b55cab406d22ca8c636cc6d2f163caaeab6bb2fc3",
+      "bytes": 20541,
+      "x": "9441a3d0dcfc7a8f77e8d0b6b9fc4176de2e4db47e46d17d42e2500263d38bdf",
+      "candidate": "c6ca8a62f349f0bac39dc690e6e7febf6176e65ffa41ca00fbe3652ea0fcce2b"
+    }
+  }
+}

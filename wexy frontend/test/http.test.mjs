@@ -63,6 +63,25 @@ test('U39 a PATCH goes as a PATCH with its JSON and the cached App Check token (
     assert.deepEqual(identity.calls, ['auth', 'appcheck cached']);
 });
 
+test('U41 an idempotency key goes as Idempotency-Key, the same on the retry after a 401; a key of another shape is refused before anything is sent (W3)', async () => {
+    const identity = fakeIdentity();
+    const key = '0f8fad5b-d9cb-469f-a165-70867728950e';
+    const { fetchImpl, requests } = fakeFetch(new Response('{"code":"auth","message":"m"}', { status: 401 }), new Response('{}', { status: 201 }));
+    await createApi(CONFIG, identity, fetchImpl).send({ method: 'POST', path: '/v1/worlds', body: { title: 't' }, auth: true, idempotencyKey: key });
+    assert.deepEqual(requests.map(r => [r.method, r.headers['idempotency-key']]), [['POST', key], ['POST', key]]);
+    // A save takes the cached App Check token (W2: POST /v1/worlds left the single-use set).
+    assert.deepEqual(identity.calls, ['auth', 'appcheck cached', 'auth (refresh)', 'appcheck cached']);
+    const none = fakeFetch(new Response('{}', { status: 200 }));
+    await createApi(CONFIG, fakeIdentity(), none.fetchImpl).send({ method: 'GET', path: '/v1/me/worlds', auth: true });
+    assert.equal(none.requests[0].headers['idempotency-key'], undefined, 'no key, no header');
+    for (const bad of ['', 'short', 'x'.repeat(65), 'has space in it 12345', 'key\r\nX-Evil: 1-23456789', 'ключ-0123456789abcdef']) {
+        const sent = fakeFetch();
+        await assert.rejects(createApi(CONFIG, fakeIdentity(), sent.fetchImpl).send({ method: 'POST', path: '/v1/worlds', body: {}, auth: true, idempotencyKey: bad }),
+            /is not an idempotency key/, JSON.stringify(bad));
+        assert.equal(sent.requests.length, 0, 'nothing sent');
+    }
+});
+
 test('U16 a signed-in POST carries the ID token, a fresh limited-use App Check token, and JSON', async () => {
     const identity = fakeIdentity();
     const { fetchImpl, requests } = fakeFetch(new Response('ok', { status: 200 }));
