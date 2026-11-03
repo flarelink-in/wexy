@@ -27,12 +27,15 @@ import java.time.Duration;
  * @param accountMark         how long an anonymous account's spent mark is kept: "ever", bounded for Redis (400 days)
  * @param uidHmacHex          the uid key (WEXY_UID_HMAC_KEY): 32 bytes as 64 hex characters
  * @param uidKeyRequired      true in prod: startup stops without the uid key
+ * @param reviewCalls         a model's reviews of the world on the stage one prompt covers, each carrying the prompt its
+ *                            turn was granted for (6: two attempts of the candidate's Q_C, 3 reviews each; EA6.4)
  */
 @ConfigurationProperties(prefix = "wexy.allowance")
 public record AllowanceProperties(Integer anonymousPerAccount, Integer anonymousPerNetwork, Integer earlyAccessPerDay,
                                   Integer adminPerDay, Integer dayStartsAtHourUtc, Duration promptLife, Integer directorTurns,
                                   Integer revisions, Integer moduleCalls, Integer authorCalls, Integer repairCalls,
-                                  Integer replans, Duration accountMark, String uidHmacHex, Boolean uidKeyRequired) {
+                                  Integer replans, Duration accountMark, String uidHmacHex, Boolean uidKeyRequired,
+                                  Integer reviewCalls) {
 
     /** The same values, checked: every one set and in range, or startup stops. */
     public AllowanceProperties validated() {
@@ -46,6 +49,7 @@ public record AllowanceProperties(Integer anonymousPerAccount, Integer anonymous
         count("author-calls", authorCalls);
         count("repair-calls", repairCalls);
         count("replans", replans);
+        count("review-calls", reviewCalls);
         if (dayStartsAtHourUtc == null || dayStartsAtHourUtc < 0 || dayStartsAtHourUtc > 23) {
             throw new IllegalStateException("wexy.allowance.day-starts-at-hour-utc must be set, 0 to 23.");
         }

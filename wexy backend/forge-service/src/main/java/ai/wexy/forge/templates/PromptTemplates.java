@@ -60,7 +60,10 @@ public class PromptTemplates {
             "director", List.of("director"),
             "paper", List.of("paper"),
             "agent", List.of("agent"),
-            "module", List.of("module.author", "module.repair"));
+            "module", List.of("module.author", "module.repair"),
+            // EA6.4 (the frontend's visual-review design §9.1): a model's review of the world on the stage. The vision
+            // probe, run once on the user's word, calls the same role with the same template, so it checks what a review sends.
+            "review", List.of("review"));
 
     /** The request fields each template's variable part may use (all authors share theirs). */
     static final Map<String, Set<String>> REQUEST_FIELDS = Map.of(
@@ -71,7 +74,8 @@ public class PromptTemplates {
             "paper", Set.of("documents", "request"),
             "agent", Set.of("budgets", "style", "seconds", "request", "base"),
             "module.author", Set.of("request", "design", "module", "kind", "nodes", "preamble", "entries", "epilogue", "note"),
-            "module.repair", Set.of("request", "design", "module", "kind", "nodes", "preamble", "entries", "epilogue", "code", "findings"));
+            "module.repair", Set.of("request", "design", "module", "kind", "nodes", "preamble", "entries", "epilogue", "code", "findings"),
+            "review", Set.of("request", "design", "modules", "frames", "findings"));
 
     static final Pattern PLACEHOLDER = Pattern.compile("\\{\\{([A-Za-z]+)}}");
 

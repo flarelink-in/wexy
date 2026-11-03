@@ -49,4 +49,13 @@ public class AgentConfiguration {
     public RouterFunction<ServerResponse> moduleRoutes(ModuleHandler handler) {
         return RouterFunctions.route().POST("/v1/agent/module", handler::module).build();
     }
+
+    /**
+     * A model's review of the world on the stage (EA6.4; the frontend's visual-review design §9.1): its terms, read before
+     * the creator consents, and the review itself, refused before any charge while a gate is unverified.
+     */
+    @Bean
+    public RouterFunction<ServerResponse> reviewRoutes(ReviewHandler handler) {
+        return RouterFunctions.route().GET("/v1/agent/review", handler::terms).POST("/v1/agent/review", handler::review).build();
+    }
 }

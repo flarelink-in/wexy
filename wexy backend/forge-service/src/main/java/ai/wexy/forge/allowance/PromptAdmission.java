@@ -111,6 +111,19 @@ public class PromptAdmission {
     }
 
     /**
+     * A model's review of the world on the stage (EA6.4): as a module call, inside its turn's prompt or refused, never an
+     * entry of its own, carrying the prompt its turn was granted for, with a review left: {@code 404} as for a turn that is
+     * not the caller's, {@code 429 rate} when the prompt's reviews are spent. Blocking.
+     */
+    public void review(Caller caller, String turnId, String prompt) {
+        switch (grants.follow(caller, turnId, PromptGrants.Kind.REVIEW, sha256(prompt), null)) {
+            case JOINED -> { }
+            case FULL -> throw new ForgeException(ErrorCode.RATE, "This prompt has made all of its reviews.");
+            case NONE -> throw new ForgeException(ErrorCode.NOT_FOUND, "This turn isn't available.");
+        }
+    }
+
+    /**
      * Runs an admission off the event loop (Redis, content safety): its grant, empty for a follow-up inside its prompt, or
      * the refusal as an error. A request cancelled meanwhile gets nothing, and the grant goes back at once, since no model
      * call can follow it (§11: given back while nothing was dispatched). The admission runs in a task the cancel does not

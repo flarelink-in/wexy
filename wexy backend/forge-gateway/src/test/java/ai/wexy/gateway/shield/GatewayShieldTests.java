@@ -6,11 +6,15 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.cloud.gateway.filter.ratelimit.KeyResolver;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.test.context.ActiveProfiles;
+import reactor.core.publisher.Mono;
 
 import java.net.InetSocketAddress;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -99,6 +103,36 @@ class GatewayShieldTests {
     void bucketStateOutlivesAFullRefill() {
         GatewayShieldProperties.Bucket slow = new GatewayShieldProperties.Bucket(0.0333, 20);
         assertThat(slow.stateTtlSeconds()).isGreaterThan(600L);
+    }
+
+    @Autowired
+    private RequestGuardFilter guard;
+
+    /**
+     * EA6.4: the filter itself caps a body by its route (the independent review of EA6.4: only the map behind it was
+     * pinned, and review bodies of real frames stay small enough that a regression would hide). A model's review may
+     * declare up to 1,048,576 bytes; past that, or on another route past the default, it is a 413 before going on.
+     */
+    @Test
+    void theBodyCapIsTheRoutesOwnAtTheFilter() {
+        long cap = properties.getBody().getMaxBytes();
+        assertThat(cap).isLessThan(300 * 1024);
+        assertThat(guarded("/v1/agent/review", 300 * 1024)).as("a review's 300 KiB").isNull();
+        assertThat(guarded("/v1/agent/review", 1_048_576)).as("a review at its cap").isNull();
+        assertThat(guarded("/v1/agent/review", 1_048_577)).as("a review past its cap").isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE);
+        assertThat(guarded("/v1/agent/module", 300 * 1024)).as("another route keeps the default").isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE);
+        assertThat(guarded("/v1/agent/module", cap)).isNull();
+    }
+
+    /** The status the guard answered a POST of `declared` bytes with, or null when it let the request on. */
+    private HttpStatusCode guarded(String path, long declared) {
+        MockServerWebExchange exchange = exchangeFrom("203.0.113.11", MockServerHttpRequest.post(path).contentLength(declared));
+        AtomicBoolean reached = new AtomicBoolean();
+        guard.filter(exchange, e -> {
+            reached.set(true);
+            return Mono.empty();
+        }).block();
+        return reached.get() ? null : exchange.getResponse().getStatusCode();
     }
 
     /** The Redis-outage fallback still has to limit. */

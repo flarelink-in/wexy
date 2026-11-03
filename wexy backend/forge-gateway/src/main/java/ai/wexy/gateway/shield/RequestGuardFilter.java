@@ -62,7 +62,7 @@ public class RequestGuardFilter implements WebFilter, Ordered {
         ServerWebExchange guarded = applyBodyLimit(exchange);
         if (guarded == null) {
             return ErrorResponses.write(exchange, ErrorCode.TOO_LARGE,
-                    "The request body exceeds the " + properties.getBody().getMaxBytes() + " byte limit.", 0);
+                    "The request body exceeds the " + limitOf(exchange) + " byte limit.", 0);
         }
 
         GatewayShieldProperties.Concurrency concurrency = properties.getConcurrency();
@@ -137,7 +137,7 @@ public class RequestGuardFilter implements WebFilter, Ordered {
             return exchange;
         }
 
-        long limit = body.getMaxBytes();
+        long limit = limitOf(exchange);
         long declared = exchange.getRequest().getHeaders().getContentLength();
         if (declared > limit) {
             return null;
@@ -165,6 +165,12 @@ public class RequestGuardFilter implements WebFilter, Ordered {
             }
         };
         return exchange.mutate().request(counting).build();
+    }
+
+    /** The body cap of this request's route: a model's review has its own (EA6.4), every other route the default. */
+    private long limitOf(ServerWebExchange exchange) {
+        ServerHttpRequest request = exchange.getRequest();
+        return properties.getBody().limitFor(request.getMethod().name(), request.getPath().pathWithinApplication().value());
     }
 
     @Override

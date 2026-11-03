@@ -92,6 +92,60 @@ class MetaApiClientTest {
         assertThat(body.has("response_format")).isFalse();
     }
 
+    /**
+     * EA6.4: a user message with images is a content array, its text first and each image after it as Meta's Chat
+     * Completions takes one, an inline JPEG data URL; a message without images keeps its plain string.
+     */
+    @Test
+    void aMessageWithImagesIsItsTextThenEachImageAsAnInlineDataUrl() throws Exception {
+        byte[] first = {(byte) 0xFF, (byte) 0xD8, 1, 2, 3, (byte) 0xFF, (byte) 0xD9};
+        byte[] second = {(byte) 0xFF, (byte) 0xD8, 4, 5, (byte) 0xFF, (byte) 0xD9};
+        ChatRequest request = new ChatRequest("m-1", List.of(ChatMessage.system("review"),
+                ChatMessage.user("two frames follow", List.of(new ChatMessage.Image(first, 600), new ChatMessage.Image(second, 600)))), 64, null);
+        client().streamChat(request).blockLast(Duration.ofSeconds(10));
+
+        JsonNode messages = JSON.readTree(fake.requests().get(0).body()).path("messages");
+        assertThat(messages.get(0).path("content").isTextual()).isTrue();
+        JsonNode parts = messages.get(1).path("content");
+        assertThat(parts.isArray()).isTrue();
+        assertThat(parts).hasSize(3);
+        assertThat(parts.get(0).toString()).isEqualTo("{\"type\":\"text\",\"text\":\"two frames follow\"}");
+        assertThat(parts.get(1).path("type").asText()).isEqualTo("image_url");
+        assertThat(parts.get(1).path("image_url").path("url").asText()).isEqualTo("data:image/jpeg;base64," + java.util.Base64.getEncoder().encodeToString(first));
+        assertThat(parts.get(2).path("image_url").path("url").asText()).isEqualTo("data:image/jpeg;base64," + java.util.Base64.getEncoder().encodeToString(second));
+    }
+
+    /** Only a user message carries images, and never one with no bound: an unbounded image would be charged as free. */
+    @Test
+    void anImageIsAUserMessagesWithABound() {
+        byte[] jpeg = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xD9};
+        assertThatThrownBy(() -> new ChatMessage("system", "x", List.of(new ChatMessage.Image(jpeg, 600))))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("Only a user message");
+        assertThatThrownBy(() -> new ChatMessage.Image(jpeg, 0)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("charged as free");
+        assertThatThrownBy(() -> new ChatMessage.Image(new byte[0], 600)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** An image a provider echoes in an error never reaches a log: its data URL is blanked, whole or cut, JSON-escaped or not. */
+    @Test
+    void anExcerptBlanksEveryDataUrl() {
+        String payload = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL";
+        String echoed = "{\"error\":{\"message\":\"bad image data:image/jpeg;base64," + payload + "\"}}";
+        String escaped = "{\"error\":{\"message\":\"bad image data:image/jpeg;base64," + payload.replace("/", "\\/") + "\"}}";
+        // The prefix JSON-escaped too, as a provider's error body may write it.
+        String prefixed = "{\"error\":{\"message\":\"bad image data:image\\/jpeg;base64," + payload.replace("/", "\\/") + "\"}}";
+        MetaApiClient client = client();
+        for (String text : List.of(echoed, escaped, prefixed)) {
+            String excerpt = client.excerpt(text);
+            assertThat(excerpt).contains(";base64,<").contains(" characters>").doesNotContain("4AAQSkZJRg");
+        }
+        assertThat(MetaApiClient.blankDataUrls("no image here")).isEqualTo("no image here");
+        // Base64 echoed with no data URL around it: a long run is blanked, an id or a hash is not.
+        String bare = "{\"error\":\"cannot decode " + payload.repeat(3) + "\"}";
+        assertThat(client.excerpt(bare)).contains("characters of base64>").doesNotContain("4AAQSkZJRg");
+        String hash = "a".repeat(64);
+        assertThat(MetaApiClient.blankDataUrls("frame " + hash + " refused")).isEqualTo("frame " + hash + " refused");
+    }
+
     @Test
     void aResponseFormatIsSentOnlyWhenAsked() throws Exception {
         client().streamChat(hello(Map.of("type", "json_object"))).blockLast(Duration.ofSeconds(10));

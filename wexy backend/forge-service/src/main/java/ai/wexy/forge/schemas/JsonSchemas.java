@@ -43,6 +43,11 @@ public class JsonSchemas {
      * since EA6.3, the frontend's visual-review design §8.2: {@code revision.moduleRepairs}).
      */
     public static final String AGENT_ACTION = "agent-action.v3";
+    /**
+     * A model's review of the world on the stage (EA6.4; the frontend's visual-review design §9.1, Q112 (a)): a verdict and
+     * its issues, each with a kind, a severity, a sentence, a suggested scope and the modules it names.
+     */
+    public static final String REVIEW_VERDICT = "review-verdict.v1";
 
     /** Meta's limit on nesting (§4.1). */
     static final int MAX_DEPTH = 10;
@@ -54,7 +59,7 @@ public class JsonSchemas {
     public JsonSchemas() {
         ObjectMapper json = new ObjectMapper();
         JsonSchemaFactory factory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
-        for (String id : List.of(SCENE_DRAFT, EDIT_PLAN, AGENT_ACTION)) {
+        for (String id : List.of(SCENE_DRAFT, EDIT_PLAN, AGENT_ACTION, REVIEW_VERDICT)) {
             String path = "schemas/" + id + ".json";
             try {
                 String text = new ClassPathResource(path).getContentAsString(StandardCharsets.UTF_8);

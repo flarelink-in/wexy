@@ -31,6 +31,13 @@ public final class AgentTurn {
      */
     public static final int MODULE_CALLS = 22;
 
+    /**
+     * The most reviews by a model one candidate asks for (EA6.4; the frontend's Q_C, its visual-review design §9.1): one
+     * before each of its two visual rounds and one after the last, each a model call of its own, and so what one attempt
+     * takes from the gateway's agent-review buckets, a token a review.
+     */
+    public static final int REVIEWS = 3;
+
     private AgentTurn() {
     }
 }

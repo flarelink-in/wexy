@@ -1,0 +1,24 @@
+{
+  "available" : true,
+  "gate" : null,
+  "gates" : {
+    "images" : "verified",
+    "transport" : "verified",
+    "privacy" : "verified",
+    "metering" : "verified"
+  },
+  "provider" : "meta",
+  "model" : "muse-spark-1.3",
+  "mode" : "standard",
+  "policyVersion" : "meta-standard.2026-11-03",
+  "limits" : {
+    "frames" : 2,
+    "width" : 768,
+    "height" : 432,
+    "jpegBytes" : 300000,
+    "pairBytes" : 600000,
+    "requestBytes" : 1048576,
+    "findings" : 32,
+    "modules" : 12
+  }
+}

@@ -1,0 +1,16 @@
+# The vision probe (EA6.4; the frontend's visual-review design §9.1; VisionProbe): no web server, one run of three
+# metered Spark calls of the review role, then exit. Run it only on the user's word for spend. Locally, with Redis up
+# (compose.local.yaml) and the key from Infisical:
+#   infisical run --env=dev -- java -jar forge-service/target/forge-service-0.1.0-SNAPSHOT.jar --spring.profiles.active=local,vision
+# On the host, beside the running service, as the paper test runs (docs/work/README.md):
+#   infisical run --env=prod -- docker compose -f compose.prod.yaml run --rm --no-deps -T \
+#     -e SPRING_PROFILES_ACTIVE=prod,vision forge-service > vision.log 2>&1
+# It prints the two values to set where the service runs once it passed: WEXY_REVIEW_VISION_PROBE and
+# WEXY_REVIEW_IMAGE_TOKENS. Nothing here sets them.
+spring:
+  main:
+    web-application-type: none
+
+wexy:
+  vision:
+    enabled: true

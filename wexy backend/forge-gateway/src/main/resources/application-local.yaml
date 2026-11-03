@@ -44,6 +44,12 @@ wexy:
       agent-module: { refill-per-second: 30, burst-capacity: 600 }
       agent-module-user: { refill-per-second: 30, burst-capacity: 600 }
       agent-module-anonymous: { refill-per-second: 30, burst-capacity: 600 }
+      # EA6.4: a model's review and its terms; a drive reviews often.
+      agent-review: { refill-per-second: 30, burst-capacity: 300 }
+      agent-review-user: { refill-per-second: 30, burst-capacity: 300 }
+      agent-review-anonymous: { refill-per-second: 30, burst-capacity: 300 }
+      review-read: { refill-per-second: 30, burst-capacity: 300 }
+      review-read-user: { refill-per-second: 30, burst-capacity: 300 }
       # W1: the allowance read after each Create and sign-in; a drive reads it often.
       account-read: { refill-per-second: 30, burst-capacity: 300 }
       account-read-user: { refill-per-second: 30, burst-capacity: 300 }

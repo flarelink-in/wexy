@@ -271,17 +271,17 @@ class PromptGrantsTest {
     @Test
     void anUnsetAllowanceOrABadKeyStopsStartup() {
         assertThatThrownBy(() -> new PromptGrants(store, new AllowanceProperties(null, 1, 1, 20, 0, java.time.Duration.ofHours(2), 5, 2, 44, 8, 8, 1,
-                java.time.Duration.ofDays(400), TestAdmissions.UID_KEY, false), clock))
+                java.time.Duration.ofDays(400), TestAdmissions.UID_KEY, false, 6), clock))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("anonymous-per-account");
         assertThatThrownBy(() -> new PromptGrants(store, new AllowanceProperties(1, 1, 1, 20, 0, java.time.Duration.ofHours(2), 5, 2, 44, 8, 8, 1,
-                java.time.Duration.ofDays(400), "abc", false), clock))
+                java.time.Duration.ofDays(400), "abc", false, 6), clock))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("uid-hmac-hex");
         assertThatThrownBy(() -> new PromptGrants(store, new AllowanceProperties(1, 1, 1, 20, 0, java.time.Duration.ofHours(2), 5, 2, 44, 8, 8, 1,
-                java.time.Duration.ofDays(400), "", true), clock))
+                java.time.Duration.ofDays(400), "", true, 6), clock))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("WEXY_UID_HMAC_KEY");
         // A missing key where none is required counts no one: nothing is granted.
         PromptGrants keyless = new PromptGrants(store, new AllowanceProperties(1, 1, 1, 20, 0, java.time.Duration.ofHours(2), 5, 2, 44, 8, 8, 1,
-                java.time.Duration.ofDays(400), "", false), clock);
+                java.time.Duration.ofDays(400), "", false, 6), clock);
         refused(() -> keyless.grant(signedIn("u1"), "plan-1", "h"), ErrorCode.UNAVAILABLE);
     }
 
@@ -289,7 +289,7 @@ class PromptGrantsTest {
     @Test
     void theDayStartsAtTheConfiguredHour() {
         PromptGrants six = new PromptGrants(store, new AllowanceProperties(1, 1, 1, 20, 6, java.time.Duration.ofHours(2), 5, 2, 44, 8, 8, 1,
-                java.time.Duration.ofDays(400), TestAdmissions.UID_KEY, false), clock);
+                java.time.Duration.ofDays(400), TestAdmissions.UID_KEY, false, 6), clock);
         assertThat(six.nextReset()).isEqualTo(Instant.parse("2026-11-03T06:00:00Z"));
         clock.set(Instant.parse("2026-11-03T05:59:00Z"));
         assertThat(six.day()).hasToString("2026-11-02");

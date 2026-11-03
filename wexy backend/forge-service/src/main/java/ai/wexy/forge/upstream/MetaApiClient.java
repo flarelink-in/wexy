@@ -24,8 +24,11 @@ import reactor.core.publisher.Mono;
 import reactor.netty.http.client.HttpClient;
 
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * The Meta Model API's OpenAI-compatible chat completions (backend architecture §6.3), and nothing
@@ -51,6 +54,13 @@ public class MetaApiClient {
 
     private static final String DONE = "[DONE]";
     private static final int EXCERPT_CHARS = 500;
+    /**
+     * A data URL with a base64 payload (a review's frame, echoed in an error): the prefix, then the payload, either of them
+     * JSON-escaped (`image\/jpeg`, `\/9j\/`).
+     */
+    private static final Pattern DATA_URL = Pattern.compile("(data:[A-Za-z0-9.+/\\\\-]{0,64};base64,)([A-Za-z0-9+/=\\\\]*)");
+    /** Base64 echoed with no data URL around it: 256 characters is far past any id, hash or word an error carries. */
+    private static final Pattern BASE64_RUN = Pattern.compile("[A-Za-z0-9+/=\\\\]{256,}");
 
     private final MetaApiProperties properties;
     private final ObjectMapper json;
@@ -142,7 +152,19 @@ public class MetaApiClient {
         body.put("model", request.model());
         ArrayNode messages = body.putArray("messages");
         for (ChatMessage message : request.messages()) {
-            messages.addObject().put("role", message.role()).put("content", message.content());
+            ObjectNode m = messages.addObject().put("role", message.role());
+            if (message.images().isEmpty()) {
+                m.put("content", message.content());
+                continue;
+            }
+            // A message with images (EA6.4): its text, then each image as Chat Completions takes one, inline, as a data
+            // URL (Meta's image understanding, read 2026-11-03). Never a remote URL: the bytes are the service's own.
+            ArrayNode parts = m.putArray("content");
+            parts.addObject().put("type", "text").put("text", message.content());
+            for (ChatMessage.Image image : message.images()) {
+                parts.addObject().put("type", "image_url").putObject("image_url")
+                        .put("url", "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(image.jpeg()));
+            }
         }
         // max_tokens is Meta's deprecated alias (forge-loop design §4.1).
         body.put("max_completion_tokens", request.maxOutputTokens());
@@ -263,13 +285,35 @@ public class MetaApiClient {
 
     /**
      * The start of an upstream body, for logs and the probe, with the key removed: some providers
-     * echo part of a refused key, and this text is written to files.
+     * echo part of a refused key, and this text is written to files. An image a provider echoes in an
+     * error is blanked too (EA6.4): a review's frames never reach a log, whole or in part.
      */
     String excerpt(String text) {
         if (text == null) {
             return "";
         }
         String clean = properties.hasKey() ? text.replace(properties.apiKey(), "<key>") : text;
+        clean = blankDataUrls(clean);
         return clean.length() > EXCERPT_CHARS ? clean.substring(0, EXCERPT_CHARS) + "..." : clean;
+    }
+
+    /**
+     * A data URL's payload, even a cut one, replaced by its length (`data:image/jpeg;base64,<12345 characters>`), and any
+     * long run of base64 with no prefix too: a frame never reaches a log, whole or in part.
+     */
+    static String blankDataUrls(String text) {
+        Matcher m = DATA_URL.matcher(text);
+        StringBuilder out = new StringBuilder();
+        while (m.find()) {
+            m.appendReplacement(out, Matcher.quoteReplacement(m.group(1) + "<" + m.group(2).length() + " characters>"));
+        }
+        m.appendTail(out);
+        Matcher bare = BASE64_RUN.matcher(out.toString());
+        StringBuilder blanked = new StringBuilder();
+        while (bare.find()) {
+            bare.appendReplacement(blanked, Matcher.quoteReplacement("<" + bare.group().length() + " characters of base64>"));
+        }
+        bare.appendTail(blanked);
+        return blanked.toString();
     }
 }

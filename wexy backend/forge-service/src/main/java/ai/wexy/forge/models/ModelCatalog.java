@@ -166,11 +166,19 @@ public class ModelCatalog {
         return inputTokenBound(messages, null);
     }
 
-    /** As {@link #inputTokenBound(List)}, with the {@code response_format} the call sends. */
+    /**
+     * As {@link #inputTokenBound(List)}, with the {@code response_format} the call sends. An image (EA6.4) adds its own
+     * bound, {@link ChatMessage.Image#boundTokens}, which its caller sets from configuration: a provider's image cost has
+     * no published formula ("image cost scales with resolution", Meta's docs, read 2026-11-03), so no byte count can bound
+     * it, and an image is never counted as free. The data URL's text is not input text and is not counted as such.
+     */
     public static long inputTokenBound(List<ChatMessage> messages, Map<String, Object> responseFormat) {
         long tokens = TOKENS_PER_REQUEST;
         for (ChatMessage message : messages) {
             tokens += message.content().getBytes(StandardCharsets.UTF_8).length + TOKENS_PER_MESSAGE;
+            for (ChatMessage.Image image : message.images()) {
+                tokens = Math.addExact(tokens, image.boundTokens());
+            }
         }
         if (responseFormat != null) {
             try {

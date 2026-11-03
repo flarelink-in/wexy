@@ -92,6 +92,13 @@ public class MockMetaApi {
     /** A module call's bodies (EA4.2), by module: {@code <module>.wgsl}, and {@code <module>.fault.wgsl} for the fault scenario. */
     private static final String MODULES = "classpath:mock/modules/*.wgsl";
     private static final Pattern MODULE_LINE = Pattern.compile("^The module: ([A-Za-z0-9_-]+), a ", Pattern.MULTILINE);
+    /** A model's review (EA6.4): the mock's own verdict, which says it saw no pixels. */
+    private static final String REVIEW = "classpath:mock/review/verdict.json";
+    /**
+     * The input tokens the mock reports for one image: a mock's number, not Meta's (whose image cost scales with
+     * resolution and is measured only by the vision probe). Above the text-free floor so a test can see it counted.
+     */
+    static final long IMAGE_TOKENS = 600;
 
     private final MockProperties properties;
     private final ModelCatalog catalog;
@@ -105,6 +112,7 @@ public class MockMetaApi {
     private final String edit;
     private final String agentRead;
     private final String agentProgram;
+    private final String review;
     private final Set<String> streamedSystems = ConcurrentHashMap.newKeySet();
     private final ExecutorService threads = Executors.newCachedThreadPool();
     private final HttpServer server;
@@ -157,6 +165,7 @@ public class MockMetaApi {
         this.edit = read(resources.getResource(EDIT));
         this.agentRead = read(resources.getResource(AGENT_READ)).strip();
         this.agentProgram = read(resources.getResource(AGENT_PROGRAM)).strip();
+        this.review = read(resources.getResource(REVIEW)).strip();
         this.server = start(properties.port());
         log.warn("MOCK META API on 127.0.0.1:{} (scenario {}, {} tokens/s, {} plans): no model is called and nothing is spent, "
                 + "but every call is metered in Redis as a live one would be.", port(), scenario, properties.tokensPerSecond(), plans.size());
@@ -248,8 +257,33 @@ public class MockMetaApi {
             return;
         }
         JsonNode messages = request.path("messages");
-        String system = messages.path(0).path("content").asText("");
-        String user = messages.path(1).path("content").asText("");
+        // A message's content is its text, or (EA6.4) parts: text, and images as Meta's Chat Completions takes them. The
+        // mock takes an image only in a user message and only as an inline JPEG data URL, as Wexy sends it.
+        long images = 0;
+        for (int i = 0; i < messages.size(); i++) {
+            JsonNode content = messages.path(i).path("content");
+            if (!content.isArray()) {
+                continue;
+            }
+            for (JsonNode part : content) {
+                if ("image_url".equals(part.path("type").asText())) {
+                    if (!"user".equals(messages.path(i).path("role").asText())) {
+                        error(exchange, 400, "invalid_request_error", "Images go in user messages only.");
+                        return;
+                    }
+                    if (!part.path("image_url").path("url").asText("").startsWith("data:image/jpeg;base64,")) {
+                        error(exchange, 400, "invalid_request_error", "The mock takes an image only as an inline JPEG data URL, as Wexy sends one.");
+                        return;
+                    }
+                    images++;
+                } else if (!"text".equals(part.path("type").asText())) {
+                    error(exchange, 400, "invalid_request_error", "A content part is text or image_url.");
+                    return;
+                }
+            }
+        }
+        String system = textOf(messages.path(0).path("content"));
+        String user = textOf(messages.path(1).path("content"));
         String template = templatesBySystem.get(system);
         if (template == null) {
             error(exchange, 400, "invalid_request_error", "The mock answers only Wexy's own templates, and this system message "
@@ -270,6 +304,18 @@ public class MockMetaApi {
             int cap = request.path("max_completion_tokens").asInt(0);
             long cachedTokens = streamedSystems.add(system) ? 0 : tokens(system);
             stream(exchange, model, template, answer, cap > 0 ? cap : Integer.MAX_VALUE, tokens(system) + tokens(user), cachedTokens);
+            return;
+        }
+        // A review (EA6.4) is answered by the mock's own verdict, whatever its frames show: the mock sees no pixels, and says so.
+        if (template.equals("review")) {
+            if (images == 0) {
+                error(exchange, 400, "invalid_request_error", "A review carries its frames as images.");
+                return;
+            }
+            int cap = request.path("max_completion_tokens").asInt(0);
+            long cachedTokens = streamedSystems.add(system) ? 0 : tokens(system);
+            stream(exchange, model, template, new Recording("review/verdict", review), cap > 0 ? cap : Integer.MAX_VALUE,
+                    tokens(system) + tokens(user) + images * IMAGE_TOKENS, cachedTokens);
             return;
         }
         // An agent turn sends its first call with two messages and every later one with more (agent-loop design §2).
@@ -456,6 +502,20 @@ public class MockMetaApi {
 
     static long tokens(String text) {
         return (text.length() + CHARS_PER_TOKEN - 1) / CHARS_PER_TOKEN;
+    }
+
+    /** A message's text: its content when that is a string, else its text parts joined (EA6.4: a review's user message). */
+    static String textOf(JsonNode content) {
+        if (!content.isArray()) {
+            return content.asText("");
+        }
+        StringBuilder text = new StringBuilder();
+        for (JsonNode part : content) {
+            if ("text".equals(part.path("type").asText())) {
+                text.append(part.path("text").asText(""));
+            }
+        }
+        return text.toString();
     }
 
     private static void pause(long nanos) {
