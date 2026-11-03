@@ -4,19 +4,19 @@ import { test } from 'node:test';
 import { codeForStatus, ERROR_STATUS, errorFromResponse, ForgeError, isErrorCode } from '../src/forge-client/errors.ts';
 
 // ai.wexy.common.ErrorCode, 2026-10-27, with W1's content-refused and quota (2026-11-02, the creations platform designs
-// §10): change both on the same day (design guidelines §1).
+// §10) and W2's conflict (2026-11-03): change both on the same day (design guidelines §1).
 const BACKEND = {
     'bad-request': 400, 'auth': 401, 'appcheck': 403, 'account-required': 403, 'forbidden': 403, 'not-found': 404,
-    'too-large': 413, 'content-refused': 422, 'rate': 429, 'quota': 429, 'internal': 500, 'upstream': 502, 'budget': 503,
-    'paused': 503, 'unavailable': 503, 'timeout': 504,
+    'conflict': 409, 'too-large': 413, 'content-refused': 422, 'rate': 429, 'quota': 429, 'internal': 500, 'upstream': 502,
+    'budget': 503, 'paused': 503, 'unavailable': 503, 'timeout': 504,
 };
 
-test('U1 the sixteen codes and their statuses are the backend\'s, exactly', () => {
+test('U1 the seventeen codes and their statuses are the backend\'s, exactly', () => {
     assert.deepEqual({ ...ERROR_STATUS }, BACKEND);
 });
 
-test('U2 a status without one of our codes maps as ErrorCode.forStatus does: a bare 422 is no refusal, a bare 429 no quota', () => {
-    const want = { 401: 'auth', 403: 'forbidden', 404: 'not-found', 413: 'too-large', 422: 'bad-request', 429: 'rate', 502: 'upstream',
+test('U2 a status without one of our codes maps as ErrorCode.forStatus does: a bare 422 is no refusal, a bare 429 no quota, a bare 409 a conflict', () => {
+    const want = { 401: 'auth', 403: 'forbidden', 404: 'not-found', 409: 'conflict', 413: 'too-large', 422: 'bad-request', 429: 'rate', 502: 'upstream',
         503: 'unavailable', 504: 'timeout', 500: 'internal', 501: 'internal', 599: 'internal', 400: 'bad-request', 418: 'bad-request', 0: 'bad-request' };
     for (const [status, code] of Object.entries(want)) assert.equal(codeForStatus(Number(status)), code, `status ${status}`);
 });

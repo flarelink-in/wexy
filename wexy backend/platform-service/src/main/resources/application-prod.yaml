@@ -1,0 +1,17 @@
+# platform-service on the VPS (compose.platform.yaml, merged into compose.dev.yaml first): MariaDB and the gateway by
+# their compose names, the actuator on a port of its own that no tunnel routes. The datasource's account and password
+# and the account key come from Infisical through the compose file; this file holds none.
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mariadb://mariadb:3306/wexy_platform}
+
+management:
+  server:
+    port: 8431
+
+wexy:
+  internal-jwt:
+    jwks-uri: ${WEXY_GATEWAY_URL:http://forge-gateway:8400}/.well-known/jwks.json
+  account:
+    # Startup stops without WEXY_ACCOUNT_HMAC_KEY (SubjectKey): no account could be found or made.
+    key-required: true

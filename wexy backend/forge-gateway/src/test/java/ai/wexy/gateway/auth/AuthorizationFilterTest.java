@@ -172,6 +172,40 @@ class AuthorizationFilterTest {
         assertThat(forwardedClaims().getBooleanClaim(InternalToken.CLAIM_ADMIN)).isTrue();
     }
 
+    /**
+     * W2: every token names the one service its route leads to. Forge's filters mint for forge, the platform's for the
+     * platform, so a token lifted from one service's traffic is refused by the other (forge-common's verifier).
+     */
+    @Test
+    void eachTokenIsForTheServiceItsRouteLeadsTo() throws Exception {
+        send(authorization.anonymousAllowed(), "Bearer h.anonymous.s");
+        assertThat(forwardedClaims().getAudience()).containsExactly(InternalToken.AUDIENCE_FORGE);
+
+        send(authorization.platformAccount(), "Bearer h.google.s");
+        assertThat(forwardedClaims().getAudience()).containsExactly(InternalToken.AUDIENCE_PLATFORM);
+        assertThat(forwardedClaims().getSubject()).isEqualTo("user-uid");
+
+        send(authorization.platformAdmin(), "Bearer h.admin.s");
+        assertThat(forwardedClaims().getAudience()).containsExactly(InternalToken.AUDIENCE_PLATFORM);
+        assertThat(forwardedClaims().getBooleanClaim(InternalToken.CLAIM_ADMIN)).isTrue();
+
+        send(authorization.adminOnly(), "Bearer h.admin.s");
+        assertThat(forwardedClaims().getAudience()).containsExactly(InternalToken.AUDIENCE_FORGE);
+    }
+
+    /** The platform's accounts are real accounts (§10's N): an anonymous caller is refused there before any token is minted. */
+    @Test
+    void thePlatformsAccountRoutesRefuseAnAnonymousCaller() {
+        assertThatThrownBy(() -> send(authorization.platformAccount(), "Bearer h.anonymous.s"))
+                .isInstanceOfSatisfying(GatewayRejection.class,
+                        e -> assertThat(e.code()).isEqualTo(ErrorCode.ACCOUNT_REQUIRED));
+        assertThat(forwarded.get()).isNull();
+        assertThatThrownBy(() -> send(authorization.platformAdmin(), "Bearer h.google.s"))
+                .isInstanceOfSatisfying(GatewayRejection.class,
+                        e -> assertThat(e.code()).isEqualTo(ErrorCode.FORBIDDEN));
+        assertThat(forwarded.get()).isNull();
+    }
+
     /** A malformed header is refused before anything is asked of Firebase. */
     @Test
     void aMissingOrMalformedHeaderIsRefusedWithoutAVerification() {

@@ -15,8 +15,9 @@ import org.springframework.http.HttpMethod;
 import java.util.function.Function;
 
 /**
- * Every public route, and the chain of filters each one runs: the API table of backend
- * architecture §11, as code. All of them lead to forge-service.
+ * Forge's routes, and the chain of filters each one runs: the API table of backend architecture §11,
+ * as code. All of them lead to forge-service; the accounts, worlds and showcase routes are the platform
+ * service's since W2 (PlatformRoutes).
  *
  * The chains, cheapest first (each filter's order puts it in place, whatever the order here):
  *
@@ -29,14 +30,12 @@ import java.util.function.Function;
  *   <li><b>forgeCreate:</b> author, the parallel calls that follow a plan. As above, with the cached
  *       App Check token.</li>
  *   <li><b>forgeEdit:</b> repair, direct and outcomes.</li>
- *   <li><b>publishEntry</b> and <b>publish:</b> publishing a world (single-use App Check), then
- *       confirming uploads and reports.</li>
  *   <li><b>admin:</b> an address budget and the admin allow-list.</li>
  * </ul>
  *
- * Exactly five routes spend App Check tokens, forge-plan, agent-turn, agent-module, agent-review (EA6.4) and
- * worlds-publish; the frontend mints a fresh token only for those (ForgeRoutesTest pins the set). Showcase publishing needs an account,
- * which forge-service checks from the token's {@code anon} claim when publishing (backend §7).
+ * Four of forge's routes spend App Check tokens: forge-plan, agent-turn, agent-module and agent-review
+ * (EA6.4). With the platform's (PlatformRoutes) they are the routes the frontend mints a fresh token for
+ * (ForgeRoutesTest pins the whole set). Every token minted here is for forge alone (W2's audience).
  */
 @Configuration
 public class ForgeRoutes {
@@ -99,18 +98,6 @@ public class ForgeRoutes {
                 .filter(authorization.anonymousAllowed())
                 .filter(rateLimits.byUser("forge-edit-user"));
 
-        Function<GatewayFilterSpec, UriSpec> publishEntry = f -> f
-                .filter(rateLimits.byClient("publish"))
-                .filter(appCheck.singleUse())
-                .filter(authorization.anonymousAllowed())
-                .filter(rateLimits.byUser("publish-user"));
-
-        Function<GatewayFilterSpec, UriSpec> publish = f -> f
-                .filter(rateLimits.byClient("publish"))
-                .filter(appCheck)
-                .filter(authorization.anonymousAllowed())
-                .filter(rateLimits.byUser("publish-user"));
-
         Function<GatewayFilterSpec, UriSpec> admin = f -> f
                 .filter(rateLimits.byClient("admin"))
                 .filter(authorization.adminOnly());
@@ -151,22 +138,13 @@ public class ForgeRoutes {
                         .filters(publicRead).uri(forgeService))
                 .route("archive-match", r -> r.path("/v1/archive/match").and().method(HttpMethod.GET)
                         .filters(publicRead).uri(forgeService))
-                .route("worlds-read", r -> r.path("/v1/worlds/{id}").and().method(HttpMethod.GET)
-                        .filters(publicRead).uri(forgeService))
-                .route("showcase", r -> r.path("/v1/showcase").and().method(HttpMethod.GET)
-                        .filters(publicRead).uri(forgeService))
                 .route("stats", r -> r.path("/v1/stats").and().method(HttpMethod.GET)
                         .filters(publicRead).uri(forgeService))
 
-                // --- Worlds: publishing for share links ---
-                .route("worlds-publish", r -> r.path("/v1/worlds").and().method(HttpMethod.POST)
-                        .filters(publishEntry).uri(forgeService))
-                .route("worlds-complete", r -> r.path("/v1/worlds/{id}/complete").and().method(HttpMethod.POST)
-                        .filters(publish).uri(forgeService))
-                .route("worlds-report", r -> r.path("/v1/worlds/{id}/report").and().method(HttpMethod.POST)
-                        .filters(publish).uri(forgeService))
+                // The worlds and the showcase went to the platform service in W2 (PlatformRoutes); the share links'
+                // complete and report stay unavailable until they are designed again (the platform design §10).
 
-                // --- Operations: moderation, live or archive mode ---
+                // --- Operations: moderation, live or archive mode (the platform's own admin routes come first) ---
                 .route("admin", r -> r.path("/v1/admin/**").and().method(HttpMethod.POST)
                         .filters(admin).uri(forgeService))
                 .build();

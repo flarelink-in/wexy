@@ -21,7 +21,8 @@ import java.util.Date;
  * Firebase token alone (backend architecture §4): the uid as the subject, whether the caller is
  * anonymous, whether the uid is on the admin allow-list, and the sign-in provider; since W1, the
  * caller's network key ({@code ipk}), from the address the gateway resolved, never from a header the
- * client wrote. Minted with Nimbus rather than jjwt, so the gateway needs one JOSE library.
+ * client wrote; since W2, the service the token is for ({@code aud}), so a token minted for one service
+ * opens no other. Minted with Nimbus rather than jjwt, so the gateway needs one JOSE library.
  */
 @Component
 public class InternalTokenMinter {
@@ -63,13 +64,16 @@ public class InternalTokenMinter {
     /**
      * The token for a verified caller.
      *
-     * @param ipk the caller's network key ({@code ClientNetworkKey}), or null when there is none: the
-     *            claim is then left out, never sent empty (W1)
+     * @param ipk      the caller's network key ({@code ClientNetworkKey}), or null when there is none: the
+     *                 claim is then left out, never sent empty (W1)
+     * @param audience the service the route leads to ({@link InternalToken#AUDIENCE_FORGE} or
+     *                 {@link InternalToken#AUDIENCE_PLATFORM}, W2): that service alone accepts the token
      */
-    public String mint(VerifiedCaller caller, boolean admin, String ipk) {
+    public String mint(VerifiedCaller caller, boolean admin, String ipk, String audience) {
         long now = System.currentTimeMillis();
         JWTClaimsSet.Builder builder = new JWTClaimsSet.Builder()
                 .issuer(InternalToken.ISSUER)
+                .audience(java.util.Objects.requireNonNull(audience, "audience"))
                 .subject(caller.uid())
                 .issueTime(new Date(now))
                 .expirationTime(new Date(now + InternalToken.LIFETIME_MILLIS))

@@ -1,10 +1,13 @@
-# Local Redis for the gateway's limits and forge-service's spend meter:
+# Local Redis for the gateway's limits and forge-service's spend meter, and since W2 a local MariaDB for the platform
+# service's accounts:
 #   docker compose -f compose.local.yaml up -d
 #
 # Redis 7 or newer: SpendGuard's script uses EXPIRE ... NX, and on Redis 6 every charge fails closed.
 # Persistent (append-only file in a named volume): the spend counters live here, and a restart that
 # emptied them would hand out the day's budget again, with a real key.
 # Port 6390 on the loopback only, so it does not collide with another project's Redis on 6379.
+# MariaDB on 3316, the loopback only (another project's MySQL may hold 3306), with a non-secret local account that the
+# platform's local profile names (application-local.yaml): this database never holds anything but the laptop's tests.
 name: wexy
 
 services:
@@ -18,5 +21,27 @@ services:
     mem_limit: 128m
     restart: unless-stopped
 
+  mariadb:
+    image: mariadb:11.4
+    environment:
+      MARIADB_ROOT_PASSWORD: local-dev-not-a-secret-root
+      MARIADB_DATABASE: wexy_platform
+      MARIADB_USER: wexy_platform
+      MARIADB_PASSWORD: local-dev-not-a-secret
+    command: ["--innodb-buffer-pool-size=64M", "--max-connections=40"]
+    ports:
+      - "127.0.0.1:3316:3306"
+    volumes:
+      - wexy-mariadb:/var/lib/mysql
+    mem_limit: 384m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "healthcheck.sh --connect --innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
 volumes:
   wexy-redis:
+  wexy-mariadb:

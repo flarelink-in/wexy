@@ -35,6 +35,16 @@ public final class InternalToken {
      */
     public static final String CLAIM_IPK = "ipk";
 
+    /**
+     * The service a token is for, as its {@code aud} (W2; the creations platform design §14): the gateway mints one per
+     * route's service, and each service refuses a token minted for the other, so one lifted on the compose network
+     * opens nothing but the service it was meant for.
+     */
+    public static final String AUDIENCE_FORGE = "forge-service";
+
+    /** The accounts and creations service's audience (W2). */
+    public static final String AUDIENCE_PLATFORM = "platform-service";
+
     /** Two minutes, as FlareLink's: long enough for a request, short enough that a leak expires. */
     public static final long LIFETIME_MILLIS = 120_000;
 

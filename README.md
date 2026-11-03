@@ -40,6 +40,7 @@ Film or photo ← browser studio ← verification on your device
 | `wexy backend/forge-common` | Shared service contracts | Java 21 |
 | `wexy backend/forge-gateway` | Authentication, App Check, rate limits and routing | Spring Cloud Gateway |
 | `wexy backend/forge-service` | Metered model calls, generation streams, agent turns and module authoring | Spring Boot, Redis |
+| `wexy backend/platform-service` | Accounts and their handles; saved worlds and the showcase to come | Spring Boot, MariaDB |
 
 Folder names contain spaces: quote them in shell commands. Tests, fixtures and executable
 development harnesses are tracked. Private designs, work notes and retained local evidence live
@@ -51,7 +52,7 @@ in the separate `wexy-notes` repository and are not required to build the applic
 
 - Node.js **24.12.0 or newer** and npm.
 - **Java 21**; use the included Maven wrapper.
-- Docker with Compose for local **Redis 7.2** and Redis-backed integration tests.
+- Docker with Compose for local **Redis 7.2** and **MariaDB 11.4**, and their integration tests.
 - Desktop Chrome or Edge with **WebGPU** for the studio. GPU support and resource limits depend
   on the browser, driver and graphics card.
 
@@ -65,7 +66,7 @@ docker compose -f compose.local.yaml up -d
 ./mvnw -B install -DskipTests
 ```
 
-Then, in two separate terminals in `wexy backend`:
+Then, in separate terminals in `wexy backend`:
 
 ```sh
 ./mvnw -pl forge-gateway spring-boot:run -Dspring-boot.run.profiles=local
@@ -75,7 +76,12 @@ Then, in two separate terminals in `wexy backend`:
 ./mvnw -pl forge-service spring-boot:run -Dspring-boot.run.profiles=local,mock
 ```
 
-The gateway listens on **8400**, the service on **8410**, and local Redis on loopback **6390**.
+```sh
+./mvnw -pl platform-service spring-boot:run -Dspring-boot.run.profiles=local
+```
+
+The gateway listens on **8400**, the service on **8410**, the platform service on **8430**, local Redis
+on loopback **6390** and local MariaDB on loopback **3316**.
 Mock mode requires no model API key and makes no paid model calls. These local profiles are for
 development, not public deployment.
 
@@ -115,7 +121,7 @@ From `wexy backend`:
 
 ```sh
 ./mvnw -B verify                      # Default suite; Docker-dependent tests may skip
-./mvnw -B clean verify -Predis-tests   # Strict gate: Docker is required for Redis tests
+./mvnw -B clean verify -Predis-tests   # Strict gate: Docker is required for Redis and MariaDB tests
 ```
 
 Headless tests and a successful build do not establish GPU compatibility, visual quality or live

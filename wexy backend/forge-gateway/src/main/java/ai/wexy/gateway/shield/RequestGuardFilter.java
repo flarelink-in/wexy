@@ -27,19 +27,22 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Caps how much of the gateway one client can occupy at once.
  *
- * Adapted from FlareLink's RequestGuardFilter (pre-existing work): one body limit (no upload
- * routes), and Wexy's envelope. Rate limits bound how often requests arrive; they do nothing about
- * a client that opens hundreds of connections and trickles bytes, or streams a huge body. So:
+ * Adapted from FlareLink's RequestGuardFilter (pre-existing work): one body limit, but for the routes
+ * that carry a saved world or a poster (W2), and Wexy's envelope. Rate limits bound how often requests
+ * arrive; they do nothing about a client that opens hundreds of connections and trickles bytes, or
+ * streams a huge body. So:
  *  - a per-client and per-instance in-flight ceiling (a bulkhead);
  *  - a body ceiling enforced from Content-Length and while streaming, since a chunked upload can
- *    omit the header.
+ *    omit the header. DELETE is capped too since W2 added DELETE routes: the gateway forwards any
+ *    method's body.
  */
 @Component
 public class RequestGuardFilter implements WebFilter, Ordered {
 
     private static final Logger log = LoggerFactory.getLogger(RequestGuardFilter.class);
 
-    private static final Set<HttpMethod> BODY_METHODS = Set.of(HttpMethod.POST, HttpMethod.PUT, HttpMethod.PATCH);
+    private static final Set<HttpMethod> BODY_METHODS = Set.of(HttpMethod.POST, HttpMethod.PUT, HttpMethod.PATCH,
+            HttpMethod.DELETE);
 
     private final ClientAddressResolver addressResolver;
     private final GatewayShieldProperties properties;
@@ -51,6 +54,8 @@ public class RequestGuardFilter implements WebFilter, Ordered {
     public RequestGuardFilter(ClientAddressResolver addressResolver, GatewayShieldProperties properties) {
         this.addressResolver = addressResolver;
         this.properties = properties;
+        // A malformed per-route cap stops startup here, rather than leaving its route at the default.
+        properties.getBody().validate();
     }
 
     @Override
@@ -167,7 +172,10 @@ public class RequestGuardFilter implements WebFilter, Ordered {
         return exchange.mutate().request(counting).build();
     }
 
-    /** The body cap of this request's route: a model's review has its own (EA6.4), every other route the default. */
+    /**
+     * The body cap of this request's route: a model's review (EA6.4), a world's save and a poster (W2) have their own,
+     * every other route the default.
+     */
     private long limitOf(ServerWebExchange exchange) {
         ServerHttpRequest request = exchange.getRequest();
         return properties.getBody().limitFor(request.getMethod().name(), request.getPath().pathWithinApplication().value());

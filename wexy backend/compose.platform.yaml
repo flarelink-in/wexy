@@ -1,0 +1,84 @@
+# W2's platform service and its MariaDB (the creations platform design §3, §15), merged into a stack the way the
+# tunnel is: dev first, prod once W2 has run on dev. A separate file because compose interpolates every service's `:?`
+# secrets, so the four below would stop a stack whose Infisical environment does not hold them yet.
+#
+#     infisical run --env=dev -- docker compose -f compose.dev.yaml -f compose.platform.yaml -f compose.tunnel.yaml pull
+#     infisical run --env=dev -- docker compose -f compose.dev.yaml -f compose.platform.yaml -f compose.tunnel.yaml up -d
+#
+# The project and the volume names come from the stack it is merged into (wexy-dev_wexy-mariadb in dev). The database
+# and its account are made when the volume is first initialised: rotating MARIADB_PASSWORD in Infisical afterwards does
+# not change them (FlareLink's trap: ALTER USER inside MariaDB, or recreate the volume, which deletes every account).
+# B1's records (compose.records.yaml, not built) would share this MariaDB with a schema and an account of their own,
+# made by an init script or as root, never by a second MARIADB_DATABASE: the image reads that once, at first start.
+#
+# The host gate (W2's exit, §3): with this merged, `docker stats --no-stream` and `free -m` under a generation and a
+# few saves give each container's resident memory, MariaDB's included, and the swap in use.
+services:
+  mariadb:
+    image: mariadb:11.4
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?missing from Infisical}
+      MARIADB_DATABASE: wexy_platform
+      MARIADB_USER: ${MARIADB_USER:?missing from Infisical}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:?missing from Infisical}
+    # Bounded for a 4 GB host: InnoDB's buffer pool well inside the container's cap, few connections (the platform's
+    # pool holds four).
+    command: ["--innodb-buffer-pool-size=128M", "--max-connections=40"]
+    volumes:
+      - wexy-mariadb:/var/lib/mysql
+    # No ports: the platform reaches it by name on the compose network; `docker compose exec mariadb mariadb -uroot -p`
+    # for a look.
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "healthcheck.sh --connect --innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  platform-service:
+    restart: unless-stopped
+    image: ${WEXY_REGISTRY:-blr.vultrcr.com/eventvision}/platform-service:${WEXY_IMAGE_TAG:-latest}
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      forge-gateway:
+        condition: service_started
+    # No ports: the gateway alone reaches it, by name, on this project's network.
+    mem_limit: 640m
+    cpus: 1.0
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      WEXY_GATEWAY_URL: http://forge-gateway:8400
+      # The account the database was created with, in the platform's own database.
+      SPRING_DATASOURCE_URL: jdbc:mariadb://mariadb:3306/wexy_platform
+      SPRING_DATASOURCE_USERNAME: ${MARIADB_USER:?missing from Infisical}
+      SPRING_DATASOURCE_PASSWORD: ${MARIADB_PASSWORD:?missing from Infisical}
+      # Platform's own subject key (never forge's WEXY_UID_HMAC_KEY): required, never rotated on deploy.
+      WEXY_ACCOUNT_HMAC_KEY: ${WEXY_ACCOUNT_HMAC_KEY:?missing from Infisical}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8431/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+
+  forge-gateway:
+    environment:
+      # The platform's routes lead here (PlatformRoutes); without this file they answer 503, forge's untouched.
+      WEXY_PLATFORM_SERVICE_URL: http://platform-service:8430
+
+volumes:
+  wexy-mariadb:

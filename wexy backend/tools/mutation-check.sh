@@ -349,7 +349,7 @@ mutate "ipk unkeyed" "$G/shield/ClientNetworkKey.java" forge-gateway ClientNetwo
 mutate "an unset required network key allowed" "$G/shield/ClientNetworkKey.java" forge-gateway ClientNetworkKeyTest \
     's/if \(required\) \{/if (false) {/'
 mutate "no network key in the token" "$G/auth/AuthorizationFilter.java" forge-gateway AuthorizationFilterTest \
-    's/minter\.mint\(caller, admin, networkKey\.of\(exchange\)\)/minter.mint(caller, admin, null)/'
+    's/minter\.mint\(caller, admin, networkKey\.of\(exchange\), audience\)/minter.mint(caller, admin, null, audience)/'
 
 # W1.3 (2026-11-02; the creations platform design §11, I6, Q95): the spend lanes. The real script's lane check is
 # SpendGuardRedisTest's, which needs Docker; these hold the Java around it, hermetically.
@@ -522,12 +522,96 @@ mutate "a frame echoed in a log" "$S/upstream/MetaApiClient.java" forge-service 
     's/clean = blankDataUrls\(clean\);/clean = clean.strip();/'
 mutate "an image sent as a remote URL" "$S/upstream/MetaApiClient.java" forge-service MetaApiClientTest \
     's/\.put\("url", "data:image\/jpeg;base64," \+ /.put("url", "https:\/\/example.invalid\/" + /'
+# Re-aimed at the merge with W2, whose pattern caps replaced EA6.4's exact-match map: a path no cap matches takes the
+# review's 1 MiB instead of the default.
 mutate "every route takes the review's body" "$G/shield/GatewayShieldProperties.java" forge-gateway ForgeRoutesTest \
-    's/Long route = routes\.get\(method \+ " " \+ path\);/Long route = 1_048_576L;/'
+    's/            \}\n            return maxBytes;/            }\n            return 1_048_576L;/'
 mutate "the guard caps every route alike" "$G/shield/RequestGuardFilter.java" forge-gateway GatewayShieldTests \
     's/return properties\.getBody\(\)\.limitFor\(request\.getMethod\(\)\.name\(\), request\.getPath\(\)\.pathWithinApplication\(\)\.value\(\)\);/return properties.getBody().getMaxBytes();/'
 mutate "the review's token cached" "$G/routes/ForgeRoutes.java" forge-gateway ForgeRoutesTest \
     's/(\.filter\(rateLimits\.byClient\("agent-review"\)\)\n                \.filter\(appCheck)\.singleUse\(\)\)/${1})/'
+
+# W2 (2026-11-03; the creations platform design §10, §14, PL-T3, PL-T17): the gateway's edge for the platform, the
+# audience that keeps each service's tokens its own, and the accounts. The last five need Docker (a real MariaDB).
+K=forge-common/src/main/java/ai/wexy/common
+P=platform-service/src/main/java/ai/wexy/platform
+M=platform-service/src/main/resources/db/migration/V1__accounts.sql
+mutate "a token for any service accepted" "$K/InternalTokenVerifier.java" forge-common InternalTokenVerifierTest \
+    's/new DefaultJWTClaimsVerifier<>\(audience,/new DefaultJWTClaimsVerifier<>((String) null,/'
+mutate "a token minted for no service" "$G/auth/InternalTokenMinter.java" forge-gateway AuthorizationFilterTest \
+    's/\n\s*\.audience\(java\.util\.Objects\.requireNonNull\(audience, "audience"\)\)//'
+mutate "forge taking the platform's tokens" "$S/identity/InternalTokenFilter.java" forge-service InternalTokenFilterTest \
+    's/new InternalTokenVerifier\(keys, InternalToken\.AUDIENCE_FORGE\)/new InternalTokenVerifier(keys, InternalToken.AUDIENCE_PLATFORM)/'
+mutate "the worlds still forge's public reads" "$S/identity/InternalTokenFilter.java" forge-service InternalTokenFilterTest \
+    's/"\/v1\/forge\/mode", "\/v1\/archive\/match", "\/v1\/stats",/"\/v1\/forge\/mode", "\/v1\/archive\/match", "\/v1\/stats", "\/v1\/worlds\/{id}", "\/v1\/showcase",/'
+mutate "the platform's account routes minting forge's anonymous token" "$G/routes/PlatformRoutes.java" forge-gateway PlatformRoutesTest \
+    's/\.filter\(authorization\.platformAccount\(\)\)/.filter(authorization.anonymousAllowed())/'
+mutate "the platform's admin routes behind forge's" "$G/routes/PlatformRoutes.java" forge-gateway PlatformRoutesTest \
+    's/public static final int AHEAD_OF_FORGE = -1;/public static final int AHEAD_OF_FORGE = 1;/'
+mutate "a save spending App Check" "$G/routes/PlatformRoutes.java" forge-gateway ForgeRoutesTest \
+    's/(\.route\("worlds-create", r -> r\.path\("\/v1\/worlds"\)\.and\(\)\.method\(HttpMethod\.POST\)\n\s*\.filters\(signedIn\(rateLimits, )cached/$1spent/'
+mutate "a world readable without a sign-in" "$G/routes/PlatformRoutes.java" forge-gateway PlatformRoutesTest \
+    's/(\.route\("worlds-read", r -> r\.path\("\/v1\/worlds\/\{id\}"\)\.and\(\)\.method\(HttpMethod\.GET\)\n\s*)\.filters\(signedIn\(rateLimits, cached, authorization, "account-read"\)\)/$1.filters(publicRead)/'
+mutate "a DELETE's body uncapped" "$G/shield/RequestGuardFilter.java" forge-gateway RequestGuardFilterTest \
+    's/HttpMethod\.PATCH,\n\s*HttpMethod\.DELETE\);/HttpMethod.PATCH);/'
+mutate "a save's cap on every route" "$G/shield/GatewayShieldProperties.java" forge-gateway RequestGuardFilterTest \
+    's/if \(cap\.method\(\)\.equals\(method\) && cap\.pattern\(\)\.matches\(container\)\) \{/if (true) {/'
+mutate "a cap whatever the method" "$G/shield/GatewayShieldProperties.java" forge-gateway RequestGuardFilterTest \
+    's/if \(cap\.method\(\)\.equals\(method\) && cap\.pattern\(\)\.matches\(container\)\) \{/if (cap.pattern().matches(container)) {/'
+mutate "a DELETE's preflight refused" "$G/cors/CorsPolicy.java" forge-gateway CorsPolicyTest \
+    's/HttpMethod\.PATCH,\n\s*HttpMethod\.DELETE, HttpMethod\.OPTIONS\)/HttpMethod.PATCH, HttpMethod.OPTIONS)/'
+mutate "the idempotency key's preflight refused" "$G/cors/CorsPolicy.java" forge-gateway CorsPolicyTest \
+    's/AppCheckFilter\.APP_CHECK_HEADER, IDEMPOTENCY_KEY\);/AppCheckFilter.APP_CHECK_HEADER);/'
+mutate "an anonymous caller given an account" "$P/identity/InternalTokenFilter.java" platform-service InternalTokenFilterTest \
+    's/if \(claims\.anonymous\(\)\) \{/if (false) {/'
+mutate "the platform taking forge's tokens" "$P/identity/InternalTokenFilter.java" platform-service InternalTokenFilterTest \
+    's/new InternalTokenVerifier\(keys, InternalToken\.AUDIENCE_PLATFORM\)/new InternalTokenVerifier(keys, InternalToken.AUDIENCE_FORGE)/'
+mutate "a handle stored as typed" "$P/account/Handle.java" platform-service HandleTest \
+    's/String handle = raw\.toLowerCase\(Locale\.ROOT\);/String handle = raw;/'
+mutate "a handle starting wexy claimed" "$P/account/Handle.java" platform-service HandleTest \
+    's/if \(reserved\.contains\(handle\) \|\| reservedPrefixes\.stream\(\)\.anyMatch\(handle::startsWith\)\) \{/if (reserved.contains(handle)) {/'
+mutate "a look-alike handle taken" "$P/account/Handle.java" platform-service HandleTest \
+    's/Pattern\.compile\("\[A-Za-z0-9_\]\{3,30\}"\)/Pattern.compile("(?U)\\\\w{3,30}")/'
+mutate "a change made for another account written" "$P/account/Accounts.java" platform-service AccountRoutesTest \
+    's/if \(!account\.id\(\)\.equals\(patch\.accountId\(\)\)\) \{/if (false) {/'
+mutate "a change that names no account taken" "$P/account/ProfilePatch.java" platform-service AccountRoutesTest \
+    's/if \(account == null \|\| !account\.isTextual\(\) \|\| !Ulid\.looksLikeOne\(account\.textValue\(\)\)\) \{/if (false) {/'
+mutate "a second tab's claim judged as a change" "$P/account/Accounts.java" platform-service AccountRoutesTest \
+    's/if \(patch\.expectedVersion\(\) != current\.rowVersion\(\)\) \{/if (false) {/'
+mutate "a claimed handle changed" "$P/account/Accounts.java" platform-service AccountRoutesTest \
+    's/if \(handle != null && !handle\.equals\(wanted\)\) \{/if (false) {/'
+mutate "a bootstrap taking a client's fields" "$P/account/AccountHandler.java" platform-service AccountRoutesTest \
+    's/return body != null && body\.isObject\(\) && body\.isEmpty\(\);/return body != null \&\& body.isObject();/'
+mutate "a profile change taking an owner or a status" "$P/account/ProfilePatch.java" platform-service AccountRoutesTest \
+    's/if \(!FIELDS\.contains\(name\)\) \{/if (false) {/'
+mutate "text past its column" "$P/account/ProfilePatch.java" platform-service AccountRoutesTest \
+    's/if \(value\.codePointCount\(0, value\.length\(\)\) > maxCodePoints\) \{/if (false) {/'
+mutate "a control character in a display name" "$P/account/ProfilePatch.java" platform-service AccountRoutesTest \
+    's/if \(Character\.isISOControl\(c\) \|\| \(c >= Character\.MIN_SURROGATE && c <= Character\.MAX_SURROGATE\)\) \{/if (false) {/'
+mutate "a direction override in a display name" "$P/account/ProfilePatch.java" platform-service AccountRoutesTest \
+    's/if \(c == 0x2028 \|\| c == 0x2029 \|\| \(c >= 0x202A && c <= 0x202E\) \|\| \(c >= 0x2066 && c <= 0x2069\)\) \{/if (false) {/'
+mutate "an account key optional in prod" "$P/account/SubjectKey.java" platform-service SubjectKeyTest \
+    's/if \(required\) \{/if (false) {/'
+mutate "a subject stored as its uid" "$P/account/SubjectKey.java" platform-service SubjectKeyTest \
+    's/return HexFormat\.of\(\)\.formatHex\(mac\.doFinal\(uid\.getBytes\(StandardCharsets\.UTF_8\)\)\);/return uid;/'
+mutate "a profile written at any version" "$P/account/JdbcAccountStore.java" platform-service JdbcAccountStoreTest \
+    's/\n\s*AND row_version = :expected//'
+mutate "a claimed handle overwritten in the database" "$P/account/JdbcAccountStore.java" platform-service JdbcAccountStoreTest \
+    's/\n\s*AND \(handle_normalized IS NULL OR handle_normalized = :handle\)//'
+mutate "an inactive account's profile written" "$P/account/JdbcAccountStore.java" platform-service JdbcAccountStoreTest \
+    's/\n\s*AND account_id IN \(SELECT id FROM account WHERE id = :id AND status = \x27ACTIVE\x27\)//'
+mutate "a transaction that cannot start answered 500" "$P/error/ErrorEnvelopeHandler.java" platform-service ErrorEnvelopeHandlerTest \
+    's/ \|\| causedBy\(error, TransactionException\.class\)\n\s*\|\| causedBy\(error, SQLException\.class\)/\n               /'
+mutate "the database's queue bound per thread" "$P/database/DatabaseScheduler.java" platform-service DatabaseSchedulerTest \
+    's/Math\.max\(1, queuedCalls \/ poolSize\)/queuedCalls/'
+mutate "the account read without a token" "$P/identity/InternalTokenFilter.java" platform-service InternalTokenFilterTest \
+    's/"GET \/v1\/showcase", /"GET \/v1\/showcase", "GET \/v1\/me", /'
+mutate "a deadlock's victim answered 503" "$P/account/JdbcAccountStore.java" platform-service JdbcAccountStoreTest \
+    's/static final int DEADLOCK_ATTEMPTS = 4;/static final int DEADLOCK_ATTEMPTS = 1;/'
+mutate "two accounts for one subject" "$M" platform-service JdbcAccountStoreTest \
+    's/\n\s*UNIQUE KEY account_subject \(subject_hmac\),//'
+mutate "two owners for one handle" "$M" platform-service JdbcAccountStoreTest \
+    's/\n\s*UNIQUE KEY profile_handle \(handle_normalized\),//'
 
 echo "$ran mutation(s)${DRY:+, a dry run}"
 exit $status

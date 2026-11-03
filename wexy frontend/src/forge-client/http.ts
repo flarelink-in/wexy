@@ -11,17 +11,29 @@ import type { Identity } from './identity';
  * The routes where the gateway spends the App Check token, so each request needs a limited-use token of its
  * own: a cached one would pass once and be refused as a replay after. The gateway's ForgeRoutesTest pins the
  * same routes there (the agent turn's since EA2.4, a module call's since EA4.2, a model's review since EA6.4);
- * test/http.test.mjs pins them here.
+ * test/http.test.mjs pins them here. Since W2 (the creations platform design §10) the platform's: an account's
+ * bootstrap and deletion, a submission to the showcase and the waitlist; a world's save (POST /v1/worlds) left the set
+ * and takes the cached token. A `{id}` stands for one path segment.
  */
-export const SINGLE_USE_ROUTES: readonly string[] = ['POST /v1/forge/plan', 'POST /v1/agent/turn', 'POST /v1/agent/module', 'POST /v1/agent/review', 'POST /v1/worlds'];
+export const SINGLE_USE_ROUTES: readonly string[] = ['POST /v1/forge/plan', 'POST /v1/agent/turn', 'POST /v1/agent/module',
+    'POST /v1/agent/review', 'POST /v1/me', 'DELETE /v1/me', 'POST /v1/worlds/{id}/submissions', 'POST /v1/waitlist'];
+
+/** Each route of {@link SINGLE_USE_ROUTES} as its method and a whole-path pattern, `{id}` one segment. */
+const SINGLE_USE_PATTERNS = SINGLE_USE_ROUTES.map(route => {
+    const [method, path] = route.split(' ');
+    const pattern = path.split('/').map(part => (part === '{id}' ? '[^/]+' : part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).join('/');
+    return { method, path: new RegExp(`^${pattern}$`) };
+});
 
 export function needsSingleUseAppCheck(method: string, path: string): boolean {
     const pathname = decodeURIComponent(new URL(path, 'https://gateway.invalid').pathname);
-    return SINGLE_USE_ROUTES.includes(`${method.toUpperCase()} ${pathname}`);
+    const verb = method.toUpperCase();
+    return SINGLE_USE_PATTERNS.some(route => route.method === verb && route.path.test(pathname));
 }
 
 export interface ApiRequest {
-    method: 'GET' | 'POST';
+    /** PATCH and DELETE since W2: the platform's profile and world edits and deletions. */
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
     /** A gateway path, starting /v1/. */
     path: string;
     /** Sent as JSON. */

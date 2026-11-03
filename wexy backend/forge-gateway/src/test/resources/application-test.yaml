@@ -8,6 +8,9 @@ spring:
 wexy:
   forge-service:
     url: http://127.0.0.1:1
+  # Another refusing port, so a test can tell which service a route leads to by its address alone (W2).
+  platform-service:
+    url: http://127.0.0.1:2
   firebase:
     required: false
   cors:

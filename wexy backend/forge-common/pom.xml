@@ -11,9 +11,14 @@
 
 	<artifactId>forge-common</artifactId>
 	<name>forge-common</name>
-	<description>What both services must agree on byte for byte: error codes and the internal token's names.</description>
+	<description>What every service must agree on byte for byte: error codes, ids, and the internal token's names and checks.</description>
 
 	<dependencies>
+		<!-- W2: the internal token's one verifier (InternalTokenVerifier), so forge and platform check it alike. -->
+		<dependency>
+			<groupId>com.nimbusds</groupId>
+			<artifactId>nimbus-jose-jwt</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.junit.jupiter</groupId>
 			<artifactId>junit-jupiter</artifactId>

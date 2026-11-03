@@ -561,7 +561,8 @@ class AgentRoutesTest {
     static String token(String uid) {
         try {
             long now = System.currentTimeMillis();
-            JWTClaimsSet claims = new JWTClaimsSet.Builder().issuer(InternalToken.ISSUER).subject(uid)
+            JWTClaimsSet claims = new JWTClaimsSet.Builder().issuer(InternalToken.ISSUER)
+                    .audience(InternalToken.AUDIENCE_FORGE).subject(uid)
                     .issueTime(new Date(now)).expirationTime(new Date(now + 60_000))
                     .claim(InternalToken.CLAIM_ANONYMOUS, true).claim(InternalToken.CLAIM_ADMIN, false)
                     .claim(InternalToken.CLAIM_PROVIDER, "anonymous").claim(InternalToken.CLAIM_IPK, TestAdmissions.NETWORK).build();

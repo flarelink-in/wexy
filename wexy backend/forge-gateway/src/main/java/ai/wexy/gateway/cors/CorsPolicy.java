@@ -31,15 +31,22 @@ public class CorsPolicy {
 
     private static final Logger log = LoggerFactory.getLogger(CorsPolicy.class);
 
-    /** Every method the routes use, plus OPTIONS for preflight. Wexy's API has no PUT, PATCH or DELETE. */
-    static final List<HttpMethod> ALLOWED_METHODS = List.of(HttpMethod.GET, HttpMethod.POST, HttpMethod.OPTIONS);
+    /**
+     * Every method the routes use, plus OPTIONS for preflight. PATCH and DELETE since W2: the platform's profile and
+     * world edits and deletions (the creations platform design §10). Wexy's API has no PUT.
+     */
+    static final List<HttpMethod> ALLOWED_METHODS = List.of(HttpMethod.GET, HttpMethod.POST, HttpMethod.PATCH,
+            HttpMethod.DELETE, HttpMethod.OPTIONS);
+
+    /** The header a retried save or deletion repeats so it happens once (W2; W3 is its first sender). */
+    static final String IDEMPOTENCY_KEY = "Idempotency-Key";
 
     /**
      * The App Check header is load-bearing: a custom header makes a request non-simple, and one
      * missing here fails the preflight, which the browser reports as an opaque CORS error.
      */
     static final List<String> ALLOWED_HEADERS = List.of(
-            HttpHeaders.AUTHORIZATION, HttpHeaders.CONTENT_TYPE, AppCheckFilter.APP_CHECK_HEADER);
+            HttpHeaders.AUTHORIZATION, HttpHeaders.CONTENT_TYPE, AppCheckFilter.APP_CHECK_HEADER, IDEMPOTENCY_KEY);
 
     /** Readable by the page, so a throttled client can back off instead of guessing. */
     static final List<String> EXPOSED_HEADERS = List.of(

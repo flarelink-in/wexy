@@ -3,8 +3,39 @@
 // earlier epoch is dropped on arrival, so a slow allowance read can never show one account's numbers to another. The
 // session signs no one in by itself: it reads who is there after the creator's own Create or Sign in, and from then on
 // follows changes (another tab's sign-out included) through one listener. The world on the stage is never its business.
+//
+// W2 (the user's choice, 2026-11-03): one bit in the browser, "a Google session is here", written whenever the session
+// learns its kind, so a reload can show a returning creator's account at once. It holds no identity; a fresh or
+// anonymous visitor has none, so for them a page view still loads no Firebase (W1's rule).
 
 import type { AccountPort, Collision, LinkOutcome, SignedIn } from '../forge-client/identity';
+
+/** Where the hint lives: `1`, or nothing. */
+export const GOOGLE_HINT_KEY = 'wexy.googleSession';
+
+/** The one-bit hint that this browser holds a Google session. Storage may be missing or blocked: then it is just false. */
+export interface SessionHint {
+    read(): boolean;
+    write(google: boolean): void;
+}
+
+export const browserHint: SessionHint = {
+    read() {
+        try {
+            return localStorage.getItem(GOOGLE_HINT_KEY) === '1';
+        } catch {
+            return false;
+        }
+    },
+    write(google) {
+        try {
+            if (google) localStorage.setItem(GOOGLE_HINT_KEY, '1');
+            else localStorage.removeItem(GOOGLE_HINT_KEY);
+        } catch {
+            // Storage blocked: a reload shows Sign in until the creator's first click or Create, as in W1.
+        }
+    },
+};
 
 /** Who is signed in: not known yet (before any Create or Sign in), no one, or a provider. */
 export type AccountKind = 'unknown' | 'none' | SignedIn['provider'];
@@ -25,13 +56,20 @@ export class AccountSession {
     private off: (() => void) | null = null;
     private disposed = false;
     private readonly port: AccountPort;
+    private readonly hint: SessionHint;
 
-    constructor(port: AccountPort) {
+    constructor(port: AccountPort, hint: SessionHint = browserHint) {
         this.port = port;
+        this.hint = hint;
     }
 
     get current(): SessionState {
         return this.state;
+    }
+
+    /** Whether this browser held a Google session when last seen (W2): worth reading who is signed in on a page load. */
+    get hinted(): boolean {
+        return this.hint.read();
     }
 
     /** Calls `listener` on every change of account or provider; returns the unsubscribe. */
@@ -92,6 +130,7 @@ export class AccountSession {
     private apply(who: SignedIn | null): void {
         const kind: AccountKind = who ? who.provider : 'none';
         const uid = who?.uid ?? null;
+        this.hint.write(kind === 'google');
         const learning = this.state.kind === 'unknown';
         if (!learning && uid === this.uid && kind === this.state.kind) return;
         this.uid = uid;

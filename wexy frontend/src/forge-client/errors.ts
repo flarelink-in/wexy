@@ -3,10 +3,11 @@
 // added here on the same day (design guidelines §1), and test/errors.test.mjs pins the table. W1 (2026-11-02; the
 // creations platform designs, §10): `content-refused`, an idea content safety refused before any model call, and
 // `quota`, early access's world of the day already made, with Retry-After to the reset. A spent anonymous allowance
-// is the existing `account-required`.
+// is the existing `account-required`. W2 (2026-11-03) brings `conflict` (409) forward from W3: a profile write based on
+// a version that has moved on, or a handle another account holds; the studio reads again and says which.
 
 export type ErrorCode =
-    | 'bad-request' | 'auth' | 'appcheck' | 'account-required' | 'forbidden' | 'not-found' | 'too-large'
+    | 'bad-request' | 'auth' | 'appcheck' | 'account-required' | 'forbidden' | 'not-found' | 'conflict' | 'too-large'
     | 'content-refused' | 'rate' | 'quota' | 'internal' | 'upstream' | 'budget' | 'paused' | 'unavailable' | 'timeout';
 
 /** The HTTP status each code travels with. Several share one, because the studio answers them differently. */
@@ -17,6 +18,7 @@ export const ERROR_STATUS: Readonly<Record<ErrorCode, number>> = {
     'account-required': 403,
     'forbidden': 403,
     'not-found': 404,
+    'conflict': 409,
     'too-large': 413,
     'content-refused': 422,
     'rate': 429,
@@ -42,6 +44,7 @@ export function codeForStatus(status: number): ErrorCode {
         case 401: return 'auth';
         case 403: return 'forbidden';
         case 404: return 'not-found';
+        case 409: return 'conflict';
         case 413: return 'too-large';
         case 429: return 'rate';
         case 502: return 'upstream';

@@ -1,0 +1,7 @@
+# Hermetic: no gateway (port 1 refuses), a test account key that is not a secret. A test that needs a database starts
+# one (Testcontainers) and sets the datasource itself.
+wexy:
+  internal-jwt:
+    jwks-uri: http://127.0.0.1:1/.well-known/jwks.json
+  account:
+    hmac-hex: 7465737474657374746573747465737474657374746573747465737474657374

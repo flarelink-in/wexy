@@ -29,17 +29,38 @@ function fakeFetch(...answers) {
     return { fetchImpl, requests };
 }
 
-test('U15 the single-use App Check routes are exactly the gateway\'s (ForgeRoutesTest: forge-plan, agent-turn, agent-module, agent-review, worlds-publish)', () => {
-    assert.deepEqual([...SINGLE_USE_ROUTES], ['POST /v1/forge/plan', 'POST /v1/agent/turn', 'POST /v1/agent/module', 'POST /v1/agent/review', 'POST /v1/worlds']);
+test('U15 the single-use App Check routes are exactly the gateway\'s (ForgeRoutesTest: forge-plan, agent-turn, agent-module, agent-review, me-bootstrap, me-delete, worlds-submit, waitlist)', () => {
+    assert.deepEqual([...SINGLE_USE_ROUTES], ['POST /v1/forge/plan', 'POST /v1/agent/turn', 'POST /v1/agent/module',
+        'POST /v1/agent/review', 'POST /v1/me', 'DELETE /v1/me', 'POST /v1/worlds/{id}/submissions', 'POST /v1/waitlist']);
     assert.ok(needsSingleUseAppCheck('POST', '/v1/forge/plan'));
     assert.ok(needsSingleUseAppCheck('POST', '/v1/agent/turn'));
     assert.ok(needsSingleUseAppCheck('POST', '/v1/agent/module'));
     // EA6.4: a model's review spends its token; its terms (GET) do not.
     assert.ok(needsSingleUseAppCheck('POST', '/v1/agent/review'));
-    assert.ok(needsSingleUseAppCheck('post', '/v1/worlds?draft=1'));
-    for (const [m, p] of [['POST', '/v1/forge/author'], ['POST', '/v1/worlds/abc/complete'], ['GET', '/v1/worlds'], ['GET', '/v1/forge/plan'], ['GET', '/v1/agent/turn'], ['POST', '/v1/agent/turns'], ['GET', '/v1/agent/review']]) {
+    // W2 (the creations platform design §10): the platform's, a world's id standing for its one segment.
+    assert.ok(needsSingleUseAppCheck('post', '/v1/me'));
+    assert.ok(needsSingleUseAppCheck('DELETE', '/v1/me?x=1'));
+    assert.ok(needsSingleUseAppCheck('POST', '/v1/worlds/01JC3W5F6Q7R8S9T0V1W2X3Y4Z/submissions'));
+    assert.ok(needsSingleUseAppCheck('POST', '/v1/waitlist'));
+    for (const [m, p] of [['POST', '/v1/forge/author'], ['POST', '/v1/worlds'], ['POST', '/v1/worlds?draft=1'], ['POST', '/v1/worlds/abc/complete'],
+        ['GET', '/v1/worlds'], ['GET', '/v1/forge/plan'], ['GET', '/v1/agent/turn'], ['POST', '/v1/agent/turns'], ['GET', '/v1/me'],
+        ['PATCH', '/v1/me/profile'], ['POST', '/v1/me/profile'], ['DELETE', '/v1/worlds/abc'], ['POST', '/v1/worlds//submissions'],
+        ['POST', '/v1/worlds/a/b/submissions'], ['GET', '/v1/worlds/abc/submissions'], ['POST', '/v1/worlds/abc/submissions/x'],
+        ['GET', '/v1/agent/review'], ['POST', '/v1/agent/review/x']]) {
         assert.ok(!needsSingleUseAppCheck(m, p), `${m} ${p}`);
     }
+});
+
+test('U39 a PATCH goes as a PATCH with its JSON and the cached App Check token (W2: the profile is not a single-use route)', async () => {
+    const identity = fakeIdentity();
+    const { fetchImpl, requests } = fakeFetch(new Response('{}', { status: 200 }));
+    await createApi(CONFIG, identity, fetchImpl).send({ method: 'PATCH', path: '/v1/me/profile', body: { expectedVersion: 0, handle: 'nova' }, auth: true });
+    const [r] = requests;
+    assert.equal(r.method, 'PATCH');
+    assert.equal(r.url, 'http://localhost:8400/v1/me/profile');
+    assert.equal(r.body, '{"expectedVersion":0,"handle":"nova"}');
+    assert.equal(r.headers['content-type'], 'application/json');
+    assert.deepEqual(identity.calls, ['auth', 'appcheck cached']);
 });
 
 test('U16 a signed-in POST carries the ID token, a fresh limited-use App Check token, and JSON', async () => {
@@ -60,7 +81,7 @@ test('U16 a signed-in POST carries the ID token, a fresh limited-use App Check t
 });
 
 test('U36 App Check policy follows the resolved path, not its unnormalised spelling', async () => {
-    for (const path of ['/v1/forge/x/../plan', '/v1/forge/%70lan', '/v1/worlds#draft']) {
+    for (const path of ['/v1/forge/x/../plan', '/v1/forge/%70lan', '/v1/me#draft', '/v1/worlds/abc/%73ubmissions']) {
         const identity = fakeIdentity();
         const { fetchImpl } = fakeFetch();
         await createApi(CONFIG, identity, fetchImpl).send({ method: 'POST', path, auth: true });
