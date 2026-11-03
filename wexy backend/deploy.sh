@@ -3,11 +3,11 @@
 # everything on this machine, Docker copies each module's jar (its Dockerfile) and pushes it. Nothing here deploys:
 # the host pulls (docs/deploy-design.md §10).
 #
-#     bash deploy.sh                    # both images, one version: the pair prod pins later
-#     bash deploy.sh forge-gateway      # one image (prod's WEXY_IMAGE_TAG pins both, so release both before pinning)
+#     bash deploy.sh                    # every image, one version: the set prod pins later
+#     bash deploy.sh forge-gateway      # one image (prod's WEXY_IMAGE_TAG pins them all, so release all before pinning)
 #
 # Each run (the user, 2026-10-31):
-#   1. Docker must be running: the Redis tests and the image builds both need it, so a stopped Docker fails here,
+#   1. Docker must be running: the Redis and MariaDB tests and the image builds need it, so a stopped Docker fails here,
 #      before the tests rather than after them.
 #   2. The version: the newest `org.opencontainers.image.version` label on the images' `latest` in the registry, its
 #      patch bumped (0.0.4 becomes 0.0.5; the first release is 0.0.1). WEXY_VERSION=0.1.0 sets it instead.
@@ -29,7 +29,7 @@
 #     ssh -L 8600:127.0.0.1:8400 "$WEXY_SSH"    # prod: compose.prod.yaml, project wexy, on the laptop's 8600
 set -euo pipefail
 
-ALL=(forge-gateway forge-service)
+ALL=(forge-gateway forge-service platform-service)
 if [ $# -eq 0 ]; then
     MODULES=("${ALL[@]}")
 else
@@ -37,8 +37,8 @@ else
 fi
 for MODULE in "${MODULES[@]}"; do
     case "$MODULE" in
-        forge-gateway|forge-service) ;;
-        *) echo "usage: bash deploy.sh [forge-gateway] [forge-service]   (none: both)" >&2; exit 2 ;;
+        forge-gateway|forge-service|platform-service) ;;
+        *) echo "usage: bash deploy.sh [forge-gateway] [forge-service] [platform-service]   (none: all three)" >&2; exit 2 ;;
     esac
 done
 # A registry path, not a URL: an image name cannot carry https://, so a pasted login address is trimmed.
@@ -52,7 +52,7 @@ case "${OSTYPE:-}" in
 esac
 
 if ! docker info >/dev/null 2>&1; then
-    echo "docker is not running: the Redis tests and the image builds both need it" >&2
+    echo "docker is not running: the Redis and MariaDB tests and the image builds need it" >&2
     exit 1
 fi
 
@@ -69,7 +69,7 @@ if [ -n "${WEXY_VERSION:-}" ]; then
     [[ "$NEW" =~ $SEMVER ]] || { echo "WEXY_VERSION must be major.minor.patch, not $NEW" >&2; exit 2; }
     echo "version: $NEW (WEXY_VERSION)"
 else
-    # The newest across both images, so a release of one module never reuses the other's number.
+    # The newest across every image, so a release of one module never reuses another's number.
     CURRENT=$(for M in "${ALL[@]}"; do version_of "$REGISTRY/$M"; echo; done | tr -d '\r' | grep -E "$SEMVER" | sort -V | tail -n 1 || true)
     if [ -n "$CURRENT" ]; then
         IFS=. read -r MAJOR MINOR PATCH <<< "$CURRENT"
@@ -81,7 +81,7 @@ else
     fi
 fi
 
-echo "maven: clean validate install, every test, the Redis ones on Testcontainers"
+echo "maven: clean validate install, every test, the Redis and MariaDB ones on Testcontainers"
 ./mvnw -B -ntp clean validate install -Predis-tests
 
 # The labels say which build an image is: `docker image inspect <image>` on the host.
@@ -118,10 +118,10 @@ done
 
 echo "pushed ${MODULES[*]} as $NEW and latest. On the host (docs/deploy-design.md §10):"
 echo "  dev, on latest:"
-echo "    infisical run --env=dev -- docker compose -f compose.dev.yaml -f compose.tunnel.yaml pull"
-echo "    infisical run --env=dev -- docker compose -f compose.dev.yaml -f compose.tunnel.yaml up -d"
+echo "    infisical run --env=dev -- docker compose -f compose.dev.yaml -f compose.platform.yaml -f compose.tunnel.yaml pull"
+echo "    infisical run --env=dev -- docker compose -f compose.dev.yaml -f compose.platform.yaml -f compose.tunnel.yaml up -d"
 echo "  prod, pinned, once $NEW has run on dev:"
 echo "    WEXY_IMAGE_TAG=$NEW infisical run --env=prod -- docker compose -f compose.prod.yaml -f compose.tunnel.yaml up -d"
 if [ ${#MODULES[@]} -lt ${#ALL[@]} ]; then
-    echo "note: only ${MODULES[*]} has $NEW, and prod's WEXY_IMAGE_TAG pins both images: release both before pinning."
+    echo "note: only ${MODULES[*]} has $NEW, and prod's WEXY_IMAGE_TAG pins every image: release all before pinning."
 fi

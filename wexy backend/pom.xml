@@ -20,12 +20,13 @@
 	<version>0.1.0-SNAPSHOT</version>
 	<packaging>pom</packaging>
 	<name>wexy-backend</name>
-	<description>Wexy's server half: forge-gateway and forge-service.</description>
+	<description>Wexy's server half: forge-gateway, forge-service and (since W2) platform-service.</description>
 
 	<modules>
 		<module>forge-common</module>
 		<module>forge-gateway</module>
 		<module>forge-service</module>
+		<module>platform-service</module>
 	</modules>
 
 	<properties>

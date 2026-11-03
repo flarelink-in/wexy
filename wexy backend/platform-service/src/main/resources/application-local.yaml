@@ -1,0 +1,17 @@
+# Local development: compose.local.yaml's MariaDB on 127.0.0.1:3316, with its non-secret local account, and a
+# non-secret account key. The repository's untracked .env may override either; only this profile reads it, so tests
+# never pick up a real secret.
+spring:
+  config:
+    import: "optional:file:.env[.properties],optional:file:../.env[.properties]"
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mariadb://127.0.0.1:3316/wexy_platform}
+    username: ${SPRING_DATASOURCE_USERNAME:wexy_platform}
+    # Not a secret: compose.local.yaml's, a database on this laptop's loopback alone.
+    password: ${SPRING_DATASOURCE_PASSWORD:local-dev-not-a-secret}
+
+wexy:
+  account:
+    # Not a secret: the ASCII of "local-dev-not-a-secret-acct-key1", so the local stack keys accounts as a deployment
+    # does. The local profile never runs anywhere else.
+    hmac-hex: ${WEXY_ACCOUNT_HMAC_KEY:6c6f63616c2d6465762d6e6f742d612d7365637265742d616363742d6b657931}

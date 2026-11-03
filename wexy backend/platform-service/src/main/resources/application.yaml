@@ -1,0 +1,60 @@
+# platform-service (W2; the creations platform design §3). Secrets come from the environment: Infisical in deploys,
+# and locally the untracked .env that the local profile imports. Never publish this service's port: it trusts the
+# gateway's internal token.
+spring:
+  application:
+    name: platform-service
+  # Its own schema in MariaDB (compose.platform.yaml): the same account the database was created with.
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mariadb://localhost:3316/wexy_platform}
+    username: ${SPRING_DATASOURCE_USERNAME:wexy_platform}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+    hikari:
+      # The database scheduler is as wide as this pool (DatabaseScheduler). Two vCPUs and one MariaDB: a few
+      # connections are plenty, and every one held is memory on the host.
+      maximum-pool-size: 4
+      minimum-idle: 1
+      # Proposed bounds (§11): a connection in 2 s or none, so a lost database answers 503 quickly.
+      connection-timeout: 2000
+      validation-timeout: 1000
+      max-lifetime: 600000
+  jdbc:
+    template:
+      query-timeout: 2s
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  # A world's save, from W3, is the largest body (§11's 768 KiB envelope); the gateway caps every other route at 256 KiB.
+  codec:
+    max-in-memory-size: 768KB
+
+server:
+  port: 8430
+
+wexy:
+  internal-jwt:
+    # The gateway's published key set (InternalToken.JWKS_PATH).
+    jwks-uri: ${WEXY_GATEWAY_URL:http://localhost:8400}/.well-known/jwks.json
+  # Calls waiting for the database past the pool: more is refused at once, as 503 (DatabaseScheduler).
+  database:
+    queued-calls: 64
+  account:
+    # 32 random bytes as 64 hex characters, from Infisical: platform's own, never forge's uid key. Never rotated on
+    # deploy: a new key makes every account unreachable (a rotation is a version and a migration). The prod profile
+    # refuses to start without it.
+    hmac-hex: ${WEXY_ACCOUNT_HMAC_KEY:}
+    hmac-version: 1
+    key-required: false
+    policy-version: 1
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      show-details: never
+  metrics:
+    tags:
+      application: platform-service
