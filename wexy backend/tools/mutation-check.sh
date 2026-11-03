@@ -444,5 +444,90 @@ mutate "content safety starting without its key" "$C/AzureContentSafety.java" fo
 mutate "the recorded verdicts in a deployment" "$C/RecordedContentSafety.java" forge-service ContentSafetyProfilesTest \
     's/\@Profile\(\{"local", "test"\}\)/\@Profile({"local", "test", "prod"})/'
 
+# EA6.4 (the frontend's visual-review design §9.1; Q62's gates, Q112 (a)): a model's review refuses before any record or
+# charge while a gate is unverified; its frames are checked whole and never echoed; an answer is a verdict only when it
+# keeps its rules and has its usage; images are bounded in the reservation, inline, and blanked in every excerpt; the
+# review's route alone takes a larger body, and spends its App Check token.
+V=$S/agent
+mutate "a review with a gate unverified" "$V/ReviewHandler.java" forge-service ReviewRoutesTest \
+    's/        if \(unmet != null\) \{/        if (false) {/'
+# The independent review of EA6.4: a contributor-mode model keeps the privacy gate shut (R13); only a probe report's name
+# opens the probe's two gates.
+mutate "a contributor model reviewed" "$V/ReviewHandler.java" forge-service ReviewRoutesTest \
+    's/gates\.put\("privacy", gates\.get\("privacy"\) && "standard"\.equals\(mode\(model\(\)\)\)\);/gates.put("privacy", gates.get("privacy"));/'
+mutate "any value opens the probe's gates" "$V/ReviewProperties.java" forge-service ReviewRoutesTest \
+    's/if \(!probe\.isEmpty\(\) && !PROBE_REPORT\.matcher\(probe\)\.matches\(\)\) \{/if (false) {/'
+mutate "an unverified gate reported verified" "$V/ReviewProperties.java" forge-service ReviewRoutesTest \
+    's/gates\.put\("metering", imageTokens != null\);/gates.put("metering", true);/'
+mutate "a frame's hash not checked" "$V/ReviewRequest.java" forge-service ReviewRequestTest \
+    's/if \(!sha256\.equals\(sha256\(jpeg\)\)\) \{/if (false) {/'
+mutate "a frame of another size" "$V/ReviewRequest.java" forge-service ReviewRequestTest \
+    's/if \(whole\.width\(\) != WIDTH \|\| whole\.height\(\) != HEIGHT\) \{/if (false) {/'
+# The base64's length bounds the bytes before they are decoded, and the decoded length again: one byte over must
+# pass both to be taken, so both move together (either alone is held by the other).
+mutate "a frame one byte over" "$V/ReviewRequest.java" forge-service ReviewRequestTest \
+    's/if \(text\.length\(\) > MAX_BASE64_CHARS\) \{/if (text.length() > MAX_BASE64_CHARS + 4) {/; s/if \(bytes\.length > MAX_JPEG_BYTES\) \{/if (bytes.length > MAX_JPEG_BYTES + 1) {/'
+mutate "a cut JPEG taken" "$V/ReviewRequest.java" forge-service ReviewRequestTest \
+    's/ \|\| \(b\[n - 2\] & 0xFF\) != 0xFF \|\| \(b\[n - 1\] & 0xFF\) != 0xD9\) \{/) {/'
+# The outside review of EA6.4: a frame is a whole image, its structure walked to its end and its image decoded.
+mutate "a frame's image not decoded" "$V/ReviewRequest.java" forge-service ReviewRequestTest \
+    's/String undecodable = undecodable\(whole\);/String undecodable = null;/'
+mutate "a decoder's warning taken" "$V/ReviewRequest.java" forge-service ReviewRequestTest \
+    's/if \(!warnings\.isEmpty\(\)\) \{/if (false) {/'
+mutate "a frame's metadata decoded" "$V/ReviewRequest.java" forge-service ReviewRequestTest \
+    's/if \(!metadata\) \{/if (true) {/'
+mutate "a frame's scans unbounded" "$V/ReviewRequest.java" forge-service ReviewRequestTest \
+    's/if \(whole\.scans\(\) > MAX_SCANS\) \{/if (false) {/'
+mutate "a scan with no data taken" "$V/ReviewRequest.java" forge-service ReviewRequestTest \
+    's/if \(j == end\) \{/if (false) {/'
+mutate "a second frame header taken" "$V/ReviewRequest.java" forge-service ReviewRequestTest \
+    's/if \(components != null\) \{/if (false) {/'
+mutate "bytes after a frame's end taken" "$V/ReviewRequest.java" forge-service ReviewRequestTest \
+    's/if \(i != n - 2\) \{/if (false) {/'
+mutate "a consent to another policy" "$V/ReviewRequest.java" forge-service ReviewRequestTest \
+    's/\n                \|\| !policyVersion\.equals\(consent\.path\("policyVersion"\)\.asText\(null\)\)\) \{/) {/'
+mutate "a review of one module's subject" "$V/ReviewRequest.java" forge-service ReviewRequestTest \
+    's/(for \(String key : List\.of\("module", "interfaceHash", "codeHash"\)\) \{\n            )if \(!s\.path\(key\)\.isNull\(\)\) \{/${1}if (false) {/'
+mutate "a pass with issues" "$V/ReviewHandler.java" forge-service ReviewRoutesTest \
+    's/if \("pass"\.equals\(verdict\) && count > 0\) \{/if (false) {/'
+mutate "a module the request did not name" "$V/ReviewHandler.java" forge-service ReviewRoutesTest \
+    's/if \(!modules\.contains\(m\.asText\(\)\)\) \{/if (false) {/'
+mutate "a verdict without usage" "$V/ReviewHandler.java" forge-service ReviewRoutesTest \
+    's/        if \(usage == null\) \{/        if (false) {/'
+mutate "another caller's turn reviewed" "$V/ReviewHandler.java" forge-service ReviewRoutesTest \
+    's/ && g\.uid\(\)\.equals\(caller\.uid\(\)\)\);\n        if \(!owned\)/);\n        if (!owned)/'
+mutate "a turn's owner asked after its frames" "$V/ReviewRequest.java" forge-service ReviewRequestTest \
+    's/        owner\.accept\(turnId\);\n//'
+mutate "text after a verdict taken" "$V/ReviewHandler.java" forge-service ReviewRoutesTest \
+    's/new ObjectMapper\(\)\.enable\(DeserializationFeature\.FAIL_ON_TRAILING_TOKENS\);/new ObjectMapper();/'
+mutate "text after a probe's verdict taken" "$V/VisionProbe.java" forge-service VisionProbeTest \
+    's/new ObjectMapper\(\)\.enable\(com\.fasterxml\.jackson\.databind\.DeserializationFeature\.FAIL_ON_TRAILING_TOKENS\);/new ObjectMapper();/'
+mutate "a module named twice in an issue" "$V/ReviewHandler.java" forge-service ReviewRoutesTest \
+    's/\} else if \(!named\.add\(m\.asText\(\)\)\) \{/} else if (false) {/'
+mutate "an image's bound left out" "$V/ReviewHandler.java" forge-service ReviewRoutesTest \
+    's/images\.add\(new ChatMessage\.Image\(f\.jpeg\(\), review\.imageTokens\(\)\)\);/images.add(new ChatMessage.Image(f.jpeg(), 1));/'
+mutate "an answer cut at its cap taken" "$V/ReviewHandler.java" forge-service ReviewRoutesTest \
+    's/if \("length"\.equals\(finish\)\) \{/if (false) {/'
+mutate "a declined answer taken" "$V/ReviewHandler.java" forge-service ReviewRoutesTest \
+    's/if \(finish != null && !"stop"\.equals\(finish\)\) \{/if (false) {/'
+mutate "a review outside its turn's prompt" "$V/ReviewHandler.java" forge-service ReviewRoutesTest \
+    's/admission\.review\(caller, r\.turnId\(\), r\.request\(\)\.prompt\(\)\);/caller.uid();/'
+mutate "reviews past their budget" "$A/PromptGrants.java" forge-service ReviewRoutesTest \
+    's/case REVIEW -> properties\.reviewCalls\(\);/case REVIEW -> Long.MAX_VALUE;/'
+mutate "the review's body read unbounded" "$V/ReviewHandler.java" forge-service ReviewRoutesTest \
+    's/, ReviewRequest\.MAX_REQUEST_BYTES\)\n                \.map/)\n                .map/'
+mutate "an image charged as free" "$S/models/ModelCatalog.java" forge-service ModelCatalogTest \
+    's/tokens = Math\.addExact\(tokens, image\.boundTokens\(\)\);/tokens = Math.addExact(tokens, 0);/'
+mutate "a frame echoed in a log" "$S/upstream/MetaApiClient.java" forge-service MetaApiClientTest \
+    's/clean = blankDataUrls\(clean\);/clean = clean.strip();/'
+mutate "an image sent as a remote URL" "$S/upstream/MetaApiClient.java" forge-service MetaApiClientTest \
+    's/\.put\("url", "data:image\/jpeg;base64," \+ /.put("url", "https:\/\/example.invalid\/" + /'
+mutate "every route takes the review's body" "$G/shield/GatewayShieldProperties.java" forge-gateway ForgeRoutesTest \
+    's/Long route = routes\.get\(method \+ " " \+ path\);/Long route = 1_048_576L;/'
+mutate "the guard caps every route alike" "$G/shield/RequestGuardFilter.java" forge-gateway GatewayShieldTests \
+    's/return properties\.getBody\(\)\.limitFor\(request\.getMethod\(\)\.name\(\), request\.getPath\(\)\.pathWithinApplication\(\)\.value\(\)\);/return properties.getBody().getMaxBytes();/'
+mutate "the review's token cached" "$G/routes/ForgeRoutes.java" forge-gateway ForgeRoutesTest \
+    's/(\.filter\(rateLimits\.byClient\("agent-review"\)\)\n                \.filter\(appCheck)\.singleUse\(\)\)/${1})/'
+
 echo "$ran mutation(s)${DRY:+, a dry run}"
 exit $status

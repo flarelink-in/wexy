@@ -35,6 +35,12 @@
 // derived, the whole plan is held to them, then each note goes where its module is: a body this candidate keeps (its
 // interface unchanged) is repaired with the note as its finding, about that very body; a module to be written is
 // authored with the note, once. A note to a module the program does not name refuses the plan whole, before any call.
+//
+// EA6.4 (visual-review-design.md §9.1; Q112 (a), decided 2026-11-03): a model's review of the candidate on the stage is
+// one call this session reserves (Q_C's `review`), dispatches and settles (`modelReview`); the caller builds its body and
+// the review client checks its answer. Its verdict is recorded as E_v by the model only while the candidate it looked at
+// is still the one sealed here; a late answer keeps its accounting and nothing else. Its issues are findings "Improve it"
+// may cite, as the host's are: advice the creator chooses, never applied alone.
 
 import { checkBody, compileBody, BODY_CHECKER, type CheckedBody, type CompiledBody, type ModuleCompiler } from '../contract/adapters/bodies';
 import { canonicalJson } from '../contract/adapters/canonical';
@@ -275,6 +281,8 @@ export interface CandidateState {
     /** The hand-off's turn, then each program revision's. */
     turns: TurnRecord[];
     jobs: JobRecord[];
+    /** A model's reviews of the stage (EA6.4), each one call Q_C counts. */
+    reviews: ReviewCallRecord[];
     /** What judged L3 in this attempt; null when L3 was not run (no compiler, as with no device). */
     l3: L3Judge | null;
     stop: CandidateStop | null;
@@ -330,6 +338,58 @@ export interface ImproveInput {
 export const IMPROVE_FINDINGS = 32;
 export const IMPROVE_WORDS = 400;
 
+/** One model review's call, as the ledger and the bundle tell it (EA6.4). Known when its answer came; unknown otherwise, never zero. */
+export interface ReviewCallRecord {
+    reviewId: string;
+    /** id(C) it looked at. */
+    candidate: string;
+    status: 'running' | 'ok' | 'refused' | 'invalid' | 'broken' | 'cancelled' | 'stale';
+    charge: 'known' | 'unknown';
+    costMicroUsd: number | null;
+    generationId: string | null;
+    model: string | null;
+    promptVersion: string | null;
+    error: string | null;
+}
+
+/** A model's answer, as the review client checked it against what was sent. */
+export interface ModelReviewAnswer {
+    verdict: 'pass' | 'fail';
+    issues: readonly { kind: string; severity: 'error' | 'warning'; sentence: string; scope: string; modules: readonly string[] }[];
+    generationId: string;
+    model: string;
+    promptVersion: string;
+    costMicroUsd: number;
+}
+
+/** A model's review (EA6.4 §9.1): the candidate it is about, the host's findings it carries, and the call. */
+export interface ModelReviewInput {
+    expected: ReviewExpectation;
+    reviewId: string;
+    /** The host's findings about this very candidate that the call sends, by id: the records the verdict stands on. */
+    findings: readonly string[];
+    /** The call under the attempt's signal: the review client's checked answer, or its refusal. */
+    run(signal: AbortSignal): Promise<ModelReviewAnswer>;
+    /**
+     * Asked once the answer is here, before anything is recorded: why the review it answers is no longer the current one
+     * (a newer capture, another world, another device), or null. A reason discards the verdict and keeps the call counted
+     * (§9: "discard a late response if its active review/subject changed, while retaining its call accounting").
+     */
+    still?(): string | null;
+}
+
+/** What came of it: the verdict recorded, or why not, and whether a call went out (then it is counted, whatever happened). */
+export type ModelReviewed = { ok: true; evidence: CandidateEvidence; state: DeepReadonly<CandidateState> } | { ok: false; diagnostic: string; dispatched: boolean };
+
+/**
+ * A model's issue as a finding's message: its sentence, and its suggested scope when both fit the backend's 400 code points
+ * (advice for the revision, never authority: §8.2).
+ */
+export function issueMessage(issue: { sentence: string; scope: string; modules: readonly string[] }): string {
+    const whole = `${issue.sentence} (suggested: ${issue.scope}${issue.modules.length ? `, ${issue.modules.join(', ')}` : ''})`;
+    return [...whole].length <= IMPROVE_WORDS ? whole : cutCodePoints(issue.sentence, IMPROVE_WORDS);
+}
+
 export interface CandidateSession {
     /** The current attempt's state; null before the first. */
     readonly state: DeepReadonly<CandidateState> | null;
@@ -361,6 +421,12 @@ export interface CandidateSession {
      * before any call when stale, empty, past 32 findings or 400 characters, or out of budget, the candidate unchanged.
      */
     improve(input: ImproveInput): Promise<Corrected>;
+    /**
+     * A model's review (EA6.4 §9.1): one call, reserved (Q_C's `review`, one of its calls) and dispatched here, its verdict
+     * recorded as E_v by the model only while `expected` is still the candidate sealed here. Refused before any call while
+     * the candidate runs, another review or an improvement is under way, or a budget is spent.
+     */
+    modelReview(input: ModelReviewInput): Promise<ModelReviewed>;
 }
 
 /** The creator's sentence for a refusal or failure the backend reported. */
@@ -433,6 +499,9 @@ class Attempt {
     readonly reuse = new Map<string, ReuseEntry>();
     readonly turns: TurnRecord[];
     readonly jobs: JobRecord[] = [];
+    readonly reviews: ReviewCallRecord[] = [];
+    /** A model's review is in flight (EA6.4): no other paid action starts meanwhile. */
+    reviewing = false;
     readonly active = new Map<string, Active>();
     readonly ledger: Ledger;
     readonly store: EvidenceStore;
@@ -586,6 +655,7 @@ class Attempt {
             budget: this.ledger.state, limits: this.ledger.limits,
             turns: this.turns.map(t => ({ ...t, calls: t.calls.map(c => ({ ...c })) })),
             jobs: this.jobs.map(j => ({ ...j })),
+            reviews: this.reviews.map(r => ({ ...r })),
             l3: this.compiler ? { producedBy: this.compiler.producedBy, gpu: this.compiler.gpu ?? null } : null,
             stop: this.stop, verified: this.verified ? { id: this.verified.id, revision: this.verified.revision } : null,
             startedMs: this.startedMs, endedMs: this.endedMs,
@@ -1275,6 +1345,7 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
             const a = current;
             if (!a || a.closed) return { ok: false, diagnostic: 'no candidate to correct' };
             if (a.running) return { ok: false, diagnostic: 'the candidate is still running: a correction waits until it settles' };
+            if (a.reviewing) return { ok: false, diagnostic: 'EA_REVIEW_BUSY a model\'s review is under way: a correction waits until it answers' };
             const why = a.verify(envelope);
             if (why) return { ok: false, diagnostic: why };
             const held = envelope.findingsAddressed.map(id => a.store.finding(id)!);
@@ -1336,6 +1407,7 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
             if (!a || a.closed) return { ok: false, diagnostic: 'EA_REVIEW_UNAVAILABLE no candidate in this session' };
             if (!deps.revise) return { ok: false, diagnostic: 'EA_REVIEW_UNAVAILABLE no program revision here: this session has no reviser' };
             if (a.running) return { ok: false, diagnostic: 'the candidate is still running: an improvement waits until it settles' };
+            if (a.reviewing) return { ok: false, diagnostic: 'EA_REVIEW_BUSY a model\'s review is under way: an improvement waits until it answers' };
             const why = expectation(a, input.expected);
             if (why) return { ok: false, diagnostic: why };
             const sealed = a.snapshot!;
@@ -1349,7 +1421,10 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
             for (const id of input.findings) {
                 const held = a.store.finding(id);
                 if (!held) return { ok: false, diagnostic: stale('a finding this attempt holds', id) };
-                if (held.record.phase !== 'render') return { ok: false, diagnostic: `${id} is not one of the host's findings about the stage (${held.record.phase})` };
+                // The host's findings, and since EA6.4 a model's issues: each a finding about the stage the creator chose.
+                if (held.record.phase !== 'render' && !(held.record.phase === 'visual' && held.record.producedBy === 'model')) {
+                    return { ok: false, diagnostic: `${id} is not one of the host's or a model's findings about the stage (${held.record.phase})` };
+                }
                 if (held.record.subject.candidate !== sealed.id) return { ok: false, diagnostic: stale(`id(C) ${short(sealed.id)}`, `a finding about ${short(held.record.subject.candidate)} (${id})`) };
                 if (chosen.some(c => c.finding.id === id)) return { ok: false, diagnostic: `a correction cites each finding once: ${id} is cited twice` };
                 chosen.push(held);
@@ -1418,6 +1493,76 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
             }
             return { ok: true, state: a.view(), round: { improved: false, stop, restored } };
         },
+        async modelReview(input) {
+            const a = current;
+            if (!a || a.closed) return { ok: false, diagnostic: 'EA_REVIEW_UNAVAILABLE no candidate in this session', dispatched: false };
+            if (a.running) return { ok: false, diagnostic: 'EA_REVIEW_BUSY an improvement is under way: a review waits until it settles', dispatched: false };
+            if (a.reviewing) return { ok: false, diagnostic: 'EA_REVIEW_BUSY a model\'s review is under way', dispatched: false };
+            const why = expectation(a, input.expected);
+            if (why) return { ok: false, diagnostic: why, dispatched: false };
+            const sealed = a.snapshot!;
+            // The host's findings it sends: the host's look at this very candidate, held now.
+            const refs = new Set<string>();
+            for (const id of input.findings) {
+                const held = a.store.finding(id);
+                if (!held || held.record.phase !== 'render' || held.record.subject.candidate !== sealed.id) {
+                    return { ok: false, diagnostic: stale(`a finding of the host's about id(C) ${short(sealed.id)}`, id), dispatched: false };
+                }
+                refs.add(held.record.id);
+            }
+            // One call, reserved and dispatched together with no await between: a second press finds `reviewing`.
+            const r = a.ledger.reserveReview();
+            if (!r.ok) return { ok: false, diagnostic: budgetDiagnostic(r), dispatched: false };
+            const record: ReviewCallRecord = {
+                reviewId: input.reviewId, candidate: sealed.id, status: 'running', charge: 'unknown', costMicroUsd: null, generationId: null, model: null,
+                promptVersion: null, error: null,
+            };
+            a.reviews.push(record);
+            a.reviewing = true;
+            a.ledger.dispatched(r.reservation);
+            publish(a);
+            let answer: ModelReviewAnswer;
+            try {
+                answer = await input.run(a.controller.signal);
+            } catch (error) {
+                // Its end was not seen, or it was refused: the slot is spent and the charge unknown, never zero (§8.3).
+                a.ledger.settle(r.reservation, null);
+                a.reviewing = false;
+                const text = error instanceof ForgeError ? `${error.code}: ${error.message}` : message(error);
+                record.error = text;
+                record.status = a.closed || (error as Error)?.name === 'AbortError' ? 'cancelled' : error instanceof ForgeError ? 'refused'
+                    : text.startsWith('EA_REVIEW_INVALID') ? 'invalid' : 'broken';
+                publish(a);
+                // The attempt ended under it (a cancel, a newer attempt): the review is stale, not the model's failure.
+                return { ok: false, diagnostic: record.status === 'cancelled' ? `EA_STALE_EVIDENCE the attempt ended while the review ran: ${text}` : text, dispatched: true };
+            }
+            a.ledger.settle(r.reservation, 1);
+            a.reviewing = false;
+            Object.assign(record, { charge: 'known', costMicroUsd: answer.costMicroUsd, generationId: answer.generationId, model: answer.model, promptVersion: answer.promptVersion });
+            // Late: another candidate, or none, since the call went out, or (the outside review of EA6.4) the review it
+            // answers is no longer the current one. Its call is counted; its verdict is recorded nowhere.
+            const superseded = input.still?.() ?? null;
+            const late = a.closed ? 'EA_STALE_EVIDENCE the attempt ended while the review ran' : expectation(a, input.expected)
+                ?? (superseded ? `EA_STALE_EVIDENCE ${superseded}: its answer is discarded` : null);
+            if (late) {
+                record.status = 'stale';
+                record.error = late;
+                publish(a);
+                return { ok: false, diagnostic: late, dispatched: true };
+            }
+            record.status = 'ok';
+            try {
+                const e = a.record({
+                    subject: a.subject({ candidate: sealed.id }), phase: 'visual', verdict: answer.verdict, producedBy: 'model', refs: [...refs],
+                    findings: answer.issues.map(i => ({ code: i.kind.slice(0, 40), path: null, line: null, severity: i.severity, message: issueMessage(i), rung: null, place: null })),
+                }, 'history');
+                publish(a);
+                return { ok: true, evidence: e, state: a.view() };
+            } catch (error) {
+                publish(a);
+                return { ok: false, diagnostic: message(error), dispatched: true };
+            }
+        },
     };
 }
 
@@ -1432,8 +1577,27 @@ function expectation(a: Attempt, e: ReviewExpectation): string | null {
     return null;
 }
 
-/** The bundle's format: what EA4.5's Developer view downloads (the design §9); v2 holds the turns (the EA4.5 review). */
-export const CANDIDATE_BUNDLE = 'wexy-candidate-bundle.v2';
+/**
+ * The bundle's format: what EA4.5's Developer view downloads (the design §9); v2 holds the turns (the EA4.5 review); v3
+ * (Q113 (a), visual-review-design.md §9.1, 2026-11-03) adds the reviews of the stage and their frames. A replay reads both.
+ */
+export const CANDIDATE_BUNDLE = 'wexy-candidate-bundle.v3';
+export const CANDIDATE_BUNDLE_V2 = 'wexy-candidate-bundle.v2';
+/** v3's bounds (Q113 (a)): its reviews' JPEG bytes in all, decoded; a review's frames; the reviews a replay reads. */
+export const BUNDLE_JPEG_BYTES = 600_000;
+export const BUNDLE_FRAMES = 2;
+export const BUNDLE_REVIEWS = 16;
+
+/**
+ * v3's reviews section as this module needs it: the review module (loop/review.ts) fills it, and the agent path never
+ * imports that module (EA-T6), so its records are opaque here.
+ */
+export interface BundleReviewsSection {
+    records: readonly object[];
+    jpegBytes: number;
+    bound: number;
+    omitted: readonly { review: string; frame: string; why: string }[];
+}
 
 /**
  * A candidate as a downloadable bundle (the design §9): the candidate, its bodies, its evidence and its identities;
@@ -1441,9 +1605,10 @@ export const CANDIDATE_BUNDLE = 'wexy-candidate-bundle.v2';
  * hand-off's and each revision's) and the module jobs, so every call Q_C counts has its record. No credential or App
  * Check token is anywhere in a state, so none is here. It holds R and the bodies, so exporting it is a developer's act.
  */
-export function candidateBundle(state: DeepReadonly<CandidateState>) {
+export function candidateBundle(state: DeepReadonly<CandidateState>, reviews: BundleReviewsSection | null = null) {
     const omitted = Object.values(state.omitted).reduce((sum, n) => sum + n, 0);
-    const templates = [...state.turns.map(t => t.promptVersion), ...state.jobs.map(j => j.promptVersion)].filter((v): v is string => v !== null);
+    const templates = [...state.turns.map(t => t.promptVersion), ...state.jobs.map(j => j.promptVersion), ...(state.reviews ?? []).map(r => r.promptVersion)]
+        .filter((v): v is string => v !== null);
     return {
         format: CANDIDATE_BUNDLE,
         attempt: state.attempt,
@@ -1470,9 +1635,13 @@ export function candidateBundle(state: DeepReadonly<CandidateState>) {
                 calls: t.calls.map(c => ({ n: c.n, purpose: c.purpose, charge: c.charge, costMicroUsd: c.costMicroUsd, generationId: c.generationId })), error: t.error,
             })),
             jobs: state.jobs.map(j => ({ jobId: j.jobId, module: j.module, purpose: j.purpose, status: j.status, charge: j.charge, costMicroUsd: j.costMicroUsd, model: j.model, generationId: j.generationId, promptVersion: j.promptVersion })),
+            // A model's reviews (EA6.4): each one call Q_C counts, with its charge.
+            reviews: (state.reviews ?? []).map(r => ({ reviewId: r.reviewId, candidate: r.candidate, status: r.status, charge: r.charge, costMicroUsd: r.costMicroUsd, model: r.model, generationId: r.generationId, promptVersion: r.promptVersion })),
         },
         // What judged L3 (EA5.1): the device and its GPU, a fake, or nothing; each compile verdict is in `evidence`.
         l3: state.l3,
         stop: state.stop,
+        // The reviews of the stage (Q113 (a)): what was judged, its frames when they fit, and what was left out.
+        reviews: reviews ?? { records: [], jpegBytes: 0, bound: BUNDLE_JPEG_BYTES, omitted: [] },
     };
 }

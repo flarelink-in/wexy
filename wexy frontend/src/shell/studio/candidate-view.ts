@@ -19,8 +19,8 @@ import type { DeepReadonly } from '../../contract/engine/frozen';
 import type { ModuleClient } from '../../forge-client/module-client';
 import type { AgentTurnState } from '../../loop/agent-turn';
 import {
-    candidateBundle, createCandidateSession, turnCallsOf, type CandidatePhase, type CandidateSession, type CandidateState, type HandOff, type ModuleState,
-    type Reviser, type TurnRecord,
+    candidateBundle, createCandidateSession, turnCallsOf, type BundleReviewsSection, type CandidatePhase, type CandidateSession, type CandidateState, type HandOff,
+    type ModuleState, type Reviser, type TurnRecord,
 } from '../../loop/candidate';
 import type { CandidateEvidence, EvidenceSubject } from '../../loop/candidate-evidence';
 import type { SealedCandidate } from '../../loop/snapshot';
@@ -100,6 +100,8 @@ export interface CandidateOptions {
     save?: (name: string, text: string) => void;
     /** "Run on this GPU" (EA5.3): the studio's stage. Absent, the panel offers no Run. */
     run?: RunControl;
+    /** The reviews of an attempt's stage as the bundle holds them (Q113 (a)); absent, the bundle's reviews are none. */
+    reviews?: (attempt: string) => BundleReviewsSection | null;
 }
 
 type Candidate = DeepReadonly<CandidateState>;
@@ -108,6 +110,7 @@ export class CandidatePanel {
     readonly el: HTMLElement;
     readonly session: CandidateSession;
     private readonly save: (name: string, text: string) => void;
+    private readonly reviews: ((attempt: string) => BundleReviewsSection | null) | null;
     private readonly compiler: () => ModuleCompiler | null;
     private readonly sub = h('span', { class: 'panel-sub' });
     private readonly l3 = h('p', { class: 'cand-l3' });
@@ -139,6 +142,7 @@ export class CandidatePanel {
 
     constructor(options: CandidateOptions) {
         this.save = options.save ?? ((name, text) => download(new Blob([text], { type: 'application/json' }), name));
+        this.reviews = options.reviews ?? null;
         this.compiler = options.compiler ?? (() => null);
         this.runControl = options.run ?? null;
         this.session = createCandidateSession({ modules: options.modules, revise: options.revise, attemptId: options.attemptId, compiler: this.compiler }, s => {
@@ -221,7 +225,7 @@ export class CandidatePanel {
     /** The candidate as a JSON bundle, saved by the developer's own click. */
     download(): void {
         if (!this.state) return;
-        this.save(`wexy-candidate-${this.state.attempt}.json`, `${JSON.stringify(candidateBundle(this.state), null, 2)}\n`);
+        this.save(`wexy-candidate-${this.state.attempt}.json`, `${JSON.stringify(candidateBundle(this.state, this.reviews?.(this.state.attempt) ?? null), null, 2)}\n`);
     }
 
     dispose(): void {

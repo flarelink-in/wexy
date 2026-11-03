@@ -440,7 +440,32 @@ test('EA-K5 P5: each budget at B runs and at B+1 refuses before its call, the ou
     const L = (over = {}, turn = 0) => new Ledger({ ...Q_C, ...over }, turn);
     // Q84, revised 2026-11-02 after the black hole starter (about eight modules) was stopped at four; Q110 (EA6, the same
     // night): three program revisions and two visual rounds, the 34 calls kept as the cap on everything.
-    assert.deepEqual({ ...Q_C }, { calls: 34, modules: 12, authors: 12, concurrent: 4, repairs: 10, repairsPerModule: 2, revisions: 3, revisionCalls: 6, visualRounds: 2 });
+    // EA6.4 (Q112 (a), 11-03): three reviews by a model an attempt, each one of the 34 calls.
+    assert.deepEqual({ ...Q_C }, { calls: 34, modules: 12, authors: 12, concurrent: 4, repairs: 10, repairsPerModule: 2, revisions: 3, revisionCalls: 6, visualRounds: 2, reviews: 3 });
+    // reviews: 3 run, the fourth refuses before its call; each is a call, settled known.
+    const reviews = L();
+    for (let i = 0; i < 3; i++) {
+        const got = reviews.reserveReview();
+        assert.ok(got.ok, `review ${i + 1}`);
+        reviews.dispatched(got.reservation);
+        reviews.settle(got.reservation, 1);
+    }
+    assert.deepEqual(reviews.reserveReview(), { ok: false, budget: 'reviews', used: 3, limit: 3 });
+    assert.equal(budgetDiagnostic({ budget: 'reviews', used: 3, limit: 3 }), 'EA_TURN_BUDGET reviews: 3 of 3');
+    assert.equal(reviews.state.calls.settled, 3);
+    // A review competes with every paid action: none starts beside it, and it starts beside none.
+    const busy = L();
+    const open = busy.reserveReview();
+    assert.equal(busy.reserveModule('author', 'm0').ok, false);
+    assert.equal(busy.reserveRevision().ok, false);
+    busy.release(open.reservation);
+    assert.equal(busy.state.reviews, 0, 'a review never dispatched is given back');
+    const module = busy.reserveModule('author', 'm0');
+    assert.deepEqual(busy.reserveReview(), { ok: false, budget: 'concurrent', used: 1, limit: 0 });
+    busy.release(module.reservation);
+    // A limits object without reviews allows none (the safe direction).
+    const { reviews: _noReviews, ...beforeReviews } = Q_C;
+    assert.deepEqual(new Ledger(beforeReviews, 0).reserveReview(), { ok: false, budget: 'reviews', used: 0, limit: 0 });
     // calls: 34, the turn's 6 among them.
     const calls = L({ authors: 100, concurrent: 100 }, 6);
     for (let i = 0; i < 28; i++) assert.ok(calls.reserveModule('author', `m${i}`).ok, `call ${7 + i}`);
@@ -774,7 +799,9 @@ test('EA-K12 the evidence bounds: history past its bound is dropped oldest first
     assert.ok(after.evidence.some(e => e.phase === 'candidate'));
     // The bundle declares what it omits, the versions and each call's charge; no credential is anywhere in it.
     const bundle = candidateBundle(after);
-    assert.deepEqual([bundle.format, bundle.candidate, bundle.omitted.records, bundle.omitted.byPhase.visual], ['wexy-candidate-bundle.v2', st.id, 3, 3]);
+    // v3 since Q113 (a) (EA6.4): with the reviews of the stage, none here.
+    assert.deepEqual([bundle.format, bundle.candidate, bundle.omitted.records, bundle.omitted.byPhase.visual], ['wexy-candidate-bundle.v3', st.id, 3, 3]);
+    assert.deepEqual(bundle.reviews, { records: [], jpegBytes: 0, bound: 600_000, omitted: [] });
     assert.deepEqual(bundle.versions.templates, ['agent.v5', 'module.author.v1']);
     assert.equal(bundle.versions.checker, 'ea4-body.v1');
     assert.ok(bundle.calls.jobs.every(j => j.charge === 'known'));

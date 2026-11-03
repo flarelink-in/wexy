@@ -1,0 +1,76 @@
+{
+  "title": "Wexy review verdict, v1",
+  "description": "A model's look at the frames of a world on the stage, judged against the creator's request and the design (the frontend's visual-review design §9, §9.1). A pass has no issues and a fail at least one; each module an issue names is one the request listed. Both sides check what strict output cannot say.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "verdict",
+    "issues"
+  ],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail"
+      ]
+    },
+    "issues": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "severity",
+          "sentence",
+          "scope",
+          "modules"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "floating",
+              "scale",
+              "framing",
+              "exposure",
+              "missing",
+              "style"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning"
+            ]
+          },
+          "sentence": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "program",
+              "modules",
+              "design"
+            ]
+          },
+          "modules": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -29,6 +29,10 @@
 //          frames named, its findings as labelled checkboxes with model-written names as text, "Improve it" only with
 //          words or a finding and then one revision citing exactly them, "Looks right" spending nothing, a busy stage
 //          said in both voices, the panel within 320 px
+//   EA-VR11b (EA6.4) a model's review over the real client and transport and the backend's recorded terms and verdict
+//          (test/fixtures/review-wire), only fetch faked: the disclosure before anything is sent, the creator's consent,
+//          one call with the nine fields, the model's issues as labelled checkboxes with model-written markup as text,
+//          "Improve it" citing exactly the issue kept, the budget counting it, all within 320 px
 
 import '../src/styles/base.css';
 import '../src/styles/studio.css';
@@ -36,6 +40,7 @@ import { createAgentClient, ENGINE_BUNDLE_HASH, type AgentClient, type AgentTurn
 import { readAgentStream, type AgentEvent, type AgentTurnResult } from '../src/forge-client/agent-stream';
 import { createApi } from '../src/forge-client/http';
 import { createModuleClient, type ModuleClient } from '../src/forge-client/module-client';
+import { createReviewClient } from '../src/forge-client/review-client';
 import type { Reviser } from '../src/loop/candidate';
 import { COPY } from '../src/loop/copy';
 import type { StageWorld } from '../src/loop/review';
@@ -58,6 +63,8 @@ import exhaustedDeadlineWire from '../test/fixtures/agent-wire/exhausted-deadlin
 import exhaustedRevisionsWire from '../test/fixtures/agent-wire/exhausted-revisions.sse?raw';
 import handedOffWire from '../test/fixtures/agent-wire/handed-off.sse?raw';
 import revisedWire from '../test/fixtures/agent-wire/revised.sse?raw';
+import reviewTermsJson from '../test/fixtures/review-wire/terms-open.json?raw';
+import reviewFailJson from '../test/fixtures/review-wire/fail.json?raw';
 
 const trap = (window as unknown as { __trap__: { requestAdapter: number; getContext: number; innerHTML: number; armed: boolean } }).__trap__;
 const logEl = document.getElementById('log')!;
@@ -451,7 +458,7 @@ async function candidates(): Promise<void> {
     candidateButton(p, 'Download bundle').click();
     const bundle = saved.length === 1 ? JSON.parse(saved[0].text) : null;
     check('EA-V7 Download bundle saves the candidate: its id, its body, its evidence, each call\'s charge, and no credential', saved.length === 1
-        && saved[0].name === 'wexy-candidate-attempt-1.json' && bundle?.format === 'wexy-candidate-bundle.v2' && (v.id ?? '').includes(bundle.candidate.slice(0, 12))
+        && saved[0].name === 'wexy-candidate-attempt-1.json' && bundle?.format === 'wexy-candidate-bundle.v3' && (v.id ?? '').includes(bundle.candidate.slice(0, 12))
         && bundle.modules[0].body === RECORDED_BODY && bundle.evidence.length === 5 && bundle.calls.jobs[0].charge === 'known'
         && !/Bearer|dev\.anonymous/.test(saved[0]?.text ?? ''), { name: saved[0]?.name, candidate: bundle?.candidate, evidence: bundle?.evidence?.length });
 
@@ -572,7 +579,7 @@ async function candidates(): Promise<void> {
     const revision = revisedBundle?.calls?.turns?.[1];
     const records = revisedBundle ? revisedBundle.calls.turns.reduce((n: number, t: { calls: unknown[] }) => n + t.calls.length, 0) + revisedBundle.calls.jobs.length : -1;
     check('EA-V11 the downloaded bundle holds the revision\'s turn: its call, charge, model and template; each call Q_C settled has its record',
-        revisedBundle?.format === 'wexy-candidate-bundle.v2' && revision?.role === 'revision' && revision.status === 'handed-off' && revision.model === 'muse-spark-1.3'
+        revisedBundle?.format === 'wexy-candidate-bundle.v3' && revision?.role === 'revision' && revision.status === 'handed-off' && revision.model === 'muse-spark-1.3'
         && revision.promptVersion === 'agent.v6' && revision.charge === 'known' && revision.calls.length === 1 && revision.calls[0].purpose === 'revise'
         && revision.calls[0].costMicroUsd === 46_000 && revisedBundle.versions.templates.includes('agent.v6') && records === revisedBundle.calls.budget.calls.settled,
         { turns: revisedBundle?.calls?.turns, templates: revisedBundle?.versions?.templates, records });
@@ -688,7 +695,24 @@ async function capturedPair(shade: number) {
  */
 async function reviewing(): Promise<void> {
     // Loaded only now: the review reads the camera's geometry (src/runtime/camera-path.ts), which EA-V5 keeps off the turn.
-    const [{ ReviewPanel }, { StageReviews }] = await Promise.all([import('../src/shell/studio/review-view'), import('../src/loop/review')]);
+    const [{ ReviewPanel }, { StageReviews, memoryConsent }] = await Promise.all([import('../src/shell/studio/review-view'), import('../src/loop/review')]);
+    // A model's review (EA-VR11b): the real client and transport; fetch answers with the backend's recorded terms, and its
+    // recorded verdict echoing what was sent, a model-written sentence carrying markup.
+    const reviewCalls: { method: string; url: string; body: any }[] = [];
+    const reviewFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const method = init?.method ?? 'GET';
+        const body = typeof init?.body === 'string' ? JSON.parse(init.body) : null;
+        reviewCalls.push({ method, url: String(input), body });
+        if (method === 'GET') return new Response(reviewTermsJson, { status: 200, headers: { 'Content-Type': 'application/json' } });
+        const answer = JSON.parse(reviewFailJson);
+        answer.reviewId = body.reviewId;
+        answer.subject = body.subject;
+        answer.frames = body.frames.map((f: { id: string; sha256: string }) => ({ id: f.id, sha256: f.sha256 }));
+        answer.verdict.issues[0].modules = body.modules.slice(0, 1);
+        answer.verdict.issues[0].sentence = `The castle floats ${MARKED} above the hill in the side view.`;
+        return new Response(JSON.stringify(answer), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as unknown as typeof fetch;
+    const reviewer = createReviewClient(createApi(CONFIG, IDENTITY, reviewFetch));
     const revisions: Parameters<Reviser>[0][] = [];
     // The castle's own kind of correction: the program's sizes halved, no module written again.
     const revise: Reviser = async request => {
@@ -718,6 +742,8 @@ async function reviewing(): Promise<void> {
         session: () => session,
         generation: () => 1,
         busy: () => busy,
+        reviewer: () => reviewer,
+        consent: memoryConsent(),
         onChange: () => view?.render(),
         onDrop: ids => view?.dropped(ids),
     });
@@ -777,6 +803,52 @@ async function reviewing(): Promise<void> {
         approved.phase === 'Looks right' && JSON.stringify(session.state!.budget) === spent
         && session.state!.evidence.some(e => e.phase === 'visual' && e.verdict === 'pass' && e.producedBy === 'creator' && e.subject.candidate === improved.improvedTo)
         && (q('.cand-budget')!.textContent ?? '').startsWith('visual rounds 1 of 2 · calls'), { approved, budget: q('.cand-budget')?.textContent });
+
+    // EA-VR11b, a model's review of the improved world: its terms read once its review reached the session; the
+    // disclosure before anything is sent, and nothing sent until the creator allows it.
+    await until(() => reviews.terms !== null);
+    view.render();
+    const asked = {
+        disclosure: q<HTMLElement>('.rev-disclosure')!.hidden ? null : q('.rev-disclosure')!.textContent,
+        links: [...el.querySelectorAll<HTMLAnchorElement>('.rev-disclosure a')].map(a => [a.href, a.rel, a.target]),
+        agree: button('Allow AI review')?.hidden === false, review: button('Review with AI')?.hidden, posts: reviewCalls.filter(c => c.method === 'POST').length,
+        width: narrow.scrollWidth,
+    };
+    check('EA-VR11b before anything is sent: the provider, what goes, what its policy says, its links, and the creator\'s go; within 320 px',
+        asked.disclosure !== null && asked.disclosure.includes('to Meta\'s model muse-spark-1.3') && asked.disclosure.includes('does not state for how long')
+        && asked.links.length === 3 && asked.links.every(([href, rel, target]) => href.startsWith('https://') && rel === 'noopener noreferrer' && target === '_blank')
+        && asked.agree && asked.review === true && asked.posts === 0 && asked.width <= 320, asked);
+    button('Allow AI review').click();
+    const consented = { review: button('Review with AI')?.hidden, disabled: button('Review with AI')?.disabled, withdraw: button('Withdraw consent')?.hidden };
+    // The host's findings unticked: none is sent, and none goes into the round below.
+    for (const b of el.querySelectorAll<HTMLInputElement>('.rev-findings-box:not([hidden]) .rev-findings:not(.rev-ai-issues) input[type=checkbox]')) if (b.checked) b.click();
+    const spentBefore = session.state!.budget.calls.settled;
+    button('Review with AI').click();
+    await until(() => reviews.latest?.model !== null && !reviews.reviewing, 5_000);
+    view.render();
+    const post = reviewCalls.find(c => c.method === 'POST')!;
+    const issues = [...el.querySelectorAll<HTMLInputElement>('.rev-ai-issues input[type=checkbox]')].map(b => ({ checked: b.checked, tab: b.tabIndex, label: b.closest('label')?.textContent ?? '' }));
+    check('EA-VR11b "Review with AI": one call with the nine fields, the kept JPEGs and no host finding; the model\'s issues as checkboxes, its markup as text',
+        consented.review === false && consented.disabled === false && consented.withdraw === false
+        && reviewCalls.filter(c => c.method === 'POST').length === 1 && post.url.endsWith('/v1/agent/review')
+        && Object.keys(post.body).sort().join() === 'consent,design,frames,hostFindings,modules,request,reviewId,subject,turnId'
+        && post.body.frames.length === 2 && post.body.frames.every((f: { jpeg: string }) => atob(f.jpeg).length === 2048) && post.body.hostFindings.length === 0
+        && post.body.consent.policyVersion === 'meta-standard.2026-11-03' && post.body.subject.candidate === reviews.latest!.candidate
+        && issues.length === 2 && issues.every(i => i.checked && i.tab === 0) && issues[0].label.includes(`floating · error The castle floats ${MARKED} above`)
+        && !el.querySelector('.rev-ai-issues img') && !(window as unknown as { __ran__?: number }).__ran__
+        && session.state!.budget.calls.settled === spentBefore + 1 && (q('.cand-budget')!.textContent ?? '').endsWith('AI reviews 1 of 3')
+        && narrow.scrollWidth <= 320, { consented, post: post && { keys: Object.keys(post.body), frames: post.body.frames.length, findings: post.body.hostFindings }, issues, budget: q('.cand-budget')?.textContent, width: narrow.scrollWidth });
+    // "Improve it" with only the model's floating issue kept: one revision citing exactly it.
+    const aiBoxes = [...el.querySelectorAll<HTMLInputElement>('.rev-ai-issues input[type=checkbox]')];
+    aiBoxes[1].click();
+    button('Improve it').click();
+    await until(() => reviews.latest?.status === 'awaiting-run', 5_000);
+    const second = revisions.at(-1)!;
+    const model = session.state!.evidence.find(e => e.producedBy === 'model' && e.phase === 'visual')!;
+    check('EA-VR11b "Improve it" cites exactly the model\'s issue kept: one revision, its finding the model\'s, the round counted',
+        revisions.length === 2 && second.findings.filter(f => f.code !== 'EA_REPAIR_BUDGET').map(f => f.id).join() === model.findings[0].id
+        && second.findings[0].code === 'floating' && session.state!.budget.visualRounds === 2,
+        { findings: second.findings.map(f => [f.code, f.message]), rounds: session.state!.budget.visualRounds });
 
     // A stage held by a film: the capture refused in both voices, nothing captured.
     busy = 'a film is being made';

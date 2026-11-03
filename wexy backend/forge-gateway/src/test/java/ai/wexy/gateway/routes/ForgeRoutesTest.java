@@ -31,8 +31,8 @@ class ForgeRoutesTest {
     private static final List<String> PUBLIC_READS = List.of("forge-mode", "archive-match", "worlds-read",
             "showcase", "stats");
     private static final List<String> SIGNED_IN = List.of("forge-plan", "forge-author", "forge-repair",
-            "forge-direct", "forge-outcomes", "agent-turn", "agent-module", "forge-allowance", "worlds-publish", "worlds-complete",
-            "worlds-report");
+            "forge-direct", "forge-outcomes", "agent-turn", "agent-module", "agent-review", "agent-review-terms", "forge-allowance",
+            "worlds-publish", "worlds-complete", "worlds-report");
 
     @Autowired
     private RouteLocator routeLocator;
@@ -51,8 +51,8 @@ class ForgeRoutesTest {
         List<String> ids = routeLocator.getRoutes().map(Route::getId).collectList().block();
 
         assertThat(ids).containsExactlyInAnyOrder("forge-plan", "forge-author", "forge-repair", "forge-direct",
-                "forge-outcomes", "agent-turn", "agent-module", "forge-allowance", "forge-mode", "archive-match", "worlds-read",
-                "showcase", "stats", "worlds-publish", "worlds-complete", "worlds-report", "admin");
+                "forge-outcomes", "agent-turn", "agent-module", "agent-review", "agent-review-terms", "forge-allowance", "forge-mode",
+                "archive-match", "worlds-read", "showcase", "stats", "worlds-publish", "worlds-complete", "worlds-report", "admin");
     }
 
     @Test
@@ -63,7 +63,7 @@ class ForgeRoutesTest {
                 .collectList()
                 .block();
 
-        assertThat(spending).containsExactlyInAnyOrder("forge-plan", "agent-turn", "agent-module", "worlds-publish");
+        assertThat(spending).containsExactlyInAnyOrder("forge-plan", "agent-turn", "agent-module", "agent-review", "worlds-publish");
 
         // Spending includes the attestation, so neither runs the plain check as well.
         assertThat(route("forge-plan").getFilters()).doesNotContain(appCheck);
@@ -81,6 +81,54 @@ class ForgeRoutesTest {
         assertThat(filters).contains(appCheck, authorization.anonymousAllowed()).doesNotContain(appCheck.singleUse());
         assertThat(buckets(filters)).containsExactly("account-read", "account-read-user");
         assertThat(route("forge-allowance").getPredicate().toString()).contains("/v1/forge/allowance").contains("GET");
+    }
+
+    /**
+     * EA6.4 (the frontend's visual-review design §9.1): a model's review is one model call with two frames, tiered as a
+     * module call is, a token a review, at an attempt's reviews (AgentTurn.REVIEWS, 3), at the module calls' pace; its
+     * terms are a signed-in read with the cached check, as the allowance's.
+     */
+    @Test
+    void theReviewIsTieredAndItsTermsAreASignedInRead() {
+        RateLimits.Tiered tiered = route("agent-review").getFilters().stream()
+                .filter(f -> f instanceof RateLimits.Tiered)
+                .map(f -> (RateLimits.Tiered) f)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("agent-review has no tiered limiter"));
+        assertThat(tiered.signedIn().bucket()).isEqualTo("agent-review-user");
+        assertThat(tiered.anonymous().bucket()).isEqualTo("agent-review-anonymous");
+        int attempt = ai.wexy.common.AgentTurn.REVIEWS;
+        assertThat(attempt).as("one review before each of two visual rounds and one after (the frontend's Q_C)").isEqualTo(3);
+        GatewayShieldProperties.Bucket anonymous = shield.getBuckets().get("agent-review-anonymous");
+        GatewayShieldProperties.Bucket user = shield.getBuckets().get("agent-review-user");
+        GatewayShieldProperties.Bucket client = shield.getBuckets().get("agent-review");
+        for (GatewayShieldProperties.Bucket b : List.of(anonymous, user, client)) {
+            assertThat(b.getRequestCost()).isEqualTo(1);
+        }
+        assertThat(anonymous.getBurstCapacity()).isEqualTo(attempt);
+        assertThat(anonymous.getRefillPerSecond() * 120).isCloseTo(attempt, org.assertj.core.api.Assertions.within(1e-9));
+        assertThat(user.getBurstCapacity()).isEqualTo(2 * attempt);
+        assertThat(user.getRefillPerSecond() * 60).isCloseTo(attempt, org.assertj.core.api.Assertions.within(1e-9));
+        assertThat(client.getBurstCapacity()).isEqualTo(4 * attempt);
+        assertThat(client.getRefillPerSecond() * 30).isCloseTo(2 * attempt, org.assertj.core.api.Assertions.within(1e-9));
+        assertThat(route("agent-review").getFilters()).contains(appCheck.singleUse()).doesNotContain(appCheck);
+        assertThat(route("agent-review").getPredicate().toString()).contains("/v1/agent/review").contains("POST");
+
+        List<GatewayFilter> terms = route("agent-review-terms").getFilters();
+        assertThat(terms).contains(appCheck, authorization.anonymousAllowed()).doesNotContain(appCheck.singleUse());
+        assertThat(buckets(terms)).containsExactly("review-read", "review-read-user");
+        assertThat(route("agent-review-terms").getPredicate().toString()).contains("/v1/agent/review").contains("GET");
+    }
+
+    /** The review's body cap is its own, 1,048,576 bytes for two frames as base64; every other route keeps 256 KiB. */
+    @Test
+    void onlyTheReviewTakesALargerBody() {
+        GatewayShieldProperties.Body body = shield.getBody();
+        assertThat(body.limitFor("POST", "/v1/agent/review")).isEqualTo(1_048_576L);
+        assertThat(body.limitFor("GET", "/v1/agent/review")).isEqualTo(256 * 1024L);
+        assertThat(body.limitFor("POST", "/v1/agent/review/")).isEqualTo(256 * 1024L);
+        assertThat(body.limitFor("POST", "/v1/agent/module")).isEqualTo(256 * 1024L);
+        assertThat(body.limitFor("POST", "/v1/forge/plan")).isEqualTo(256 * 1024L);
     }
 
     @Test

@@ -102,6 +102,15 @@ public class GatewayShieldProperties {
             Map.entry("agent-module", new Bucket(2.0 * AgentTurn.MODULE_CALLS / 30.0, 4 * AgentTurn.MODULE_CALLS)),
             Map.entry("agent-module-user", new Bucket(AgentTurn.MODULE_CALLS / 60.0, 2 * AgentTurn.MODULE_CALLS)),
             Map.entry("agent-module-anonymous", new Bucket(AgentTurn.MODULE_CALLS / 120.0, AgentTurn.MODULE_CALLS)),
+            // A model's review of the stage is one model call with two frames (EA6.4). An attempt asks for at most
+            // AgentTurn.REVIEWS, so these keep the module buckets' pace: signed in, two attempts' reviews at once, then
+            // one attempt's a minute; anonymous, one attempt's, then one every two minutes; a client, four, then two every
+            // 30 s. Its terms (GET) are cheap reads, paced as the allowance's.
+            Map.entry("agent-review", new Bucket(2.0 * AgentTurn.REVIEWS / 30.0, 4 * AgentTurn.REVIEWS)),
+            Map.entry("agent-review-user", new Bucket(AgentTurn.REVIEWS / 60.0, 2 * AgentTurn.REVIEWS)),
+            Map.entry("agent-review-anonymous", new Bucket(AgentTurn.REVIEWS / 120.0, AgentTurn.REVIEWS)),
+            Map.entry("review-read", new Bucket(2, 30)),
+            Map.entry("review-read-user", new Bucket(0.5, 10)),
             Map.entry("publish", new Bucket(0.1, 10)),
             Map.entry("publish-user", new Bucket(0.05, 5)),
             // W1: the caller's own allowance, read after each Create and sign-in (GET /v1/forge/allowance): cheap reads,
@@ -255,6 +264,27 @@ public class GatewayShieldProperties {
          * at most 64 KB (backend §7), plus a turn or diagnostics; nothing else comes close.
          */
         private long maxBytes = 256 * 1024;
+        /**
+         * Caps for single routes, by {@code "<METHOD> <path>"}, exactly as the request names them: a model's review
+         * carries two JPEGs of at most 300,000 bytes each, as base64 (EA6.4; the frontend's visual-review design §9.1),
+         * so its body may reach 1,048,576 bytes, which forge-service's review route reads to the same bound. Any other
+         * route, and a path written another way, keeps {@link #maxBytes}: the safe side.
+         */
+        private Map<String, Long> routes = new LinkedHashMap<>(Map.of("POST /v1/agent/review", 1_048_576L));
+
+        /** The cap for one request: its route's when it has one, else the default. */
+        public long limitFor(String method, String path) {
+            Long route = routes.get(method + " " + path);
+            return route == null ? maxBytes : route;
+        }
+
+        public Map<String, Long> getRoutes() {
+            return routes;
+        }
+
+        public void setRoutes(Map<String, Long> routes) {
+            this.routes = routes;
+        }
 
         public boolean isEnabled() {
             return enabled;

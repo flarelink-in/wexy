@@ -213,7 +213,8 @@ test('EA-MR5 the EA4.5 review: the hand-off\'s turn and a revision\'s are kept, 
     // Q_C reconciles from the records: each call it settled has one, the turns' and the module job's.
     assert.equal(end.turns.reduce((n, t) => n + t.calls.length, 0) + end.jobs.length, end.budget.calls.settled);
     const bundle = candidateBundle(end);
-    assert.equal(bundle.format, 'wexy-candidate-bundle.v2');
+    // v3 since Q113 (a) (EA6.4): the reviews of the stage beside the turns.
+    assert.equal(bundle.format, 'wexy-candidate-bundle.v3');
     assert.deepEqual(bundle.calls.turns, end.turns);
     // The hand-off's template (this test's), the revision's as recorded (agent.v6 since EA6.3), the module's (this test's).
     assert.deepEqual(bundle.versions.templates, ['agent.v5', 'agent.v6', 'module.author.v1']);

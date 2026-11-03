@@ -34,8 +34,8 @@ import java.util.function.Function;
  *   <li><b>admin:</b> an address budget and the admin allow-list.</li>
  * </ul>
  *
- * Exactly four routes spend App Check tokens, forge-plan, agent-turn, agent-module and worlds-publish;
- * the frontend mints a fresh token only for those (ForgeRoutesTest pins the set). Showcase publishing needs an account,
+ * Exactly five routes spend App Check tokens, forge-plan, agent-turn, agent-module, agent-review (EA6.4) and
+ * worlds-publish; the frontend mints a fresh token only for those (ForgeRoutesTest pins the set). Showcase publishing needs an account,
  * which forge-service checks from the token's {@code anon} claim when publishing (backend §7).
  */
 @Configuration
@@ -71,6 +71,21 @@ public class ForgeRoutes {
                 .filter(appCheck.singleUse())
                 .filter(authorization.anonymousAllowed())
                 .filter(rateLimits.byUserTiered("agent-module-user", "agent-module-anonymous"));
+
+        // A model's review of the world on the stage (EA6.4, the frontend's visual-review design §9.1): one metered call with
+        // two frames, so a single-use App Check token and buckets of its own; its body cap is its own too (RequestGuardFilter).
+        Function<GatewayFilterSpec, UriSpec> agentReview = f -> f
+                .filter(rateLimits.byClient("agent-review"))
+                .filter(appCheck.singleUse())
+                .filter(authorization.anonymousAllowed())
+                .filter(rateLimits.byUserTiered("agent-review-user", "agent-review-anonymous"));
+
+        // Its terms, read before the creator consents: signed in, the cached App Check token (nothing is spent).
+        Function<GatewayFilterSpec, UriSpec> reviewRead = f -> f
+                .filter(rateLimits.byClient("review-read"))
+                .filter(appCheck)
+                .filter(authorization.anonymousAllowed())
+                .filter(rateLimits.byUser("review-read-user"));
 
         Function<GatewayFilterSpec, UriSpec> forgeCreate = f -> f
                 .filter(rateLimits.byClient("forge-create"))
@@ -124,6 +139,10 @@ public class ForgeRoutes {
                         .filters(agentEntry).uri(forgeService))
                 .route("agent-module", r -> r.path("/v1/agent/module").and().method(HttpMethod.POST)
                         .filters(agentModule).uri(forgeService))
+                .route("agent-review", r -> r.path("/v1/agent/review").and().method(HttpMethod.POST)
+                        .filters(agentReview).uri(forgeService))
+                .route("agent-review-terms", r -> r.path("/v1/agent/review").and().method(HttpMethod.GET)
+                        .filters(reviewRead).uri(forgeService))
                 .route("forge-allowance", r -> r.path("/v1/forge/allowance").and().method(HttpMethod.GET)
                         .filters(accountRead).uri(forgeService))
 

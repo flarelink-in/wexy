@@ -238,8 +238,8 @@
 .cand-turn-calls { list-style: none; margin: 2px 0 0; padding: 0 0 0 10px; }
 
 /* the review of the stage (EA6, Developer view): two frames, the host's findings, the creator's answers */
-.rev-status, .rev-why { margin: 0; font-size: 12px; line-height: 1.55; color: var(--text-2); overflow-wrap: anywhere; }
-.rev-why { font-size: 11.5px; color: var(--text-3-strong); }
+.rev-status, .rev-why, .rev-ai-gate, .rev-ai-why { margin: 0; font-size: 12px; line-height: 1.55; color: var(--text-2); overflow-wrap: anywhere; }
+.rev-why, .rev-ai-gate, .rev-ai-why { font-size: 11.5px; color: var(--text-3-strong); }
 .rev-frames { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 8px; }
 .rev-frames:empty { display: none; }
 .rev-frame { margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -266,6 +266,14 @@
 .rev-chips { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
 .rev-chip { height: 24px; padding: 0 9px; font-size: 11px; }
 .rev-count { font: 11px var(--mono); color: var(--text-3-strong); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* A model's review (EA6.4): its gate, the disclosure the creator allows, the button; its issues reuse the findings' look. */
+.rev-ai { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.rev-disclosure { padding: 6px 9px; border: 1px solid var(--line); border-radius: var(--radius-xs); background: var(--bg-2); font-size: 11.5px; line-height: 1.55; color: var(--text-2); overflow-wrap: anywhere; }
+.rev-disclosure p { margin: 0 0 4px; }
+.rev-disclosure ul { margin: 0 0 4px; padding-left: 1.2em; }
+.rev-links a { color: var(--accent); }
+.rev-suggested { color: var(--text-3-strong); }
+.rev-ai-issues .cand-finding-code { color: var(--accent); }
 
 /* journey: the plain-language progress */
 .journey { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
@@ -752,3 +760,7 @@
     .studio-page input[type='range']::-webkit-slider-thumb { width: 22px; height: 22px; margin-top: -9.5px; }
     .studio-page input[type='range']::-moz-range-thumb { width: 16px; height: 16px; }
 }
+/* A v3 bundle's reviews in the replay (Q113 (a), EA6.4): what was judged, as the review panel shows it. */
+.rev-saved { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.rev-saved h4 { margin: 0; font-size: 12px; font-weight: 600; color: var(--text); }
+.rev-saved-review { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid var(--line); min-width: 0; }

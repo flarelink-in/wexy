@@ -132,6 +132,11 @@ services:
       # prod profile stops without them; names only, the values live in Infisical.
       AZURE_CONTENT_SAFETY_ENDPOINT: ${AZURE_CONTENT_SAFETY_ENDPOINT:?missing from Infisical}
       AZURE_CONTENT_SAFETY_KEY: ${AZURE_CONTENT_SAFETY_KEY:?missing from Infisical}
+      # EA6.4 (the frontend's visual-review design §9.1): a model's review stays shut until the operator records the vision
+      # probe's passing report and one frame's token bound, from Infisical; unset is shut (503), never open.
+      WEXY_REVIEW_VISION_PROBE:
+      WEXY_REVIEW_IMAGE_TOKENS:
+      WEXY_REVIEW_POLICY_VERSION:
       # B1.1 adds the datasource names here (compose.records.yaml carries the database side).
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8411/actuator/health"]

@@ -181,6 +181,39 @@ public class PromptBuilder {
     public record Finding(String code, Integer line, String message) {
     }
 
+    /**
+     * A model's review (EA6.4; the frontend's visual-review design §9.1): R and S verbatim (P7), the candidate's modules,
+     * each frame's view in the order its image follows the text, and the host's findings the creator kept. Every client
+     * value goes in as data: R and S as the JSON they are, a module id and a finding's message as JSON strings. The
+     * frames' lines are the server's own words from checked fields. The images follow the text in the user message, in
+     * the same order; the answer is held to {@code review-verdict.v1}.
+     *
+     * @param frames   one line a frame, in its image's order: what it shows, its size, its tick
+     * @param findings each kept host finding's code and message
+     * @param images   the frames' JPEGs, each with the most input tokens it may bill
+     */
+    public Prompt review(String request, String design, List<String> modules, List<String> frames, List<Finding> findings,
+                         List<ChatMessage.Image> images) {
+        if (images.isEmpty() || frames.size() != images.size()) {
+            throw new IllegalArgumentException("A review names each of its images, in order: " + frames.size() + " lines for " + images.size() + " images.");
+        }
+        Map<String, String> fields = new LinkedHashMap<>();
+        fields.put("request", request);
+        fields.put("design", design);
+        fields.put("modules", modules.isEmpty() ? "(none)" : String.join("\n", modules.stream().map(m -> "- " + quoted(m)).toList()));
+        List<String> lines = new ArrayList<>();
+        for (int i = 0; i < frames.size(); i++) {
+            lines.add((i + 1) + ". " + frames.get(i));
+        }
+        fields.put("frames", String.join("\n", lines));
+        fields.put("findings", findings.isEmpty() ? "(none)"
+                : String.join("\n", findings.stream().map(f -> "- " + f.code() + ": " + quoted(f.message())).toList()));
+        PromptTemplates.Template template = templates.get("review");
+        String user = PromptTemplates.fillAll(template.user(), fields, template.path() + " (variable part)");
+        return new Prompt(template.id(), JsonSchemas.REVIEW_VERDICT,
+                List.of(ChatMessage.system(template.system()), ChatMessage.user(user, images)), JsonSchemas.REVIEW_VERDICT);
+    }
+
     /** Text in a fenced block whose fence no run of backticks inside it can close. */
     static String fence(String language, String text) {
         int longest = 0;

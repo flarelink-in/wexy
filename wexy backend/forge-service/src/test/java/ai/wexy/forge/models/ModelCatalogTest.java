@@ -78,6 +78,19 @@ class ModelCatalogTest {
         assertThat(withSchema - bare).isBetween(140L, 160L);
     }
 
+    /**
+     * EA6.4: an image adds its own bound, which its caller sets from configuration (Meta publishes no formula); its bytes
+     * are not counted as text, so a large JPEG neither inflates nor stands in for that bound.
+     */
+    @Test
+    void anImageAddsItsBoundAndNotItsBytes() {
+        long text = ModelCatalog.inputTokenBound(List.of(ChatMessage.user("look")));
+        byte[] jpeg = new byte[300_000];
+        long two = ModelCatalog.inputTokenBound(List.of(ChatMessage.user("look", List.of(new ChatMessage.Image(jpeg, 1500),
+                new ChatMessage.Image(jpeg, 1500)))));
+        assertThat(two - text).isEqualTo(3000);
+    }
+
     /** Cached input is billed at the cached price when one is configured, else as fresh input (over-counting). */
     @Test
     void cachedInputCostsTheCachedPrice() {
