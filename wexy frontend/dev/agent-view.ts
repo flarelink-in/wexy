@@ -33,6 +33,13 @@
 //          (test/fixtures/review-wire), only fetch faked: the disclosure before anything is sent, the creator's consent,
 //          one call with the nine fields, the model's issues as labelled checkboxes with model-written markup as text,
 //          "Improve it" citing exactly the issue kept, the budget counting it, all within 320 px
+//   EA9-E1 (EA9.1, agent-first-studio-design.md §10) the creator's Create behind ?create=agent as the studio mounts it
+//          (creation-view.ts over the creation controller) over the same recordings, L3 and the stage stood in: Create runs
+//          the turn and writes its module with Stop offered, then waits for "Show it"; its press is one go, a second press
+//          none; installed, every step done; no h1 route asked; none of Developer view's words in the creator's view (P5),
+//          within 320 px; an asked turn's question, markup and all, shown as text in its step
+// Since EA9.1 every panel here watches a creation controller of its own (creation.ts), made over the client it is handed:
+// "Run agent turn" is a Create that stops at its hand-off, and the candidate's presses are the controller's.
 
 import '../src/styles/base.css';
 import '../src/styles/studio.css';
@@ -728,7 +735,7 @@ async function reviewing(): Promise<void> {
     await p.run();
     candidateButton(p, 'Write the modules').click();
     await until(() => settled(p), 5_000);
-    const session = (p.candidate as CandidatePanel).session;
+    const session = (p.candidate as CandidatePanel).session!;
     const first = session.snapshot!;
     let world: StageWorld | null = null;
     let busy: string | null = null;
@@ -890,6 +897,174 @@ async function reviewing(): Promise<void> {
         !refusedRead.ok && refusedRead.message === 'EA_CAPTURE read: mapAsync refused' && unhandled.length === 0, { outcome: refusedRead, unhandled });
 }
 
+// ---- EA9.1: the creator's Create on the agent path, GPU off --------------------------------------------------------
+
+/**
+ * EA9-E1 (EA9.1, GPU off): the creator's Create behind ?create=agent, as the studio mounts it (creation-view.ts over the
+ * creation controller), over the backend's recordings through the real clients, reader and transport (only fetch faked),
+ * L3 a scripted stand-in and the stage a stand-in. Run unarmed: the Journey's own status icons are host markup.
+ */
+/** A done step's time on the Journey (creation-view.ts's elapsed): seconds, or minutes and seconds (EA9.2). */
+const TOOK = '(\\d+ s|\\d+ min \\d\\d s)';
+
+async function creating(): Promise<void> {
+    const [{ CreationView }, { Journey }, { createCreationController }, { createAgentSession }, { createCandidateSession }] = await Promise.all([
+        import('../src/shell/studio/creation-view'), import('../src/shell/studio/journey'), import('../src/loop/creation'), import('../src/loop/agent-turn'),
+        import('../src/loop/candidate'),
+    ]);
+    const requests: string[] = [];
+    let turnWire = handedOffWire;
+    /** E6's case: the turn sends its first event, then holds, silent, until released, so only the tick moves its count. */
+    let holdTurn = false;
+    let heldTurn: Stream | null = null;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = new URL(String(input)).pathname;
+        requests.push(path);
+        if (path === '/v1/agent/turn' && holdTurn) {
+            heldTurn = stream(turnWire, 0, 1);
+            return heldTurn.response;
+        }
+        if (path === '/v1/agent/turn') return stream(turnWire, 5).response;
+        if (path === '/v1/agent/module') return stream(echoed(moduleAuthorWire, JSON.parse(String(init?.body))), 5).response;
+        return new Response('{"code":"not-found","message":"no such route"}', { status: 404, headers: { 'Content-Type': 'application/json' } });
+    }) as unknown as typeof fetch;
+    const api = createApi(CONFIG, IDENTITY, fetchImpl);
+    const gos: string[] = [];
+    let answerGo: (s: RunSummary) => void = () => {};
+    const controller = createCreationController({
+        turnSession: onChange => createAgentSession(createAgentClient(api), onChange),
+        candidateSession: onChange => createCandidateSession({ modules: createModuleClient(api), compiler: () => SCRIPTED_DEVICE }, onChange),
+        stage: {
+            blocked: () => null,
+            go: (snapshot, _compiled, about) => {
+                gos.push(`${snapshot.id}|${about?.title ?? ''}`);
+                return new Promise(resolve => { answerGo = resolve; });
+            },
+        },
+    });
+    // The idea box's primary button as the studio makes it: its label in a span, its shortcut in a kbd.
+    const primary = document.createElement('button');
+    primary.type = 'button';
+    primary.className = 'btn btn-primary btn-forge';
+    const labelEl = document.createElement('span');
+    labelEl.textContent = 'Create world';
+    const kbd = document.createElement('kbd');
+    kbd.textContent = 'Ctrl ⏎';
+    primary.append(labelEl, kbd);
+    const journey = new Journey();
+    let idea: AgentTurnRequest = REQUEST;
+    /** The world on the stage paused past its envelope (EA_RESIZE), as the studio's frames would report it. */
+    let pausedNow = false;
+    const view = new CreationView(controller, { primary, journey, idea: () => idea, blocked: () => null, paused: () => pausedNow });
+    const card = document.createElement('section');
+    card.className = 'prompt-card';
+    card.append(primary, view.again);
+    const narrow = document.createElement('div');
+    narrow.style.width = '320px';
+    narrow.dataset.case = 'creation: the creator\'s Create (?create=agent)';
+    narrow.append(card, journey.el);
+    panels.append(narrow);
+    const label = () => labelEl.textContent ?? '';
+    const rows = () => [...journey.el.querySelectorAll<HTMLElement>('.journey-step')].map(r => `${r.className.replace('journey-step is-', '')}: ${r.querySelector('.journey-detail')?.textContent ?? ''}`);
+
+    const idle = label();
+    primary.click();
+    await until(() => controller.state.phase === 'turn' || controller.state.phase === 'writing');
+    const working = { label: label(), disabled: primary.disabled, kbd: kbd.hidden };
+    await until(() => controller.state.phase === 'ready', 5_000);
+    const ready = { label: label(), again: !view.again.hidden, rows: rows() };
+    check('EA9-E1 Create runs the turn and writes its module, Stop offered meanwhile; then it waits for "Show it", nothing shown yet',
+        idle === 'Create world' && working.label === 'Stop' && !working.disabled && working.kbd && ready.label === 'Show it' && ready.again && gos.length === 0
+        && JSON.stringify(requests) === JSON.stringify(['/v1/agent/turn', '/v1/agent/module'])
+        && new RegExp(`^done: ${COPY.creation.planned} · ${TOOK}$`).test(ready.rows[0]) && new RegExp(`^done: ${COPY.creation.written(1)} · ${TOOK}$`).test(ready.rows[1])
+        && ready.rows[2] === `pending: ${COPY.creation.readyToShow}`, { idle, working, ready, requests });
+    // A double click on "Show it", as a mouse makes one: its second click lands on the button once it reads Stop.
+    primary.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+    primary.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 2 }));
+    const showing = { label: label(), phase: controller.state.phase, gos: gos.length };
+    answerGo({ status: 'installed', reason: null, numbers: 'probe: init 3.0 ms' });
+    await until(() => controller.state.phase === 'installed');
+    const done = { label: label(), rows: rows(), again: !view.again.hidden };
+    check('EA9-E1 "Show it" is one go (a second press makes none), titled from the idea; installed, the four steps done, Create offered again',
+        showing.phase === 'running' && showing.label === 'Stop' && showing.gos === 1 && gos.length === 1 && gos[0].endsWith(`|${REQUEST.prompt}`)
+        && done.label === 'Create world' && !done.again && done.rows.length === 4 && done.rows.every(r => r.startsWith('done: '))
+        && !requests.some(p => p.startsWith('/v1/forge/')), { showing, done, gos, requests });
+    // P5: the creator's view names no id(C), Q_C, WGSL, JSON, GPU number or code.
+    const words = narrow.textContent ?? '';
+    const developer = [/\b[0-9a-f]{12}…/, /id\(C\)/, /Q_C/, /WGSL/, /JSON/, /\d+(\.\d+)? ms\b/, /\bEA_[A-Z]/, /\bL3\b/, /\bprobe\b/i, /agent\.v\d|module\.(author|repair)/];
+    check('EA9-E1 the creator\'s view holds none of Developer view\'s words (P5), and fits 320 px', developer.every(re => !re.test(words))
+        && narrow.scrollWidth <= 320, { found: developer.filter(re => re.test(words)).map(String), width: narrow.scrollWidth });
+    // An asked turn: the model's question, markup and all, as text in its step; the world on the stage stays; Create again.
+    turnWire = edit(askedWire, 'question', 0, (d: any) => ({ ...d, text: 'Stone or wood <img src=x onerror="window.__ran__=9">?' }));
+    idea = { ...REQUEST, prompt: 'a river through a stone town' };
+    primary.click();
+    await until(() => controller.state.phase === 'stopped', 5_000);
+    const asked = { label: label(), rows: rows(), images: narrow.querySelectorAll('img').length };
+    check('EA9-E1 an asked turn: its question in its step as text, the world on the stage kept, Create offered again',
+        asked.label === 'Create world' && asked.rows[0].startsWith('failed: One more detail would help: Stone or wood <img') && asked.images === 0
+        && !(window as unknown as { __ran__?: number }).__ran__ && gos.length === 1 && controller.installedSession !== null, asked);
+
+    // EA9.2's E6: a running step counts its elapsed time once a second, and a screen reader hears one sentence a phase,
+    // never a tick (the list is no live region; its status line changes with the phase alone). A held Enter presses once.
+    const heard: string[] = [];
+    const announce = journey.announce.bind(journey);
+    journey.announce = (text: string) => { heard.push(text); announce(text); };
+    const status = journey.el.querySelector<HTMLElement>('[role="status"]');
+    turnWire = handedOffWire;
+    holdTurn = true;
+    idea = { ...REQUEST, prompt: 'a lantern festival over a lake' };
+    primary.click();
+    await until(() => controller.state.phase === 'turn' && heldTurn !== null && controller.state.turn?.meta !== null);
+    const repeat = new KeyboardEvent('keydown', { key: 'Enter', repeat: true, cancelable: true, bubbles: true });
+    const single = new KeyboardEvent('keydown', { key: 'Enter', repeat: false, cancelable: true, bubbles: true });
+    primary.dispatchEvent(repeat);
+    primary.dispatchEvent(single);
+    const counted = rows()[0];
+    // Nothing comes from the turn meanwhile: only the view's own tick can move the count.
+    await sleep(1_250);
+    const countedLater = rows()[0];
+    const heardWhilePlanning = [...heard];
+    holdTurn = false;
+    heldTurn!.release();
+    await until(() => controller.state.phase === 'ready', 8_000);
+    primary.click();
+    answerGo({ status: 'installed', reason: null, numbers: 'probe: init 3.0 ms' });
+    await until(() => controller.state.phase === 'installed');
+    const listLive = journey.el.getAttribute('aria-live');
+    check('EA9-E6 the steps count elapsed time while one runs; a screen reader hears each phase once, never a tick; a held Enter presses once',
+        /^running: .* 0 s$/.test(counted) && /^running: .* 1 s$/.test(countedLater) && listLive === null && status?.getAttribute('role') === 'status'
+        && JSON.stringify(heardWhilePlanning) === JSON.stringify([COPY.creation.planning])
+        && JSON.stringify(heard) === JSON.stringify([COPY.creation.planning, COPY.creation.planned, COPY.creation.writingStart, COPY.creation.readyToShow, COPY.creation.testing, COPY.creation.onStage])
+        && status?.textContent === COPY.creation.onStage && repeat.defaultPrevented && !single.defaultPrevented,
+        { counted, countedLater, heard, listLive, said: status?.textContent ?? null, repeatPrevented: repeat.defaultPrevented, singlePrevented: single.defaultPrevented });
+
+    // The EA9.2 review: a world on the stage paused past its envelope (EA_RESIZE: a window grown, a page zoomed) offers
+    // Show it again, a new go that tests it at this size, with no paid call; running again, Create world is back.
+    pausedNow = true;
+    view.render();
+    const paused = { label: label(), rows: rows(), gos: gos.length, again: !view.again.hidden, said: status?.textContent ?? null };
+    const paidBefore = requests.length;
+    primary.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+    const reprobed = gos.length;
+    const pressed = controller.state.phase;
+    // A press that made no go (a new paid Create, say) leaves no Run to answer: the check below says so, rather than a
+    // wait for an install that never comes.
+    if (reprobed > paused.gos) {
+        answerGo({ status: 'installed', reason: null, numbers: 'probe: init 3.0 ms' });
+        await until(() => controller.state.phase === 'installed');
+    }
+    pausedNow = false;
+    view.render();
+    const resumed = { label: label(), rows: rows() };
+    check('EA9-E6b a world on the stage paused past its envelope offers Show it again, which tests it at this size; running again, Create world is back',
+        paused.label === 'Show it' && paused.rows[3] === `pending: ${COPY.creation.resized}` && paused.again && paused.said === COPY.creation.resized
+        && reprobed === paused.gos + 1 && pressed === 'running' && requests.length === paidBefore && resumed.label === 'Create world'
+        && resumed.rows.every(r => r.startsWith('done: ')),
+        { paused, reprobed, pressed, resumed, paid: requests.length - paidBefore });
+    view.dispose();
+    controller.dispose();
+}
+
 async function run(): Promise<void> {
     const world = document.getElementById('world')!.outerHTML;
     trap.armed = true;
@@ -908,6 +1083,7 @@ async function run(): Promise<void> {
     check('EA-V5 no runtime, verifier, capture, engine or Firebase module was loaded', forbidden.length === 0 && loaded.some(n => n.endsWith('/src/shell/studio/agent-view.ts'))
         && loaded.some(n => n.endsWith('/src/shell/studio/candidate-view.ts')), { forbidden, loaded: loaded.length });
     await reviewing();
+    await creating();
 }
 
 const out = window as unknown as { __AV__?: unknown };

@@ -53,6 +53,25 @@ const AT_VSYNC_MS = 17.4;
 export const MAX_LIVE_PIXELS = 2_300_000;
 const MAX_STEPS_PER_FRAME = 4;
 
+/**
+ * The canvas a box of `width` × `height` CSS pixels draws at: its pixels at the viewport's ratio (`min(DPR, 1.5)`) and
+ * the quality ladder's `scale`, then, past the live cap, scaled to it and rounded down, so no frame draws a pixel over it
+ * whatever the rounding (an agent world's envelope approves the cap and the few pixels its own rounding up adds, never
+ * fewer: stage.ts). The first canvas too (EA9.3's review): a world built before the first frame, the backdrop or a
+ * starter, gets no more than any later one, which the stage's ledger counts a Head at.
+ */
+export function liveSize(width: number, height: number, devicePixelRatio: number, scale = 1): { width: number; height: number } {
+    const dpr = Math.min(devicePixelRatio, 1.5);
+    let w = Math.max(2, Math.round(width * dpr * scale));
+    let h = Math.max(2, Math.round(height * dpr * scale));
+    if (w * h > MAX_LIVE_PIXELS) {
+        const k = Math.sqrt(MAX_LIVE_PIXELS / (w * h));
+        w = Math.max(2, Math.floor(w * k));
+        h = Math.max(2, Math.floor(h * k));
+    }
+    return { width: w, height: h };
+}
+
 export class Viewport {
     readonly canvas: HTMLCanvasElement;
     readonly engine: NullGraph;
@@ -81,6 +100,16 @@ export class Viewport {
     /** Fired when a drag takes the camera off its keyframe path. */
     onOrbitTakeover?: () => void;
     onDeviceLost?: (message: string) => void;
+    /**
+     * Fired when the first pause takes the viewport (true) and when the last one lets it go (false): whatever waits for a
+     * held stage (a Run, EA9.1) is offered again as it ends.
+     */
+    onHold?: (held: boolean) => void;
+    /**
+     * Fired right after the world on the viewport was resized, before the next frame: what it holds on the device may
+     * have grown, and the stage's ledger counts it again then (EA9.3's review). A listener's throw is said, never thrown.
+     */
+    onRuntimeResized?: () => void;
 
     private readonly proxy: OrbitalEventProxy;
     private readonly resizeObserver: ResizeObserver;
@@ -108,8 +137,10 @@ export class Viewport {
     static async create(canvas: HTMLCanvasElement): Promise<Viewport> {
         if (!('gpu' in navigator)) throw new Error('WebGPU is not available in this browser.');
         const rect = canvas.getBoundingClientRect();
-        canvas.width = Math.max(1, Math.round(rect.width * Math.min(devicePixelRatio, 1.5)));
-        canvas.height = Math.max(1, Math.round(rect.height * Math.min(devicePixelRatio, 1.5)));
+        // At the live cap from the first frame, as every later canvas (liveSize).
+        const first = liveSize(rect.width, rect.height, devicePixelRatio);
+        canvas.width = first.width;
+        canvas.height = first.height;
         const engine = new NullGraph();
         const result = await engine.init(canvas, { powerPreference: 'high-performance' });
         if (!result.success) throw new Error(result.error ?? 'WebGPU initialisation failed.');
@@ -182,18 +213,35 @@ export class Viewport {
             cancelAnimationFrame(this.raf);
             this.raf = 0;
             this.lastNow = 0;
+            this.tellHold(true);
         }
         let released = false;
         return () => {
             if (released) return;
             released = true;
-            if (--this.pauses === 0 && this.wantsFrames) this.start();
+            if (--this.pauses > 0) return;
+            if (this.wantsFrames) this.start();
+            this.tellHold(false);
         };
+    }
+
+    /** {@link onHold}, whose fault is said and never leaves a pause without its release. */
+    private tellHold(held: boolean): void {
+        try {
+            this.onHold?.(held);
+        } catch (error) {
+            console.error('viewport: an onHold listener threw', error);
+        }
     }
 
     /** Held by a pause (a film, a photo, a probe's quiet window): a review's capture waits for its own turn (EA6). */
     get held(): boolean {
         return this.pauses > 0;
+    }
+
+    /** The pauses held now, every holder's: the studio tells the backdrop's own rest from a photo's or a film's (EA9.3). */
+    get pauseCount(): number {
+        return this.pauses;
     }
 
     /**
@@ -367,16 +415,8 @@ export class Viewport {
     private applyLiveSize(now: number): void {
         this.sizeDirty = false;
         const rect = this.canvas.getBoundingClientRect();
-        const dpr = Math.min(devicePixelRatio, 1.5);
-        let w = rect.width * dpr * this.stats.scale;
-        let h = rect.height * dpr * this.stats.scale;
-        const pixels = w * h;
-        if (pixels > MAX_LIVE_PIXELS) {
-            const k = Math.sqrt(MAX_LIVE_PIXELS / pixels);
-            w *= k;
-            h *= k;
-        }
-        if (this.resizeTo(Math.max(2, Math.round(w)), Math.max(2, Math.round(h)))) {
+        const { width: w, height: h } = liveSize(rect.width, rect.height, devicePixelRatio, this.stats.scale);
+        if (this.resizeTo(w, h)) {
             this.settleUntil = Math.max(this.settleUntil, now + 500);
             this.window.length = 0;
         }
@@ -396,6 +436,13 @@ export class Viewport {
         if (changed || this.runtimeSize !== this.runtime) {
             this.runtime?.resize(width, height);
             this.runtimeSize = this.runtime;
+            if (this.runtime) {
+                try {
+                    this.onRuntimeResized?.();
+                } catch (error) {
+                    console.error('viewport: an onRuntimeResized listener threw', error);
+                }
+            }
         }
         this.stats.width = width;
         this.stats.height = height;

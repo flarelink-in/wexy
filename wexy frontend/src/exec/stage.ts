@@ -190,6 +190,11 @@ export interface StageDeps {
     size(): Target;
     /** The viewport's live pixel cap: the envelope a stage world is admitted and probed for. */
     maxPixels: number;
+    /**
+     * What this screen can show (displayTarget; G2, EA9.2): the envelope's budget, capped at `maxPixels`. Absent or null,
+     * the envelope is the live cap at the canvas's shape (envelopeOf), as the harnesses that record eligibility need.
+     */
+    display?: () => Target | null;
     view(): CameraView;
     restoreHeadCamera(): void;
     /** The Head held while the probe times a submission (the viewport's pause), so no timing measures its frames. */
@@ -242,10 +247,44 @@ export function envelopeOf(size: Target, maxPixels: number): Target {
     return { width: Math.max(size.width, Math.ceil(Math.sqrt(pixels * aspect))), height: Math.max(size.height, Math.ceil(Math.sqrt(pixels / aspect))) };
 }
 
+/**
+ * The display in the pixels the viewport draws (G2, EA9.2): its CSS size × min(devicePixelRatio, 1.5), viewport.ts's
+ * own ratio, rounded up, as the viewport rounds a canvas to the nearest pixel. It bounds every size the canvas can take
+ * on this screen (the window resized, fullscreen, a phone turned), so a world tested at it never pauses past its envelope
+ * there (EA_RESIZE), for which the studio offers a creator no new probe. Null when the display reports no size.
+ */
+export function displayTarget(width: number, height: number, devicePixelRatio: number): Target | null {
+    const dpr = Math.min(Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1, 1.5);
+    const w = Math.ceil(width * dpr);
+    const h = Math.ceil(height * dpr);
+    return w >= 1 && h >= 1 ? { width: w, height: h } : null;
+}
+
+/**
+ * The envelope at what this screen can show (G2): the display's pixels, at most `maxPixels`, at the canvas's own shape,
+ * and never less than what the canvas draws now (`backing`). Rounded up, so its area, the pixels the runtime approves,
+ * holds the whole budget: every canvas this display can show runs, whatever its shape (the EA9.2 review: rounded down,
+ * fullscreen and a phone turned each came out a few pixels over and paused). At the live cap the probe so measures a few
+ * pixels more than it, never fewer than a frame draws: the viewport rounds a frame at the cap down (viewport.ts). A phone
+ * held upright (390 × 844 at a DPR of 3) is tested at 0.74 MP where envelopeOf would take 2.3 MP, about 3× more.
+ */
+export function screenEnvelope(display: Target, backing: Target, maxPixels: number): Target {
+    const aspect = backing.width / Math.max(1, backing.height);
+    const pixels = Math.min(maxPixels, display.width * display.height);
+    const width = Math.max(backing.width, Math.ceil(Math.sqrt(pixels * aspect)));
+    const height = Math.max(backing.height, Math.ceil(Math.sqrt(pixels / aspect)), Math.ceil(pixels / width));
+    return { width, height };
+}
+
 export function createStage(deps: StageDeps): Stage {
     const goes = deps.goes ?? createGoLedger();
     const ledger = deps.ledger ?? createMemoryLedger();
-    let envelope: Target = envelopeOf(deps.size(), deps.maxPixels);
+    /** The envelope now: what this screen can show (G2) when the studio says so, else the live cap (envelopeOf). */
+    const sized = (): Target => {
+        const display = deps.display?.() ?? null;
+        return display ? screenEnvelope(display, deps.size(), deps.maxPixels) : envelopeOf(deps.size(), deps.maxPixels);
+    };
+    let envelope: Target = sized();
     const gate = createGate({
         limits: deps.limits, compiler: deps.compiler, goes, present: deps.present, ledger, target: () => envelope,
         environment: deps.environment, gpu: deps.gpu, eligibility: deps.eligibility, bootstrap: deps.bootstrap,
@@ -264,7 +303,7 @@ export function createStage(deps: StageDeps): Stage {
             if (busy) return { status: 'refused', reason: 'a Run is under way already', report: null };
             busy = true;
             try {
-                envelope = envelopeOf(deps.size(), deps.maxPixels);
+                envelope = sized();
                 const evidence = { compiled: compiled ?? [], gpuGo: goes.holds(snapshot.id, deps.present.turn(), deps.present.device()) };
                 const admitted = authority.admit(snapshot, evidence, deps.present);
                 if (!admitted.ok) return { status: 'refused', reason: admitted.reason, report: null };

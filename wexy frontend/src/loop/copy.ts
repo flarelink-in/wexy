@@ -128,6 +128,8 @@ export const COPY = {
         noSession: 'This saved world can be reviewed here, but it has no active session to improve it.',
         busy: 'The stage is busy right now; capture it again in a moment.',
         improving: 'An improvement is already under way; this world stays on the stage.',
+        /** EA9.1: a new world is being made, so this one waits (agent-first-studio-design.md §6). */
+        making: 'A new world is being made; this one stays on the stage. Improve it once that is done.',
         notApplied: 'This improvement could not be applied; the previous world is still on the stage.',
         /** A model's review (EA6.4, visual-review-design.md §9.1, §11): never offered before Q62's gates and the creator's consent. */
         aiUnavailable: 'AI review is not available; tell us what to improve.',
@@ -170,6 +172,49 @@ export const COPY = {
         },
     } as Readonly<Record<string, { providerId: string; mode: 'standard' | 'contributor'; provider: string; sends: (model: string) => string;
         statements: readonly string[]; links: readonly { label: string; url: string }[]; agree: string; withdraw: string }>>,
+    /**
+     * The agent path's Create (EA9.1; agent-first-studio-design.md §6, §7 and §11): its button, its four steps and the
+     * one sentence each end says. The world on the stage stays in every one; nothing here names a code or a number a
+     * creator cannot use (§2's P5).
+     */
+    creation: {
+        create: 'Create world',
+        stop: 'Stop',
+        show: 'Show it',
+        planning: 'Designing your world from your idea…',
+        planned: 'Designed',
+        writingStart: 'Writing its parts…',
+        writing: (done: number, total: number) => `${done} of ${total} parts written`,
+        written: (total: number) => `${total} part${total === 1 ? '' : 's'} written and checked`,
+        readyToShow: 'It passed its checks. Press Show it to test it on your graphics card.',
+        testing: 'Testing it on your graphics card…',
+        asked: (question: string) => `One more detail would help: ${question} Add it to your idea, then press Create.`,
+        declined: 'That idea can\'t be made here. Try describing a place, the things in it, and how they move.',
+        exhausted: 'This idea needed more steps than one try allows. Try a simpler version of it.',
+        cancelled: 'Stopped. Your current world is unchanged.',
+        accountChanged: 'You signed in or out, so this world was stopped. Your current world is unchanged.',
+        deviceLost: 'Your graphics card stopped responding, so this world was stopped. Reload the page to carry on.',
+        notHere: 'This world can\'t be tested on this device; your current world is unchanged.',
+        runRefused: 'This world didn\'t pass its test on your graphics card; your current world is unchanged. Press Show it to try again, or try a simpler idea.',
+        /** A Run refused, by its code (G4, EA9.2; the design's §11): a measurement that came out unclear, or too much here. */
+        // EA_PROBE_UNVERIFIED also carries the world's own GPU errors in the probe (the EA9.2 review), so this promises
+        // no retry: the creator may try again, or a different idea.
+        runUnclear: 'Your graphics card couldn\'t finish testing this world. Close other tabs or apps and press Show it again, or try a different idea.',
+        /** The world on the stage paused: its window outgrew what it was tested at (EA_RESIZE; the EA9.2 review). */
+        resized: 'Paused: this window is larger than this world was tested at. Press Show it to test it at this size.',
+        runHeavy: 'This world is too heavy for your graphics card. Try a simpler idea; your current world is unchanged.',
+        runDrawn: 'This world didn\'t draw correctly on your device; your current world is unchanged. Try a different idea.',
+        runBuilt: 'This world didn\'t build on your device; your current world is unchanged. Try a different idea.',
+        runStopped: 'Stopped. Your current world is unchanged, and this one is still ready: press Show it to test it again.',
+        /** What a screen reader hears once a new world is on the stage (EA9.2, E6). */
+        onStage: 'Your new world is on the stage. Drag the view to look around, then press Record.',
+        /** A new idea that did not start (Q126 (b)): why, then the world written before it, given back. */
+        kept: (why: string) => `${why} Your last world is still ready: press Show it to test it.`,
+        keptStopped: 'Stopped. Your last world is still ready: press Show it to test it.',
+        noGateway: 'Making a new world needs the Wexy service, which this page can\'t reach. Try one of the examples instead.',
+        invalid: 'This link asks for a way of making worlds this page doesn\'t have, so nothing was started.',
+        noControls: 'This world has no sliders. Drag to look around, then take a photo or make a video.',
+    },
     /** An edit that failed after repairs keeps the world (design guidelines §4). */
     editFailed: 'That change didn\'t work on your device. Your world is as it was.',
     deviceLost: 'Your graphics card reset while running this change. We went back to the last version that worked.',

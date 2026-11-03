@@ -101,6 +101,45 @@ test('PL-FE3 sign-out and an account switch move the epoch: an answer fetched be
     assert.ok(session.current.epoch > epoch);
 });
 
+test('EA9.1 enter(): the entry\'s own sign-in makes the caller before any call, read under its own epoch; a first visit only learns it', async () => {
+    // As identity.ts's transport does: the signed-in user, or a new anonymous one; Firebase tells its listener later.
+    const port = fakePort({ uid: 'g1', provider: 'google' });
+    let made = 0;
+    const entry = async () => {
+        if (await port.current()) return;
+        made++;
+        port.set({ uid: `anon-${made}`, provider: 'anonymous' });
+    };
+    const session = new AccountSession(port, memoryHint(), entry);
+    await session.refresh();
+    assert.equal(session.established, true);
+    await session.signOut();
+    const out = session.current;
+    assert.deepEqual([out.kind, session.established], ['none', false], 'signed out: no caller until the next call makes one');
+    const seen = [];
+    session.subscribe(state => seen.push(state));
+    const entered = await session.enter();
+    assert.deepEqual(entered, { epoch: out.epoch + 1, kind: 'anonymous' }, 'the caller it made, read before enter resolves');
+    assert.deepEqual([made, session.established], [1, true]);
+    await settle();
+    assert.deepEqual(seen, [entered], 'one move: the listener\'s own reading found nothing new');
+    // A caller already there: nothing made, nothing moved.
+    assert.deepEqual(await session.enter(), entered);
+    assert.equal(made, 1);
+
+    // A first visit: nothing read yet, no listener; enter makes the caller and learns it without a move, then listens.
+    const fresh = fakePort(null);
+    let freshMade = 0;
+    const first = new AccountSession(fresh, memoryHint(), async () => { if (!(await fresh.current())) { freshMade++; fresh.set({ uid: 'anon-x', provider: 'anonymous' }); } });
+    assert.deepEqual([first.current, first.established], [{ epoch: 0, kind: 'unknown' }, false]);
+    assert.deepEqual(await first.enter(), { epoch: 0, kind: 'anonymous' }, 'the first reading only learns');
+    assert.deepEqual([freshMade, fresh.registered], [1, 1]);
+    // An entry that cannot make a caller says so, and the session is as it was.
+    const broken = new AccountSession(fakePort(null), memoryHint(), async () => { throw new Error('identity: anonymous sign-in failed (auth/network-request-failed)'); });
+    await assert.rejects(broken.enter(), /anonymous sign-in failed/);
+    assert.deepEqual(broken.current, { epoch: 0, kind: 'unknown' });
+});
+
 /** Firebase Auth's functions, faked: a current user, and what each call does. */
 function fakeAuth({ user = null, link, popup, credential } = {}) {
     const calls = [];

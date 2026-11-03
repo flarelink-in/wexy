@@ -106,6 +106,13 @@ const gateway = createServer((req, res) => {
             res.end(fixture('test/fixtures/review-wire/terms-shut.json'));
             return;
         }
+        // W1 (EA9.1): the studio reads the chip around a turn; the backend's DTO, as dev/ea9-e1.mjs's stand-in answers it.
+        if (req.method === 'GET' && req.url === '/v1/forge/allowance') {
+            calls.push({ route: 'allowance' });
+            res.writeHead(200, { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+            res.end(JSON.stringify({ label: 'Free', left: 0, resetsAt: null }));
+            return;
+        }
         calls.push({ route: `${req.method} ${req.url}`, unexpected: true });
         res.writeHead(404, { ...cors, 'Content-Type': 'application/json' });
         res.end('{"error":{"code":"not_found"}}');
@@ -255,10 +262,15 @@ try {
     const agentState = await evaluate(`({
         title: document.querySelector('#hud-title')?.textContent, count: document.querySelector('#hud-count')?.textContent, fps: document.querySelector('#hud-fps')?.textContent,
         exportOn: !document.querySelector('#btn-export')?.disabled, photoOn: !document.querySelector('#btn-snapshot')?.disabled, captureBarShown: !document.querySelector('#capture-bar')?.hidden,
-        director: document.querySelector('.director .inspector-empty p')?.textContent ?? null,
+        director: document.querySelector('.director .inspector-empty p')?.textContent ?? null, idea: document.querySelector('#prompt')?.value ?? '',
+        source: document.querySelector('#hud-source')?.hidden ? null : document.querySelector('#hud-source')?.textContent ?? null,
     })`);
-    step('the agent world on the stage, with its studio state: its title, Film and Photo offered (EA5.5), the Director\'s note (§5)',
-        /^Agent world [0-9a-f]{12}…$/.test(agentState.title ?? '') && agentState.exportOn && agentState.photoOn && agentState.captureBarShown
+    // Its title is its creation's, from the idea (EA9.1; the design's §8 step 6), cut at its first sentence's 48
+    // characters: Developer view names id(C) in its own panels, not in the HUD. A creation's world is Live (EA9.3).
+    const cut = (agentState.title ?? '').replace(/…$/, '');
+    step('the agent world on the stage, with its studio state: its title from the idea and labelled Live, Film and Photo offered (EA5.5), the Director\'s note (§5)',
+        cut.length > 0 && agentState.idea.startsWith(cut) && !/^Agent world/.test(agentState.title ?? '') && agentState.source === 'Live'
+        && agentState.exportOn && agentState.photoOn && agentState.captureBarShown
         && /agent program/.test(agentState.director ?? '') && /^[1-9]\d* fps$/.test(agentState.fps ?? ''), agentState);
     await shot('agent-world');
 

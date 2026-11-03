@@ -33,13 +33,26 @@ const LEG_SECONDS = 36;
 const MAX_STEP_SECONDS = 1 / 15;
 
 export interface Backdrop {
+    /** The playground example it draws (its archetype's id). */
+    readonly id: string;
     /**
      * Settles once the world is on the viewport (true), or could not be (false). A check on the device waits for it:
      * by then its pipelines are compiled and its first frame done (SceneRuntime.build).
      */
     readonly ready: Promise<boolean>;
+    /**
+     * What it would hold with its canvas at `pixels`, and never less than it holds now (SceneRuntime.deviceBytesAt): the
+     * stage's ledger counts it at the largest canvas the viewport can give it (EA9.3, §8 step 2, and its review). Null
+     * while it builds, and once it is dropped.
+     */
+    bytes(pixels: number): number | null;
     /** Stops its frames until the returned release is called (the viewport's own pause, so holds add up). */
     hold(): () => void;
+    /**
+     * How many of the viewport's pauses are its own now: its rest while scrolled out of sight, and the holds of a check.
+     * A Run need not wait for them (EA9.3): they hold nothing a Run's commit could race.
+     */
+    holdCount(): number;
     /** Takes it off the viewport if it is still there and frees it. Calling it again does nothing. */
     drop(): void;
 }
@@ -65,11 +78,25 @@ export function startBackdrop(vp: Viewport, id: string, options: BackdropOptions
 
     let world: BackdropWorld | null = null;
     let dropped = false;
+    /** Its own pauses of the viewport (holdCount), each with its let-go. */
+    let own = 0;
     const holds = new Set<() => void>();
     const hold = () => {
+        // Counted before the viewport is paused: the viewport tells its hold from inside pause(), and the studio, told,
+        // must find this pause the backdrop's own (main.ts's stageHolders), or Show it waits for a rest (EA9.3). Given back
+        // before the release, for the same reason.
+        own++;
         const release = vp.pause();
-        holds.add(release);
-        return () => { holds.delete(release); release(); };
+        let done = false;
+        const letGo = () => {
+            if (done) return;
+            done = true;
+            holds.delete(letGo);
+            own--;
+            release();
+        };
+        holds.add(letGo);
+        return letGo;
     };
     // Off screen (a phone scrolled down to type), it draws nothing.
     let offscreen: (() => void) | null = null;
@@ -95,13 +122,16 @@ export function startBackdrop(vp: Viewport, id: string, options: BackdropOptions
     })();
 
     return {
+        id: archetype.id,
         ready,
+        bytes: pixels => world?.deviceBytesAt(pixels) ?? null,
         hold: () => (world && vp.runtime === world ? hold() : () => {}),
+        holdCount: () => own,
         drop: () => {
             if (dropped) return;
             dropped = true;
             visibility.disconnect();
-            for (const release of [...holds]) release();
+            for (const letGo of [...holds]) letGo();
             holds.clear();
             offscreen = null;
             if (!world) return;
@@ -129,6 +159,8 @@ class BackdropWorld implements WorldRuntime {
     }
 
     get dt(): number { return this.inner.dt; }
+    /** The archetype's runtime's own count at a canvas of `pixels` (SceneRuntime.deviceBytesAt): from the sizes, not VRAM. */
+    deviceBytesAt(pixels: number): number { return this.inner.deviceBytesAt(pixels); }
     get simTime(): number { return this.inner.simTime; }
     get quality(): number { return this.inner.quality; }
     set quality(q: number) { this.inner.quality = q; }

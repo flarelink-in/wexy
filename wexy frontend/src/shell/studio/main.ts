@@ -6,6 +6,9 @@
 // Two views of one studio: the default speaks in plain words (Journey, Controls, the capture bar); Developer
 // view, reached only by ?dev=1 (design guidelines §0), adds the technical log, the scene file, the WGSL editor
 // and the GPU numbers.
+// EA9.1 (agent-first-studio-design.md; Q114, Q115 and Q118 decided 2026-11-03): behind ?create=agent the idea box's
+// Create is the agent's (src/loop/creation.ts): one turn, its modules and their repairs, then "Show it", the GPU go. The
+// page without it is h1's, unchanged. ?agent=1's Developer-view panels watch the same controller (creation-path.ts).
 
 import '@fontsource-variable/geist';
 import '@fontsource-variable/unbounded';
@@ -41,14 +44,17 @@ import { highlightWgslLine } from '../../shared/highlight';
 import { icon, loader, logo, wordmark } from '../../shared/icons';
 import { formatJson } from '../../shared/json';
 import { programText, QUALITY_UNIFORM, targetsOf, withProgramText, type ProgramTarget, type SceneSpec, type Style } from '../../contract/spec';
-import { AccountSession } from '../../platform/session';
-import { AccountControl } from './account';
+import { AccountSession, browserHint } from '../../platform/session';
+import { AccountControl, creationAccount } from './account';
+import { account as accountWorld, EMPTY, install as installWorld, uncounted, type ActiveWorld } from './active-world';
 import { BACKDROP_DEFAULT, startBackdrop, type Backdrop } from './backdrop';
 import { CodeView, type CodeMark } from './code-view';
 import { DirectorPanel } from './director';
 import { canShareFile, ExportDialog, shareFile } from './export-dialog';
 import { formatById, FORMATS, frameSize, type FormatId } from './formats';
+import { selectCreationPath, type CreationPathSelection } from './creation-path';
 import { Journey, type StageId } from './journey';
+import { stageTaken, type StageHolders } from './stage-holds';
 import { Timeline } from './timeline';
 import { TracePanel, type TraceStep } from './trace';
 
@@ -90,22 +96,42 @@ type ReviewCapture = typeof import('../../exec/review-capture');
 type StageReviews = import('../../loop/review').StageReviews;
 type StageCapture = import('../../loop/review').StageCapture;
 type StageWorld = import('../../loop/review').StageWorld;
-type CandidateSession = import('../../loop/candidate').CandidateSession;
+// The agent path's Create (EA9.1), loaded only behind ?create=agent or ?agent=1.
+type CreationControllerT = import('../../loop/creation').CreationController;
+type CreationViewT = import('./creation-view').CreationView;
+type RunAbout = import('../../loop/creation').RunAbout;
 /**
- * An agent world on the stage (EA5.3): its runtime, what it holds in the stage's ledger, its candidate, the device verdicts
- * it was admitted on, and its install's number, to which each film of it is bound (EA5.5); and what its Run found (its
- * boxes, the probe's report), which its review starts from (EA6).
+ * An agent world on the stage (EA5.3): its runtime, its candidate, the device verdicts it was admitted on, and its
+ * install's number, to which each film of it is bound (EA5.5); and what its Run found (its boxes, the probe's report),
+ * which its review starts from (EA6). What it holds in the stage's ledger is H's (`World`'s `held`).
  */
 interface AgentWorld {
     runtime: AgentRuntimeT;
-    held: AgentReservation;
     candidate: string;
     snapshot: Sealed;
     compiled: readonly DeepReadonly<CompiledBody>[];
     epoch: number;
     bounds: AgentBounds | null;
     report: AgentReport | null;
+    /** The creation's title, from its idea (EA9.1); null for a saved attempt replayed, which Developer view names by id(C). */
+    title: string | null;
+    /** Where it came from (§8 step 6): a creation's turn is Live (its meta says so); a saved attempt replayed, the archive. */
+    source: Source;
 }
+
+/** h1's world on the stage (§5's legacy variant): its runtime, its spec (the Director writes its moves into it), its source. */
+interface LegacyWorld {
+    readonly runtime: SceneRuntime;
+    readonly spec: SceneSpec;
+    readonly source: Source;
+}
+
+/**
+ * H (I3; agent-first-studio-design.md §8, EA9.3): the one world on the stage, of one kind, with what it holds in the
+ * stage's ledger. Only `put` changes which world it is (active-world.ts's install); `count` counts one built before the
+ * stage existed.
+ */
+type World = ActiveWorld<LegacyWorld, AgentWorld, Backdrop>;
 
 /** A Run's numbers in one line for Developer view: the probe's predictions, the reservation, the first frame's look. */
 function runNumbers(report: AgentReport | null): string {
@@ -141,9 +167,10 @@ class Studio {
     });
     /** The backend, when this build knows a gateway; otherwise every world is a playground example. */
     private live: ForgeClient | null = null;
-    /** The running world's spec. Director moves are written back into it. */
-    private spec: SceneSpec | null = null;
-    private source: Source = 'mock';
+    /** H, the one world on the stage (EA9.3): `runtime`, `spec`, `agentWorld` and `backdrop` each read it. */
+    private world: World = EMPTY;
+    /** Where the draft in the editor came from: the h1 world it was loaded with (h1's editor state, §5's LegacyDraft). */
+    private draftSource: Source = 'mock';
     /**
      * The spec the editor's text belongs to, as last loaded. It differs from `spec` after a draft
      * fails the ladder: edits then belong to the new draft, not to the world still running.
@@ -151,7 +178,6 @@ class Studio {
     private draftSpec: SceneSpec | null = null;
     /** True when the draft in the editor is the world that is running. */
     private draftIsLive = false;
-    private runtime: SceneRuntime | null = null;
     private duration = 12;
     private busy = false;
     private abort: AbortController | null = null;
@@ -173,7 +199,21 @@ class Studio {
     private deviceCompiler: ModuleCompiler | null = null;
     /** The device's generation: it moves on a device loss, and evidence from before proves nothing (EA5). */
     private deviceGeneration = 0;
-    private candidatePanel: { refresh(): void; readonly epoch: number; readonly session: CandidateSession } | null = null;
+    private candidatePanel: { refresh(): void } | null = null;
+    /** Which creation path the idea box runs, decided once from the URL (creation-path.ts, EA9.1). */
+    private path: CreationPathSelection = selectCreationPath(new URLSearchParams(), { switched: false, gateway: false }, { unavailable: '', invalid: '' });
+    /** The agent path's one owner of a creation (EA9.1, I1): behind ?create=agent or ?agent=1. */
+    private creation: CreationControllerT | null = null;
+    /** The creator's Create on the agent path (?create=agent): the idea box's button and the Journey. */
+    private creationView: CreationViewT | null = null;
+    /** Resolves once the stage (and its device compiler) exists: an agent Create waits for it, an autorun too. */
+    private stageReady: Promise<void>;
+    private markStageReady: () => void = () => {};
+    /** Resolves once the creator's controls exist (mountCreation): an autorun waits for them too, whichever loads last. */
+    private creationReady: Promise<void>;
+    private markCreationReady: () => void = () => {};
+    /** Who is signed in (W1, W2): the creation binds its calls to this session's epoch (§6). */
+    private accountSession: AccountSession | null = null;
     /** ?agent=1 only: the review of the world on the stage (EA6.2), its panel beside the candidate. */
     private reviews: StageReviews | null = null;
     /** ?agent=1 only, with the stage: its engine's port and the review's capture, which draws the Head again offscreen (EA6.1). */
@@ -184,21 +224,15 @@ class Studio {
     private replayPanel: { refresh(): void } | null = null;
     /** ?agent=1 only, once the viewport and its device compiler exist: the stage's Run (EA5.3). */
     private stage: AgentStage | null = null;
-    /** The stage's chunk's retire, loaded with it: an old world's teardown after a switch (§9). */
-    private retire: ((old: { destroy(): void } | null, held: AgentReservation | null) => string | null) | null = null;
     /** ?agent=1 only, with the stage: an agent world's camera framed on what it built (bounds.ts, 11-02). */
     private frameWorld: FrameWorld | null = null;
-    /** An agent world on the stage (EA5.3). */
-    private agentWorld: AgentWorld | null = null;
     /** Agent worlds installed so far: each film of one is bound to its install (EA5.5). */
     private installs = 0;
+    /** The agent world on the stage is paused past its envelope (EA_RESIZE), as the last frame saw it. */
+    private agentPaused = false;
     /** ?agent=1, once the stage exists: a film's or a photo's workload of an agent world on the stage (EA5.5). */
     private agentFilm: ((world: AgentWorld, fps: number, still: CameraView) => CreateFilmWorkload) | null = null;
-    /** What an h1 Head holds in the stage's ledger (I7), so a Run reserves beside it. */
-    private headReservation: AgentReservation | null = null;
-    /** The empty stage's live backdrop (backdrop.ts) until the first world replaces it; null without one. */
-    private backdrop: Backdrop | null = null;
-    /** Its frames, held while the device checks a candidate: released by a refusal, the run's end or the swap. */
+    /** The backdrop's frames, held while the device checks a candidate: released by a refusal, the run's end or the swap. */
     private backdropHold: (() => void) | null = null;
     /** The header's account control (W1): the allowance chip and Sign in; null without a live backend or a way to sign in. */
     private accountControl: AccountControl | null = null;
@@ -245,6 +279,11 @@ class Studio {
     private readonly exportBtn = $('#btn-export') as HTMLButtonElement;
     private readonly snapBtn = $('#btn-snapshot') as HTMLButtonElement;
 
+    constructor() {
+        this.stageReady = new Promise(resolve => { this.markStageReady = resolve; });
+        this.creationReady = new Promise(resolve => { this.markCreationReady = resolve; });
+    }
+
     async init(): Promise<void> {
         $('#brand-logo').innerHTML = wordmark(22);
         const params = new URLSearchParams(location.search);
@@ -255,13 +294,17 @@ class Studio {
         if (api && params.get('source') !== 'mock') this.live = createLiveClient(api);
         // The account control (W1), for the live backend only: a playground example spends nothing and asks no one in.
         if (api && this.live && identity?.account) {
-            this.accountControl = new AccountControl(new AccountSession(identity.account), api, text => this.showToast(text, null),
-                changing => { this.forgeBtn.disabled = this.busy || !this.viewport || changing; });
+            // A Create with no caller yet makes its own first, through the transport's own lazy sign-in (EA9.1, §6 step 1).
+            this.accountSession = new AccountSession(identity.account, browserHint, () => identity.authorization(false));
+            this.accountControl = new AccountControl(this.accountSession, api, text => this.showToast(text, null), () => this.renderCreate());
             $('#btn-snapshot').before(this.accountControl.el);
             // W2: a browser that held a Google session shows its account at once; any other page view loads nothing.
             void this.accountControl.restore();
         }
-        const agent = params.get('agent') === '1';
+        // ?create=agent, ?legacy=1, ?agent=1 and the loaders, resolved once (agent-first-studio-design.md §9).
+        this.path = selectCreationPath(params, { switched: false, gateway: !!this.live },
+            { unavailable: COPY.creation.noGateway, invalid: COPY.creation.invalid });
+        const path = this.path;
         this.mountLeft();
         // On phones the allowance chip, and since W2 the handle and its claim, read as a line under the idea box, not in
         // the header (studio.css).
@@ -274,13 +317,17 @@ class Studio {
         this.wireKeys();
         this.exportBtn.addEventListener('click', () => this.openExport());
         this.snapBtn.addEventListener('click', () => void this.takeSnapshot());
-        this.setDevView((params.has('dev') && params.get('dev') !== '0') || agent);
+        this.setDevView(path.devView);
         // Before the GPU starts: a turn needs none, and runs on a device without WebGPU too.
-        if (agent) void this.mountAgent(api);
+        if (path.agentPath) void this.mountCreation(api);
+        if (path.invalid) this.journey.say(path.invalid);
+        else if (path.unavailable) this.journey.say(path.unavailable);
         this.exporter.onBusy = busy => {
             this.hud.mode.textContent = busy ? 'RECORDING' : 'LIVE';
             this.hud.root.classList.toggle('rendering', busy);
             document.body.classList.toggle('exporting', busy);
+            // A Run waits while a film is made: Show it, readied meanwhile, is offered again once it ends (EA9.1's review).
+            this.refreshRun();
         };
         new ResizeObserver(() => this.layoutFilmGate()).observe($('#viewport'));
 
@@ -326,21 +373,36 @@ class Studio {
             this.deviceGeneration++;
             // Every compile verdict and GPU go is void now (§9): a Run under way stops at its next check.
             this.stage?.goes.clear();
+            this.creation?.deviceLost();
             this.showMessage(`Your graphics card stopped responding (${msg}). Reload the page to carry on.`, 'error');
         };
-        if (agent) void this.mountDeviceCompiler(vp);
+        // A photo's, a film's or a capture's hold: a Run waits for it, and is offered again once it ends (EA9.1). A Run's own
+        // probe windows change nothing a control shows (the Run holds the stage throughout, and its end says so itself).
+        if (path.agentPath) vp.onHold = () => { if (!this.stage?.busy) this.refreshRun(); };
+        // A resize may grow what the world on the stage holds: counted again before any admission can read it (EA9.3's review).
+        if (path.agentPath) vp.onRuntimeResized = () => this.count();
+        if (path.agentPath) void this.mountDeviceCompiler(vp);
         if (params.has('rung')) vp.pin(Number(params.get('rung')));
         vp.start();
-        // The empty stage's live backdrop. Not under ?agent=1, whose stage measures its Head as EA-E did. ?backdrop=off
-        // keeps the still stage and the loader video; ?backdrop=<id> picks another playground example.
+        // The empty stage's live backdrop, on either path: on the agent path its stage's ledger counts it (EA9.3), and a
+        // Run's probe holds it still, as it holds any Head. ?backdrop=off keeps the still stage and the loader video;
+        // ?backdrop=<id> picks another playground example.
         const backdrop = params.get('backdrop') ?? BACKDROP_DEFAULT;
-        if (!agent && backdrop !== 'off') this.mountBackdrop(vp, backdrop);
+        if (backdrop !== 'off') this.mountBackdrop(vp, backdrop);
         // Films a closed or crashed tab left in OPFS, and finished films no tab is showing (film.ts).
         void sweepFilms().then(removed => { if (removed.length) console.info(`Wexy: removed ${removed.length} old film(s) from this browser's storage`); });
         this.forgeBtn.disabled = false;
+        this.renderCreate();
 
-        // A starter named in the URL is a playground example, whatever client this build has.
-        if (params.has('autorun') || params.has('scene') || params.has('capture')) await this.forge(starter || !this.live ? 'mock' : 'live');
+        if (path.create === 'agent') {
+            // A loader calls no model: one of h1's hand-written examples by name, never a live h1 Create for a name this
+            // build does not know (§9). An autorun is a Create, which still stops at "Show it" (I5); it waits for the stage.
+            if (path.loader?.kind === 'scene' && starter) await this.forge('mock');
+            else if (path.autorun) void Promise.all([this.stageReady, this.creationReady]).then(() => this.creationView?.create());
+        } else if (!path.invalid && (params.has('autorun') || params.has('scene') || params.has('capture'))) {
+            // A starter named in the URL is a playground example, whatever client this build has.
+            await this.forge(starter || !this.live ? 'mock' : 'live');
+        }
         if (params.has('t') && this.viewport) {
             this.seek(Number(params.get('t')));
             this.setPlaying(false);
@@ -348,25 +410,91 @@ class Studio {
         if (params.has('guide') && this.runtime) this.setGuide(params.get('guide') !== '0');
     }
 
+    /** The idea's three fields as the box holds them now (a turn's request, AgentTurnRequest). */
+    private idea(): { prompt: string; style: Style | 'auto'; seconds: number } {
+        return { prompt: this.prompt.value, style: this.style.value as Style | 'auto', seconds: this.duration };
+    }
+
     /**
-     * ?agent=1: the agent turn in Developer view (EA2.5), beside h1's own Create, which it leaves as it is, and a hand-off's
-     * candidate beneath it (EA4.5: its modules written by the module route, a program revision by a turn with a base).
-     * Its code loads only then, so the creator's page carries none of it, and it is handed the idea's fields, never the world.
+     * The agent path's Create (EA9.1): the one controller of a creation, behind ?create=agent (the idea box's Create) or
+     * ?agent=1 (Developer view's panels, which watch the same one). Its code loads only then, so the plain page carries none
+     * of it. It is handed the idea's fields, the device compiler, the stage's go and the account, never the world.
      */
-    private async mountAgent(api: Api | null): Promise<void> {
-        const [{ AgentPanel }, { createAgentClient }, { createModuleClient }, { createReviser }] = await Promise.all([
-            import('./agent-view'), import('../../forge-client/agent-client'), import('../../forge-client/module-client'), import('../../loop/reviser'),
+    private async mountCreation(api: Api | null): Promise<void> {
+        const [{ createCreationController }, { createAgentSession }, { createCandidateSession }, { createAgentClient }, { createModuleClient }, { createReviser }, { CreationView }] = await Promise.all([
+            import('../../loop/creation'), import('../../loop/agent-turn'), import('../../loop/candidate'), import('../../forge-client/agent-client'),
+            import('../../forge-client/module-client'), import('../../loop/reviser'), import('./creation-view'),
         ]);
         const client = api ? createAgentClient(api) : null;
-        const panel = new AgentPanel(client, () => ({
-            prompt: this.prompt.value, style: this.style.value as Style | 'auto', seconds: this.duration,
-        }), {
-            candidate: api && client ? {
-                modules: createModuleClient(api), revise: createReviser(client), compiler: () => this.deviceCompiler,
-                run: { blocked: () => this.runBlocked(), go: (snapshot, compiled) => this.runCandidate(snapshot, compiled) },
-                // The bundle carries the reviews of the attempt's stage and their frames (Q113 (a), EA6.4).
-                reviews: attempt => this.reviews?.bundled(attempt) ?? null,
-            } : undefined,
+        if (client && api) {
+            const modules = createModuleClient(api);
+            const revise = createReviser(client);
+            const session = this.accountSession;
+            const control = this.accountControl;
+            this.creation = createCreationController({
+                turnSession: onChange => createAgentSession(client, onChange),
+                candidateSession: onChange => createCandidateSession({ modules, revise, compiler: () => this.deviceCompiler }, onChange),
+                stage: { blocked: () => this.runBlocked(), go: (snapshot, compiled, about) => this.runCandidate(snapshot, compiled, about) },
+                account: session && control ? creationAccount(session, control) : undefined,
+            });
+            // Its paid work holds the account (Sign in and Sign out wait), and the empty stage says a world is being made.
+            this.creation.subscribe(() => {
+                this.accountControl?.setBusy(this.busy || !!this.creation?.busy);
+                this.setBuilding(this.busy || !!this.creation?.busy);
+            });
+        }
+        if (this.path.create === 'agent' && this.creation) {
+            this.creationView = new CreationView(this.creation, {
+                primary: this.forgeBtn,
+                journey: this.journey,
+                idea: () => {
+                    const idea = this.idea();
+                    if (idea.prompt.trim()) return { ...idea, prompt: idea.prompt.trim() };
+                    this.prompt.focus();
+                    return null;
+                },
+                blocked: () => this.createBlocked(),
+                paused: () => !!this.agentWorld?.runtime.isPaused,
+            });
+            this.forgeBtn.after(this.creationView.again);
+            this.showSourceBadge('live');
+        }
+        this.renderCreate();
+        this.markCreationReady();
+        if (this.path.agentPanels) await this.mountAgent(api);
+    }
+
+    /** Why the agent path's Create cannot start now, beyond the controller's own; null when it can. */
+    private createBlocked(): string | null {
+        if (this.path.unavailable) return this.path.unavailable;
+        if (!this.viewport || !this.stage) return 'the stage is starting';
+        if (this.busy) return 'an example is being built';
+        return null;
+    }
+
+    /** The idea box's button as it stands: the creation view's on the agent path, h1's otherwise. */
+    private renderCreate(): void {
+        if (this.path.create === 'agent') {
+            if (this.creationView) this.creationView.render();
+            else this.forgeBtn.disabled = true;
+            return;
+        }
+        // h1's Create waits for a Run too (?agent=1), shown whenever this runs, at the latest as the Run ends.
+        this.forgeBtn.disabled = this.busy || !this.viewport || !!this.accountControl?.changing || !!this.stage?.busy;
+    }
+
+    /**
+     * ?agent=1: the agent turn in Developer view (EA2.5), beside h1's own Create, which it leaves as it is until the
+     * switch, and a hand-off's candidate beneath it (EA4.5: its modules written by the module route, a program revision by
+     * a turn with a base). Since EA9.1 both watch the studio's creation controller, and their presses are presses on it.
+     */
+    private async mountAgent(api: Api | null): Promise<void> {
+        const [{ AgentPanel }, { createAgentClient }] = await Promise.all([import('./agent-view'), import('../../forge-client/agent-client')]);
+        const controller = this.creation;
+        const panel = new AgentPanel(controller ? null : api ? createAgentClient(api) : null, () => this.idea(), {
+            controller: controller ?? undefined,
+            // The bundle carries the reviews of the attempt's stage and their frames (Q113 (a), EA6.4).
+            candidate: controller ? { compiler: () => this.deviceCompiler, reviews: attempt => this.reviews?.bundled(attempt) ?? null } : undefined,
         });
         this.candidatePanel = panel.candidate;
         panel.el.classList.add('dev-only');
@@ -392,20 +520,31 @@ class Studio {
         const reviews = new StageReviews({
             stage: () => this.stageWorld(),
             capture: (world, stale) => this.captureReview(world, stale),
-            session: () => this.candidatePanel?.session ?? null,
+            // The session holding the world on the stage (I8): H's, never a newer idea's; none for a replayed world.
+            session: () => this.creation?.sessionFor(this.agentWorld?.candidate ?? null) ?? null,
+            // While a new world is being made or waits for Show it, no paid action on this one (§6), which would strand it.
+            paidBusy: () => (this.creation?.creating ? 'a new world is being made, or waits for Show it' : null),
             generation: () => this.deviceGeneration,
             busy: () => this.reviewBusy(),
             reviewer: () => reviewer,
             consent: browserConsent(),
-            // Run waits while the stage is captured (runBlocked): the panels that offer it are shown again as it ends.
+            // Run waits while the stage is captured (runBlocked): every control that offers it is shown again as it ends.
             onChange: () => {
                 view?.render();
-                this.candidatePanel?.refresh();
-                this.replayPanel?.refresh();
+                this.refreshRun();
             },
             onDrop: ids => view?.dropped(ids),
         });
         view = new ReviewPanel(reviews);
+        // Its paid actions read the controller only as the panel renders (paidBusy, the stage's session), so the panel is
+        // shown again whenever either changes: a new world made, waiting or let go, an account change, a device loss.
+        let gate = '';
+        this.creation?.subscribe(() => {
+            const now = `${!!this.creation?.creating}|${!!this.creation?.sessionFor(this.agentWorld?.candidate ?? null)}`;
+            if (now === gate) return;
+            gate = now;
+            view?.render();
+        });
         this.reviews = reviews;
         view.el.classList.add('dev-only');
         $('#left').insertBefore(view.el, this.trace.el);
@@ -462,13 +601,13 @@ class Studio {
             import('../../exec/film-workload'), import('../../exec/bounds'),
         ]);
         this.frameWorld = frameWorld;
-        // The exact model, from the device's own adapter info: a browser that hides it keeps every candidate static-only.
+        // The exact model, from the device's own adapter info. A browser that hides it matches no eligibility entry, which a
+        // normal Run treats as advisory since 23d37da: EA_COVERAGE_UNVERIFIED warns and the probe decides (EA9.1's G5).
         const environment = environmentOf(adapterIdentity(vp.engine.device.adapterInfo), navigator.userAgent);
         const compiler = createDeviceCompiler(vp.engine.device, { generation: () => this.deviceGeneration, gpu: vp.gpuLabel });
         this.deviceCompiler = compiler;
         // The stage's Run (EA5.3): the viewport's engine, its device's limits, this device compiler's verdicts, the go from
         // Developer view, a reservation in one ledger with the Head's, and the switch: the viewport's setRuntime alone.
-        this.retire = stages.retire;
         // One port over the viewport's engine: the stage's, and the review's capture of what the stage installed (EA6.1).
         const port = createNullGraphPort(vp.engine);
         this.stagePort = port;
@@ -477,11 +616,14 @@ class Studio {
             headless: (width, height) => createHeadlessPort(vp.engine.device, width, height),
             limits: limitsOf(vp.engine.device),
             compiler: () => compiler,
-            present: { turn: () => this.candidatePanel?.epoch ?? 0, device: () => this.deviceGeneration },
+            // κ: a new creation, a write, a cancel or a device loss stops a Run under way at its next check (EA9.1).
+            present: { turn: () => this.creation?.n ?? 0, device: () => this.deviceGeneration },
             environment,
             gpu: vp.gpuLabel,
             size: () => ({ width: vp.canvas.width, height: vp.canvas.height }),
             maxPixels: MAX_LIVE_PIXELS,
+            // G2 (EA9.2): a world is tested at what this screen can show, a phone's 0.74 MP rather than the 2.3 MP cap.
+            display: () => stages.displayTarget(screen.width, screen.height, devicePixelRatio),
             view: () => vp.currentView(),
             restoreHeadCamera: () => vp.writeCamera(),
             // The Head holds while the probe times a submission, so its frames never land in the numbers (EA-E, 11-01).
@@ -490,7 +632,8 @@ class Studio {
             now: () => performance.now(),
             onRefusal: message => this.trace.add('The agent world paused', 'gate').error(message),
         });
-        if (this.runtime) this.headReservation = this.stage.ledger.record(`head: ${this.spec?.title ?? 'h1'}`, this.runtime.deviceBytes);
+        // H built before the stage existed (h1's Head, or the backdrop) counted now, before any candidate is admitted.
+        this.count();
         // Films and photos of an agent world (EA5.5; executor-design.md §9a): each built again on the film's own engine, through
         // the stage's gate, probe and look at the film's size, reserved beside the Head, on the verdicts the Head was admitted
         // on, and bound to its install and this device generation.
@@ -510,67 +653,203 @@ class Studio {
         }, { fps, still });
         this.candidatePanel?.refresh();
         this.replayPanel?.refresh();
+        this.renderCreate();
+        this.markStageReady();
         // The review's capture and the browser's JPEG encoder (EA6.1): loaded behind the stage, needed only once a world is on it.
         const [capture, { encodeJpeg }] = await Promise.all([import('../../exec/review-capture'), import('../../capture/jpeg')]);
         this.reviewCapture = capture;
         this.encodeJpeg = encodeJpeg;
     }
 
-    /** Why Run cannot be pressed now; null when it can. */
+    /** Why Run cannot be pressed now; null when it can. It waits for every other holder of the stage (stage-holds.ts). */
     private runBlocked(): string | null {
         if (!this.viewport) return 'Run needs WebGPU, which this browser does not offer.';
         if (!this.stage) return 'The stage is starting: its device compiler loads first.';
-        if (this.stage.busy) return 'A Run is under way.';
-        if (this.busy) return 'A world is being made: Run once it is done.';
-        if (this.reviews?.capturing) return 'The stage is being captured for its review: Run once it is done.';
-        return null;
+        // No candidate is admitted beside a world the ledger does not count yet (§8 step 2): a backdrop still building.
+        if (uncounted(this.world)) return this.world.kind === 'backdrop' ? 'The stage is starting: its backdrop is still loading.' : 'The stage is starting: the world on it is not counted yet.';
+        return stageTaken(this.stageHolders());
     }
 
-    /** The developer's GPU go for this candidate, and its Run on the stage (Q89); an install sets the agent world's state. */
-    private async runCandidate(snapshot: Sealed, compiled: readonly DeepReadonly<CompiledBody>[]): Promise<RunSummary> {
+    /** What holds the stage now: a Run, an example's build, a review's capture, a film, any pause of the viewport. */
+    private stageHolders(): StageHolders {
+        // Any pause past the backdrop's own: its rest while scrolled out of sight holds nothing a Run's commit could race,
+        // and on a phone it would keep Show it waiting while the creator types below the stage (EA9.3).
+        const own = this.backdrop?.holdCount() ?? 0;
+        return {
+            running: !!this.stage?.busy, building: this.busy, capturing: !!this.reviews?.capturing,
+            recording: document.body.classList.contains('exporting'), held: (this.viewport?.pauseCount ?? 0) > own,
+        };
+    }
+
+    /**
+     * The agent path's controls that offer a Run, shown again as they stand (the EA9.1 review): Show it, Run on this GPU
+     * and a saved attempt's Run read who holds the stage only as they render, so each holder's start and end calls this.
+     */
+    private refreshRun(): void {
+        if (!this.path.agentPath) return;
+        this.renderCreate();
+        this.candidatePanel?.refresh();
+        this.replayPanel?.refresh();
+    }
+
+    /**
+     * The GPU go for this candidate, and its Run on the stage (Q89): the creation's "Show it" (`about` names its world) or a
+     * saved attempt's Run (none). An install sets the agent world's state.
+     */
+    private async runCandidate(snapshot: Sealed, compiled: readonly DeepReadonly<CompiledBody>[], about?: RunAbout): Promise<RunSummary> {
         const stage = this.stage;
         if (!stage) return { status: 'refused', reason: 'no stage here', numbers: '' };
         stage.press(snapshot);
         const step = this.trace.add('Run on this GPU', 'gate');
         const r = await stage.run(snapshot, compiled);
-        const numbers = runNumbers(r.report);
         if (r.status === 'installed') {
-            const notes = this.installAgent(r.runtime, r.held, snapshot, compiled, r.report);
-            const said = [numbers, ...notes].filter(Boolean).join(' · ');
-            step.ok(said, `id(C) ${snapshot.id.slice(0, 12)}…`);
+            // The stage's commit has switched the viewport: H is set first, before anything that could throw, or a throw
+            // would leave the world drawn owned by nobody and the old one counted (EA9.3's reviews). A creation's Show it
+            // names its world; a saved attempt's Run does not, and its world is From the archive.
+            const notes = this.installAgent(r.runtime, r.held, snapshot, compiled, r.report, about?.title ?? null, about ? 'live' : 'archive');
+            // The world is on the stage from here: no step after the switch makes this Run a failure, so the controller
+            // learns the world the stage shows.
+            let said = notes.join(' · ');
+            // The stage is free again: every control that offers a Run reads it now, a saved attempt's Run having no
+            // creation to say so.
+            this.afterSwitch('the controls that offer a Run', () => this.refreshRun());
+            this.afterSwitch('the Run\'s numbers', () => { said = [runNumbers(r.report), ...notes].filter(Boolean).join(' · '); });
+            this.afterSwitch('the Run\'s line', () => step.ok(said, `id(C) ${snapshot.id.slice(0, 12)}…`));
+            // A saved attempt replayed is no creation's: the one that was on the stage lets its session go (I8).
+            if (!about) this.afterSwitch('the replaced creation', () => this.creation?.replaced());
             // Its review (EA6): captured now, as it is, from the framed view and the side.
-            this.reviews?.installed(this.stageWorld());
+            this.afterSwitch('its review', () => this.reviews?.installed(this.stageWorld()));
             return { status: 'installed', reason: null, numbers: said };
         }
+        // Nothing switched: the stage is free again, and every control that offers a Run reads it now.
+        this.refreshRun();
+        const numbers = runNumbers(r.report);
         step.error(r.reason, numbers);
         return { status: r.status, reason: r.reason, numbers };
     }
 
+    // ------------------------------------------------------------------ the world on the stage (EA9.3, I3)
+
+    /** h1's world on the stage (H's legacy variant), or null. */
+    private get runtime(): SceneRuntime | null {
+        return this.world.kind === 'legacy' ? this.world.legacy.runtime : null;
+    }
+
+    /** The running h1 world's spec: the Director's moves are written back into it. */
+    private get spec(): SceneSpec | null {
+        return this.world.kind === 'legacy' ? this.world.legacy.spec : null;
+    }
+
+    /** The agent world on the stage (H's agent variant), or null. */
+    private get agentWorld(): AgentWorld | null {
+        return this.world.kind === 'agent' ? this.world.agent : null;
+    }
+
+    /** The empty stage's live backdrop (backdrop.ts) until the first world replaces it (H's backdrop variant), or null. */
+    private get backdrop(): Backdrop | null {
+        return this.world.kind === 'backdrop' ? this.world.backdrop : null;
+    }
+
     /**
-     * An agent world on the stage (EA5.3; executor-design.md §5). The switch was the stage's commit (the viewport's
-     * setRuntime); this is the studio's own, after it. The old world is retired (its releases attempted, its reservation
-     * returned; a failure is said and changes nothing installed), h1's state is detached, and what an agent world has
-     * not got yet is off: keyframes and the camera path (W has none) and the Director (Q85). Films and photos are on
-     * (EA5.5): each made from its candidate again, from time zero, with the camera where it is.
+     * `next` onto the stage in place of H, the one way a world reaches it (active-world.ts's install; §8 step 1): the switch
+     * (`commit`; none after an agent Run, whose stage made it), H set and the new world's page published in the same
+     * synchronous handover, then the old world retired, whatever its kind: its destroy attempted, its reservation returned
+     * once. A teardown's error is said, and the new world stays.
      */
-    private installAgent(runtime: AgentRuntimeT, held: AgentReservation, snapshot: Sealed, compiled: readonly DeepReadonly<CompiledBody>[], report: AgentReport | null): string[] {
-        const bounds = report?.bounds ?? null;
+    private put(next: World, commit: (() => void) | null, publish: () => void): void {
+        const { errors } = installWorld(this.world, next, {
+            ...(commit ? { commit } : {}),
+            publish: w => {
+                this.world = w;
+                publish();
+            },
+            destroy: old => this.destroyWorld(old),
+        });
+        for (const error of errors) {
+            // A switch that did not happen, or a new world's page left part-written, is a fault: the console says so too.
+            if (/^EA_(COMMIT|PUBLISH) /.test(error)) console.error(`Wexy: ${error}`);
+            this.afterSwitch('its log', () => this.trace.add(error.startsWith('EA_COMMIT') ? 'The switch' : error.startsWith('EA_PUBLISH') ? 'The new world\'s page' : 'The old world\'s cleanup', 'gate').error(error));
+        }
+        // Developer view's record of each change of world, and what the stage's ledger holds after it (EA9-E2 reads both).
+        console.info(`Wexy: on the stage: ${this.worldName()}${this.ledgerLine()}`);
+    }
+
+    /**
+     * One step after a world is on the stage: whatever it does, the world stays, and the caller goes on as installed. A
+     * throw is said in the console, never thrown (EA9.3's review: a throw after the switch read as a failed Run).
+     */
+    private afterSwitch(what: string, step: () => void): void {
+        try {
+            step();
+        } catch (error) {
+            console.error(`Wexy: after the switch, ${what} failed; the world on the stage stays`, error);
+        }
+    }
+
+    /** H in a few words, for the console: its kind and its title or id. */
+    private worldName(): string {
+        const w = this.world;
+        if (w.kind === 'legacy') return `legacy "${w.legacy.spec.title}"`;
+        if (w.kind === 'agent') return `agent "${agentTitle(w.agent)}" #${w.agent.epoch}`;
+        if (w.kind === 'backdrop') return `backdrop ${w.backdrop.id}`;
+        return 'nothing';
+    }
+
+    /** What the stage's ledger holds, for the console; nothing before the stage exists. */
+    private ledgerLine(): string {
+        const ledger = this.stage?.ledger;
+        return ledger ? `; the stage's ledger holds ${ledger.held()} bytes: ${ledger.holders().map(h => h.label).join(', ') || 'nothing'}` : '';
+    }
+
+    /** An old world's teardown after the switch (L8), by its kind. Its reservation is install's to return. */
+    private destroyWorld(old: World): void {
+        if (old.kind === 'legacy') old.legacy.runtime.destroy();
+        else if (old.kind === 'agent') old.agent.runtime.destroy();
+        else if (old.kind === 'backdrop') {
+            // Its holds let go, then it is freed; the switch has taken its place on the viewport.
+            this.releaseBackdrop();
+            old.backdrop.drop();
+            this.empty.classList.remove('has-backdrop');
+        }
+    }
+
+    /**
+     * H counted in the stage's ledger (§8 step 2): h1's Head or the backdrop, built before the stage was, once both exist;
+     * at the largest canvas the viewport ever gives a world, its live cap (`MAX_LIVE_PIXELS`), so no resize outgrows its
+     * reservation, a page zoom's or another display's included; and again, larger, should it ever (a path past the cap,
+     * such as dev/smoke's `enterExport`), right after the resize (EA9.3's reviews). A backdrop still building is counted
+     * once it is on the viewport; until then no candidate is admitted (runBlocked).
+     */
+    private count(): void {
+        const w = this.world;
+        const ledger = this.stage?.ledger ?? null;
+        const [bytes, now, label] = w.kind === 'legacy' ? [w.legacy.runtime.deviceBytesAt(MAX_LIVE_PIXELS), w.legacy.runtime.deviceBytes, `head: ${w.legacy.spec.title}`]
+            : w.kind === 'backdrop' ? [w.backdrop.bytes(MAX_LIVE_PIXELS), w.backdrop.bytes(0), `backdrop: ${w.backdrop.id}`] : [null, null, ''];
+        this.world = accountWorld(w, bytes, ledger ? (l, b) => ledger.record(l, b) : null, label);
+        if (this.world !== w) console.info(`Wexy: counted on the stage: ${this.worldName()}, at its largest canvas (it holds ${now} bytes now)${this.ledgerLine()}`);
+    }
+
+    /**
+     * An agent world on the stage (EA5.3; executor-design.md §5), through `put`. The switch was the stage's commit (the
+     * viewport's setRuntime); the old world, whatever its kind, is retired after this one is published.
+     */
+    private installAgent(runtime: AgentRuntimeT, held: AgentReservation, snapshot: Sealed, compiled: readonly DeepReadonly<CompiledBody>[], report: AgentReport | null, title: string | null, source: Source): string[] {
+        const agent: AgentWorld = { runtime, candidate: snapshot.id, snapshot, compiled, epoch: ++this.installs, bounds: report?.bounds ?? null, report, title, source };
+        let notes: string[] = [];
+        this.put({ kind: 'agent', agent, held }, null, () => { notes = this.publishAgent(agent); });
+        return notes;
+    }
+
+    /**
+     * An agent world's page (§8 steps 3 to 7). h1's draft no longer runs, and what an agent world has not got yet is off:
+     * keyframes and the camera path (W has none) and the Director (Q85). Films and photos are on (EA5.5): each made from
+     * its candidate again, from time zero, with the camera where it is. Its framing's notes, for Developer view.
+     */
+    private publishAgent(w: AgentWorld): string[] {
         const vp = this.viewport!;
-        const retired: Array<[{ destroy(): void } | null, AgentReservation | null]> = [
-            [this.runtime, this.headReservation], [this.agentWorld?.runtime ?? null, this.agentWorld?.held ?? null],
-        ];
-        this.runtime = null;
-        this.spec = null;
+        const { bounds, snapshot, title } = w;
         this.draftIsLive = false;
         this.selectedKey = -1;
-        this.headReservation = null;
-        this.agentWorld = { runtime, held, candidate: snapshot.id, snapshot, compiled, epoch: ++this.installs, bounds, report };
-        for (const [world, reservation] of retired) {
-            const error = this.retire?.(world, reservation) ?? null;
-            if (error) this.trace.add('The old world\'s cleanup', 'gate').error(error);
-        }
-        // ?agent=1 starts no backdrop; should one be up, the switch has taken its place.
-        this.dropBackdrop();
         this.setMode('orbit', true);
         // A program has no camera of its own yet: the orbit is framed on what the world built, its mesh batches as init
         // left them (bounds.ts), or starts where the orbit always starts. The old world's view is never inherited.
@@ -579,15 +858,22 @@ class Studio {
         vp.setView(framing?.view ?? { target: [0, 0, 0], distance: 12, azimuth: 0, polar: 1.25, fov });
         vp.path = null;
         this.timeline.setKeyframes([]);
-        this.director.note('This world was built from an agent program: its controls are not here yet.');
+        this.director.note(this.agentControlsNote());
         this.exportBtn.disabled = false;
         this.snapBtn.disabled = false;
         this.captureBar.hidden = false;
         this.empty.hidden = true;
         this.hud.root.hidden = false;
-        this.hud.title.textContent = agentTitle({ candidate: snapshot.id });
-        this.hud.source.hidden = true;
-        this.hud.count.textContent = `${snapshot.x.nodes.length} nodes · ${snapshot.interfaces.length} modules`;
+        this.hud.title.textContent = agentTitle(w);
+        // The header names a creation's world as h1's plan names its own (EA9.1); a replayed attempt leaves it as it was.
+        if (title !== null) $('#scene-title').textContent = title;
+        // Its source, in today's three words (§8 step 6): Live for a creation's, From the archive for a saved attempt's.
+        this.hud.source.textContent = COPY.source[w.source];
+        this.hud.source.title = COPY.sourceTitle[w.source];
+        this.hud.source.hidden = false;
+        this.showSourceBadge(w.source);
+        // Developer view's numbers only: the creator's view names no node or module (§2's P5).
+        this.hud.count.textContent = this.devView ? `${snapshot.x.nodes.length} nodes · ${snapshot.interfaces.length} modules` : '';
         this.swapBtn.disabled = this.busy || !this.draftSpec;
         return framing?.notes ?? [];
     }
@@ -607,11 +893,14 @@ class Studio {
     private mountLeft(): void {
         const examples = h('div', { class: 'examples-chips' }, STARTERS.map(s => {
             const b = h('button', { type: 'button', class: 'chip', title: s.prompt }, s.label);
-            b.addEventListener('click', () => { this.prompt.value = s.prompt; this.prompt.dispatchEvent(new Event('input')); void this.forge('mock'); });
+            b.addEventListener('click', () => this.starter(s.prompt));
             return b;
         }));
         this.forgeBtn.disabled = true;
-        this.forgeBtn.addEventListener('click', () => void this.forge(this.live ? 'live' : 'mock'));
+        // On the agent path the creation view owns this button's press (creation-view.ts): Create world, Stop or Show it.
+        this.forgeBtn.addEventListener('click', () => {
+            if (this.path.create !== 'agent') void this.forge(this.live ? 'live' : 'mock');
+        });
         this.length.addEventListener('change', () => this.setDuration(Number(this.length.value)));
         this.sourceBadge.title = COPY.sourceTitle.mock;
         const card = h('section', { class: 'prompt-card' },
@@ -632,6 +921,17 @@ class Studio {
         this.trace.el.classList.add('dev-only');
         $('#left').append(card, this.journey.el, this.trace.el);
         this.showSourceBadge(this.live ? 'live' : 'mock');
+    }
+
+    /**
+     * A starter: one of h1's hand-written examples, built over the mock, no model called. On the agent path it waits while a
+     * creation is under way: the two would share the stage and the steps.
+     */
+    private starter(prompt: string): void {
+        if (this.creation?.busy) return;
+        this.prompt.value = prompt;
+        this.prompt.dispatchEvent(new Event('input'));
+        void this.forge('mock');
     }
 
     /** The badge beside the idea: what the next Create does, then what the running world is. */
@@ -692,7 +992,7 @@ class Studio {
     private mountEmpty(): void {
         const chips = STARTERS.map(s => {
             const b = h('button', { type: 'button', class: 'chip chip-lg' }, s.label);
-            b.addEventListener('click', () => { this.prompt.value = s.prompt; this.prompt.dispatchEvent(new Event('input')); void this.forge('mock'); });
+            b.addEventListener('click', () => this.starter(s.prompt));
             return b;
         });
         // Where the idea and the steps are depends on the layout: beside the stage, or below it once the panels stack.
@@ -746,9 +1046,19 @@ class Studio {
     }
 
     /** After a run that brought no world: the running world's controls again, or the empty panel. */
+    /**
+     * The Controls panel as H's kind says (§8 step 5), after an h1 build that brought no world: h1's world's sliders, an
+     * agent world's note that it has none (EA9.3's review: the empty stage's text was shown for it), or nothing.
+     */
     private restoreControls(): void {
         if (this.runtime && this.viewport) this.director.bind(this.runtime, this.viewport);
+        else if (this.agentWorld) this.director.note(this.agentControlsNote());
         else this.director.clear();
+    }
+
+    /** What the Controls panel says of an agent world, which has no sliders yet (Q85): plain words, or Developer view's. */
+    private agentControlsNote(): string {
+        return this.devView ? 'This world was built from an agent program: its controls are not here yet.' : COPY.creation.noControls;
     }
 
     private selectTab(tab: Tab): void {
@@ -766,9 +1076,14 @@ class Studio {
     private async forge(source: Source): Promise<void> {
         const vp = this.viewport;
         if (!vp || !this.ladder || this.busy) return;
+        // ?agent=1: never beside a Run, whose probe times the device and whose ledger would leave this build out; a Run
+        // waits for an example's build the same way (stageHolders' `building`; EA9.3's review).
+        if (this.stage?.busy) return;
         const prompt = this.prompt.value.trim();
         if (!prompt) { this.prompt.focus(); return; }
         const client = source === 'mock' || !this.live ? this.mock : this.live;
+        // On the agent path no Create reaches h1's routes (I4): only its hand-written examples, over the mock.
+        if (this.path.create === 'agent' && client !== this.mock) return;
         // A live world's calls are one identity's: while Sign in, Sign out or a collision's sign-in is under way, Create
         // (the button or its shortcut) waits (the W1 review, 2026-11-02).
         if (client === this.live && this.accountControl?.changing) return;
@@ -942,7 +1257,12 @@ class Studio {
                 return;
             }
             const { world, spec, stats } = outcome;
-            this.install(world, spec, false, client.source);
+            if (!this.install(world, spec, false, client.source)) {
+                // Not switched: the world on the stage stays, and the one built is gone (its teardown said in the trace).
+                this.journey.fail('check', COPY.failures.internal);
+                this.restoreControls();
+                return;
+            }
             this.builds++;
             console.info(`Wexy: build ${this.builds} "${spec.title}" live (${client.source}), ${world.count} particles, plan ${Math.round(stats.planMs)} ms, author ${Math.round(stats.authorMs)} ms, ${stats.repairs} repair(s), ${stats.autofixes} auto-fix(es)`);
             this.journey.done('check', COPY.runs);
@@ -1020,34 +1340,40 @@ class Studio {
         }));
     }
 
-    private install(runtime: SceneRuntime, spec: SceneSpec, keepCamera: boolean, source: Source): void {
+    /**
+     * h1's world onto the stage (§8 step 1), through `put`: the switch (the viewport's setRuntime), this world's page, then
+     * the old world's retirement, whatever its kind, after the swap (L8): it kept rendering while this one was checked and
+     * built, and the backdrop, held still through the check, goes the same way.
+     */
+    private install(runtime: SceneRuntime, spec: SceneSpec, keepCamera: boolean, source: Source): boolean {
         const vp = this.viewport!;
         const old = this.runtime;
         const previousParams = old && keepCamera ? old.uniformNames.map(n => [n, old.getParam(n)] as const) : [];
-        this.runtime = runtime;
-        this.spec = spec;
-        this.source = source;
+        for (const [name, v] of previousParams) runtime.setParam(name, v);
+        const leaving = this.agentWorld !== null;
+        // The new Head, counted in the stage's ledger (I7) beside the old world until that one's retirement (§8 step 2), at
+        // the largest canvas the viewport ever gives a world (count).
+        const held = this.stage?.ledger.record(`head: ${spec.title}`, runtime.deviceBytesAt(MAX_LIVE_PIXELS)) ?? null;
+        this.put({ kind: 'legacy', legacy: { runtime, spec, source }, held }, () => vp.setRuntime(runtime), () => this.publishLegacy(runtime, spec, keepCamera, source));
+        // A switch that did not happen (the viewport refused it) leaves the old world, and this one is gone: the caller
+        // says so, never that it is ready (EA9.3's review).
+        if (this.runtime !== runtime) return false;
+        if (leaving) {
+            // The agent world's reviews stay as history; none can authorize anything now (EA6).
+            this.afterSwitch('the old world\'s reviews', () => this.reviews?.installed(null));
+            // Its creation's session goes with it (I8): no paid action on a world no longer on the stage.
+            this.afterSwitch('the old world\'s creation', () => this.creation?.replaced());
+        }
+        return true;
+    }
+
+    /** h1's world's page (§8 steps 3 to 7): its draft in the editor, its path and keyframes, the Director, its title and source. */
+    private publishLegacy(runtime: SceneRuntime, spec: SceneSpec, keepCamera: boolean, source: Source): void {
+        const vp = this.viewport!;
+        this.draftSource = source;
         this.draftSpec = structuredClone(spec);
         this.draftIsLive = true;
         this.editedTargets.clear();
-        for (const [name, v] of previousParams) runtime.setParam(name, v);
-
-        vp.setRuntime(runtime);
-        // Destroy after the swap: the old world kept rendering while the new one was checked and built (L8).
-        old?.destroy();
-        // The empty stage's backdrop, which held still through the check, goes the same way.
-        this.dropBackdrop();
-        // An agent world on the stage goes the same way, after the switch (EA5.3); its reservation with it.
-        if (this.agentWorld) {
-            const error = this.retire?.(this.agentWorld.runtime, this.agentWorld.held) ?? null;
-            if (error) this.trace.add('The old world\'s cleanup', 'gate').error(error);
-            this.agentWorld = null;
-            // Its reviews stay as history; none can authorize anything now (EA6).
-            this.reviews?.installed(null);
-        }
-        // The new Head, counted in the stage's ledger (I7), so a Run reserves beside it.
-        this.headReservation?.release();
-        this.headReservation = this.stage?.ledger.record(`head: ${spec.title}`, runtime.deviceBytes) ?? null;
         if (!keepCamera) {
             vp.setView(firstView(spec.camera.keyframes));
             vp.playhead = 0;
@@ -1083,6 +1409,8 @@ class Studio {
     private async hotSwap(): Promise<void> {
         const draft = this.draftSpec;
         if (!draft || this.busy || !this.viewport || !this.ladder) return;
+        // Never beside a Run, as forge (EA9.3's review).
+        if (this.stage?.busy) return;
         const sameScene = this.draftIsLive && !!this.spec && this.runtime !== null;
         // Start from the running spec when it is the same world: it carries the director's edits.
         let spec: SceneSpec = structuredClone(sameScene ? this.spec! : draft);
@@ -1104,7 +1432,7 @@ class Studio {
             }
             step.ok(rungs, 'edited by hand');
             this.showDiagnostics([]);
-            this.install(result.world, result.spec, sameScene, this.source);
+            if (!this.install(result.world, result.spec, sameScene, this.draftSource)) this.showMessage(COPY.editFailed, 'error');
         } catch (error) {
             if ((error as Error).name !== 'AbortError') {
                 this.trace.add('Hot-swap stopped', 'gate').error(String(error));
@@ -1138,11 +1466,16 @@ class Studio {
 
     private setBusy(busy: boolean): void {
         this.busy = busy;
-        this.accountControl?.setBusy(busy);
-        this.forgeBtn.disabled = busy || !this.viewport || !!this.accountControl?.changing;
-        this.forgeBtn.classList.toggle('is-busy', busy);
-        this.forgeBtn.querySelector('span')!.textContent = busy ? 'Creating…' : 'Create world';
-        this.setBuilding(busy);
+        this.accountControl?.setBusy(busy || !!this.creation?.busy);
+        if (this.path.create === 'agent') {
+            // The agent path's button is the creation view's: an example being built only blocks its Create.
+            this.renderCreate();
+        } else {
+            this.forgeBtn.disabled = busy || !this.viewport || !!this.accountControl?.changing;
+            this.forgeBtn.classList.toggle('is-busy', busy);
+            this.forgeBtn.querySelector('span')!.textContent = busy ? 'Creating…' : 'Create world';
+        }
+        this.setBuilding(busy || !!this.creation?.busy);
         this.swapBtn.disabled = busy || !this.draftSpec || (this.editedTargets.size === 0 && this.draftIsLive);
     }
 
@@ -1170,18 +1503,28 @@ class Studio {
 
     // ------------------------------------------------------------------ the empty stage's backdrop
 
-    /** A playground example drawn live behind the empty card (backdrop.ts); the still stage stays if it cannot be built. */
+    /**
+     * A playground example drawn live behind the empty card (backdrop.ts); the still stage stays if it cannot be built. It
+     * is H from now (EA9.3, §8): counted in the stage's ledger once it is on the viewport, so a candidate is admitted beside
+     * it, never past it; the first world's install retires it.
+     */
     private mountBackdrop(vp: Viewport, id: string): void {
+        if (this.world.kind !== 'empty') return;
         const backdrop = startBackdrop(vp, id, { touch: TOUCH, still: matchMedia('(prefers-reduced-motion: reduce)').matches });
         if (!backdrop) return;
-        this.backdrop = backdrop;
+        // No switch here: it reaches the viewport by itself once built, and only while no world has.
+        this.put({ kind: 'backdrop', backdrop, held: null }, null, () => {});
         void backdrop.ready.then(live => {
             if (this.backdrop !== backdrop) return;
             if (!live) {
-                this.backdrop = null;
-                this.renderMark();
+                // Never on the viewport: the stage is empty again, and a Run may be admitted.
+                this.put(EMPTY, null, () => this.renderMark());
+                this.refreshRun();
                 return;
             }
+            // On the viewport: counted from now (§8 step 2), so a Run waits no more.
+            this.count();
+            this.refreshRun();
             // Its source, as the HUD names a world's (design guidelines §3).
             const label = STARTERS.find(s => s.id === id)?.label ?? id;
             const source = this.empty.querySelector('.empty-source');
@@ -1197,15 +1540,6 @@ class Studio {
     private releaseBackdrop(): void {
         this.backdropHold?.();
         this.backdropHold = null;
-    }
-
-    /** After a world has replaced the backdrop on the viewport: its holds let go, then it is freed. */
-    private dropBackdrop(): void {
-        if (!this.backdrop) return;
-        this.releaseBackdrop();
-        this.backdrop.drop();
-        this.backdrop = null;
-        this.empty.classList.remove('has-backdrop');
     }
 
     // ------------------------------------------------------------------ WGSL + spec views
@@ -1285,7 +1619,15 @@ class Studio {
 
     private wireKeys(): void {
         window.addEventListener('keydown', e => {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !this.exporter.el.open) { e.preventDefault(); void this.forge(this.live ? 'live' : 'mock'); return; }
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !this.exporter.el.open) {
+                e.preventDefault();
+                // A held shortcut repeats: each repeat would press again, through Show it into a new paid Create (the EA9.2
+                // review). Only the first press of the keys counts, on either path.
+                if (e.repeat) return;
+                if (this.path.create === 'agent') this.creationView?.shortcut();
+                else void this.forge(this.live ? 'live' : 'mock');
+                return;
+            }
             if (isTyping() || e.ctrlKey || e.metaKey || e.altKey || this.exporter.el.open) return;
             if (e.key === ' ' && this.runtime) { e.preventDefault(); this.setPlaying(!this.timeline.isPlaying); }
             else if (e.key.toLowerCase() === 'k' && this.runtime) this.addKeyframe();
@@ -1393,6 +1735,13 @@ class Studio {
 
     private onFrame(fps: number, width: number, height: number, quality: number, scale: number): void {
         const vp = this.viewport!;
+        // The world on the stage paused past what it was tested at (EA_RESIZE), or running again: Show it offers to test
+        // it again at this size (the EA9.2 review: a pause had no way out for a creator).
+        const paused = !!this.agentWorld?.runtime.isPaused;
+        if (paused !== this.agentPaused) {
+            this.agentPaused = paused;
+            this.refreshRun();
+        }
         this.timeline.setPlayhead(vp.playhead);
         const now = performance.now();
         if (now - this.lastHud < 250) return;
@@ -1414,12 +1763,15 @@ class Studio {
     private openExport(): void {
         const vp = this.viewport;
         if (!vp) return;
+        // Not while a Run builds another world on the same device: its commit retires the world filmed here, whatever its
+        // kind (P7; the EA9.1 review). Nor while an example is built: its install retires it too, and a film admitted now
+        // would leave that build out of the ledger (EA9.3's review; a photo waited already).
+        if (this.stage?.busy || this.busy) return;
         const world = this.agentWorld;
         if (world) {
-            // An agent world's film (EA5.5): from its time zero, with the camera where it is now (W has no path). Not while a
-            // Run builds another on the same device.
+            // An agent world's film (EA5.5): from its time zero, with the camera where it is now (W has no path).
             const film = this.agentFilmSource(world);
-            if (!film || this.stage?.busy) return;
+            if (!film) return;
             const still = vp.currentView();
             this.exporter.open({ viewport: vp, film, title: agentTitle(world), seconds: this.duration, format: this.format, pathFor: () => () => still });
             return;
@@ -1445,9 +1797,12 @@ class Studio {
     private async takeSnapshot(): Promise<void> {
         const vp = this.viewport, rt = this.runtime, spec = this.spec, world = this.agentWorld;
         if (!vp || this.busy || document.body.classList.contains('exporting')) return;
+        // Never beside a Run, whose commit retires the world this photo draws, whatever its kind (P7; the EA9.1 review): an
+        // h1 example stays on the stage while an agent world is tested to replace it.
+        if (this.stage?.busy) return;
         // An agent world's photo (EA5.5) shows its time zero, its candidate built again for it; h1's, the live state.
         const film = world ? this.agentFilmSource(world) : null;
-        if (world ? !film || this.stage?.busy : !rt || !spec) return;
+        if (world ? !film : !rt || !spec) return;
         const title = world ? agentTitle(world) : spec!.title;
         const { width, height } = frameSize(this.format, 'fhd');
         const view = vp.currentView();
@@ -1503,9 +1858,9 @@ class Studio {
     }
 }
 
-/** An agent world's name in the studio: its id(C), short. */
-function agentTitle(world: { candidate: string }): string {
-    return `Agent world ${world.candidate.slice(0, 12)}…`;
+/** An agent world's name in the studio: its creation's title (EA9.1), or, for a saved attempt replayed, its id(C), short. */
+function agentTitle(world: { candidate: string; title: string | null }): string {
+    return world.title ?? `Agent world ${world.candidate.slice(0, 12)}…`;
 }
 
 function round3(v: number): number {

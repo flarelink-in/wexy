@@ -258,6 +258,11 @@ export interface CandidateStop {
     diagnostic: string;
     /** The creator's one sentence (copy.ts). */
     sentence: string;
+    /**
+     * The backend's error code when its refusal stopped the attempt (EA9.1): the creation controller opens W1's limit
+     * dialog on `quota` and `account-required` from this, never from the words. Absent for every other stop.
+     */
+    code?: ErrorCode;
 }
 
 export interface CandidateState {
@@ -811,7 +816,7 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
             // Refused before any stream (an HTTP status), or broken once it ran (an error event, a cut, another contract).
             record.status = error instanceof ForgeError && error.status >= 400 ? 'refused' : 'broken';
             const code = error instanceof ForgeError ? error.code : 'internal';
-            a.halt({ scope: 'host', diagnostic: `revision: ${message(error)}; charge unknown`, sentence: sentenceFor(code) }, 'failed', now());
+            a.halt({ scope: 'host', diagnostic: `revision: ${message(error)}; charge unknown`, sentence: sentenceFor(code), ...(error instanceof ForgeError ? { code } : {}) }, 'failed', now());
             return 'stop';
         }
         a.revising = false;
@@ -1137,7 +1142,7 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
                     a.halt({ scope: 'host', diagnostic: error.message, sentence: COPY.candidate.stream }, 'failed', now());
                 } else if (error instanceof ForgeError) {
                     record.status = 'refused';
-                    a.halt({ scope: 'host', diagnostic: `${error.code}: ${error.message}`, sentence: sentenceFor(error.code) }, 'failed', now());
+                    a.halt({ scope: 'host', diagnostic: `${error.code}: ${error.message}`, sentence: sentenceFor(error.code), code: error.code }, 'failed', now());
                 } else {
                     record.status = 'broken';
                     a.halt({ scope: 'host', diagnostic: `module call ${jobId}: ${message(error)}`, sentence: COPY.candidate.refused }, 'failed', now());
@@ -1169,7 +1174,7 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
                     publish(a);
                     return;
                 }
-                a.halt({ scope: 'host', diagnostic: `${outcome.code}: ${outcome.message}`, sentence: sentenceFor(outcome.code) }, 'failed', now());
+                a.halt({ scope: 'host', diagnostic: `${outcome.code}: ${outcome.message}`, sentence: sentenceFor(outcome.code), code: outcome.code }, 'failed', now());
                 return;
             }
             record.status = 'ok';

@@ -133,6 +133,13 @@ const gateway = createServer((req, res) => {
             res.end(fixture('test/fixtures/review-wire/terms-shut.json'));
             return;
         }
+        // W1 (EA9.1): the studio reads the chip around a turn; the backend's DTO, as dev/ea9-e1.mjs's stand-in answers it.
+        if (req.method === 'GET' && req.url === '/v1/forge/allowance') {
+            calls.push({ route: 'allowance' });
+            res.writeHead(200, { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+            res.end(JSON.stringify({ label: 'Free', left: 0, resetsAt: null }));
+            return;
+        }
         calls.push({ route: `${req.method} ${req.url}`, unexpected: true });
         res.writeHead(404, { ...cors, 'Content-Type': 'application/json' });
         res.end('{"error":{"code":"not_found"}}');
@@ -274,9 +281,13 @@ try {
     const r2 = await review();
     const revision = calls.find(c => c.route === 'revision');
     const candAfter = await evaluate(`({ phase: document.querySelector('.cand')?.dataset.phase, id: document.querySelector('.cand .cand-id')?.textContent })`);
-    step('by the keyboard: a finding unchecked with Space, the words typed, "Improve it" with Enter: one revision citing exactly the words and the finding kept',
-        unchecked && offered.improve === false && awaiting && r2.status === 'awaiting-run' && revision?.findings?.length === 2 && revision.findings[0].code === 'creator'
-        && revision.findings[0].message === words && revision.findings[1].code === 'EA_SCALE',
+    // The creator's: the words and the finding kept, the one unchecked left out. Beside them, since EA6.3, the host's own
+    // finding of how many notes the attempt can still answer (EA_REPAIR_BUDGET), told to every revision.
+    const cited = (revision?.findings ?? []).filter(f => f.code !== 'EA_REPAIR_BUDGET');
+    const budget = (revision?.findings ?? []).filter(f => f.code === 'EA_REPAIR_BUDGET');
+    step('by the keyboard: a finding unchecked with Space, the words typed, "Improve it" with Enter: one revision citing exactly the words and the finding kept, beside the host\'s note budget',
+        unchecked && offered.improve === false && awaiting && r2.status === 'awaiting-run' && cited.length === 2 && cited[0].code === 'creator'
+        && cited[0].message === words && cited[1].code === 'EA_SCALE' && budget.length === 1,
         { unchecked, offered: offered.why, status: r2.status, revisionFindings: revision?.findings?.map(f => `${f.code}: ${f.message.slice(0, 60)}`) });
     // EA6.3: the three noted modules' bodies were kept (their interfaces held), so each was repaired with its note as its
     // one finding, and compiled on this device; nothing was written fresh.
@@ -295,8 +306,10 @@ try {
     await until(`!['running', 'idle'].includes(document.querySelector('.cand')?.dataset.run)`, 180_000);
     const ready2 = await until(`document.querySelector('.rev')?.dataset.status === 'ready' && !/improved to/.test(document.querySelector('.rev-status')?.textContent ?? '')`, 60_000);
     const r3 = await review();
-    step('Run again: the unit castle on the stage, its parts lowered onto the hill, recaptured, neither EA_SCALE nor EA_FRAME', ready2 && r3.frames.length === 2 && r3.frames.every(f => f.natural === 768)
-        && !r3.findings.some(f => /EA_SCALE|EA_FRAME/.test(f.label)) && (await title()) !== firstTitle && r3.id !== r1.id, { review: r3, title: await title() });
+    // The improved world is another candidate (its review's id) of the same creation, whose title, from the idea, it keeps
+    // (EA9.1): the HUD named each candidate by its id(C) before.
+    step('Run again: the unit castle on the stage, its parts lowered onto the hill, recaptured, neither EA_SCALE nor EA_FRAME; its creation\'s title kept', ready2 && r3.frames.length === 2 && r3.frames.every(f => f.natural === 768)
+        && !r3.findings.some(f => /EA_SCALE|EA_FRAME/.test(f.label)) && (await title()) === firstTitle && r3.id !== r1.id, { review: r3, title: await title() });
     await keepFrames('castle-unit');
     await shot('castle-unit-reviewed');
 
