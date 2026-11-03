@@ -31,11 +31,32 @@ class CorsPolicyTest {
         assertThatThrownBy(() -> new CorsPolicy("https://wexy.ai,*")).isInstanceOf(IllegalStateException.class);
     }
 
-    /** Wexy's API uses GET and POST only; anything more is surface nobody asked for. */
+    /**
+     * The methods the routes use and no more: since W2 the platform's PATCH and DELETE (the creations platform design
+     * §10, PL-T17); PUT is still surface nobody asked for.
+     */
     @Test
     void exactlyTheMethodsTheRoutesUse() {
         assertThat(policy().getAllowedMethods())
-                .containsExactlyInAnyOrder(HttpMethod.GET.name(), HttpMethod.POST.name(), HttpMethod.OPTIONS.name());
+                .containsExactlyInAnyOrder(HttpMethod.GET.name(), HttpMethod.POST.name(), HttpMethod.PATCH.name(),
+                        HttpMethod.DELETE.name(), HttpMethod.OPTIONS.name());
+    }
+
+    /**
+     * PL-T17: a PATCH or a DELETE with an Idempotency-Key passes preflight from a Wexy origin, and from no other: the
+     * policy answers another origin's preflight with no allowance at all.
+     */
+    @Test
+    void platformPreflightsPassFromWexyOriginsOnly() {
+        CorsConfiguration policy = policy();
+        for (HttpMethod method : new HttpMethod[]{HttpMethod.PATCH, HttpMethod.DELETE}) {
+            assertThat(policy.checkOrigin("https://wexy.ai")).as(method.name()).isEqualTo("https://wexy.ai");
+            assertThat(policy.checkHttpMethod(method)).as(method.name()).contains(method);
+            assertThat(policy.checkHeaders(java.util.List.of("Idempotency-Key", "X-Firebase-AppCheck")))
+                    .as(method.name()).containsExactlyInAnyOrder("Idempotency-Key", "X-Firebase-AppCheck");
+            assertThat(policy.checkOrigin("https://evil.example")).as(method.name()).isNull();
+        }
+        assertThat(policy.checkHttpMethod(HttpMethod.PUT)).isNull();
     }
 
     /** A throttled client has to be able to read the back-off hint. */
@@ -50,6 +71,6 @@ class CorsPolicyTest {
      */
     @Test
     void allowsEveryHeaderTheClientSends() {
-        assertThat(policy().getAllowedHeaders()).contains("Authorization", "Content-Type", "X-Firebase-AppCheck");
+        assertThat(policy().getAllowedHeaders()).contains("Authorization", "Content-Type", "X-Firebase-AppCheck", "Idempotency-Key");
     }
 }

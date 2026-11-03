@@ -47,3 +47,8 @@ wexy:
       # W1: the allowance read after each Create and sign-in; a drive reads it often.
       account-read: { refill-per-second: 30, burst-capacity: 300 }
       account-read-user: { refill-per-second: 30, burst-capacity: 300 }
+      # W2: the account's bootstrap and profile writes; a drive signs in and claims handles in a row.
+      account-bootstrap: { refill-per-second: 30, burst-capacity: 300 }
+      account-bootstrap-user: { refill-per-second: 30, burst-capacity: 300 }
+      profile-write: { refill-per-second: 30, burst-capacity: 300 }
+      profile-write-user: { refill-per-second: 30, burst-capacity: 300 }

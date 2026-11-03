@@ -18,6 +18,9 @@ management:
 wexy:
   forge-service:
     url: ${WEXY_FORGE_SERVICE_URL:http://forge-service:8410}
+  # W2: the platform service by its compose name (compose.platform.yaml); a stack without it answers its routes 503.
+  platform-service:
+    url: ${WEXY_PLATFORM_SERVICE_URL:http://platform-service:8430}
   firebase:
     # Startup stops without a credential (FirebaseCredentials); only the local profile runs without one.
     required: true

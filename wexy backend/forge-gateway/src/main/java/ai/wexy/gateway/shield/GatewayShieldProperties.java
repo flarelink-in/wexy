@@ -14,8 +14,8 @@ import java.util.Map;
  *
  * Adapted from FlareLink's GatewayShieldProperties (pre-existing work). Changed: the prefix; the
  * buckets are Wexy's route classes (backend architecture §4); the identity-lookup settings are gone
- * with the user-service lookup; the body limit has no upload routes, because uploads go straight
- * to storage on presigned URLs (backend §7).
+ * with the user-service lookup; one body limit for every route, but the few that carry a saved world
+ * or a poster through the API (W2; the creations platform design §11), which have their own.
  *
  * Every value can be overridden per profile, or by environment variable
  * ({@code WEXY_SHIELD_EDGE_REFILLPERSECOND=…}), so limits tighten during an incident without a
@@ -102,12 +102,29 @@ public class GatewayShieldProperties {
             Map.entry("agent-module", new Bucket(2.0 * AgentTurn.MODULE_CALLS / 30.0, 4 * AgentTurn.MODULE_CALLS)),
             Map.entry("agent-module-user", new Bucket(AgentTurn.MODULE_CALLS / 60.0, 2 * AgentTurn.MODULE_CALLS)),
             Map.entry("agent-module-anonymous", new Bucket(AgentTurn.MODULE_CALLS / 120.0, AgentTurn.MODULE_CALLS)),
+            // Submitting a world to the showcase and withdrawing it (W4; the creations platform design §10).
             Map.entry("publish", new Bucket(0.1, 10)),
             Map.entry("publish-user", new Bucket(0.05, 5)),
             // W1: the caller's own allowance, read after each Create and sign-in (GET /v1/forge/allowance): cheap reads,
-            // paced so a loop of them cannot hammer Redis; an address, then the uid.
+            // paced so a loop of them cannot hammer Redis; an address, then the uid. W2: the account's own reads too
+            // (GET /v1/me, then W3's library and usage), which the studio makes at a sign-in, a reload and a claim.
             Map.entry("account-read", new Bucket(2, 30)),
             Map.entry("account-read-user", new Bucket(0.5, 10)),
+            // W2 (§10's classes): an account's bootstrap (POST /v1/me, once a sign-in), its profile's writes (a handle
+            // claimed once, its text), and its deletion (W5): rare by nature, so a loop of them is refused early.
+            Map.entry("account-bootstrap", new Bucket(0.2, 10)),
+            Map.entry("account-bootstrap-user", new Bucket(0.05, 5)),
+            Map.entry("profile-write", new Bucket(0.5, 10)),
+            Map.entry("profile-write-user", new Bucket(0.1, 5)),
+            Map.entry("account-delete", new Bucket(0.05, 5)),
+            Map.entry("account-delete-user", new Bucket(0.01, 3)),
+            // Saves, renames and deletes of worlds (W3), and their posters (W4): one Save a few seconds apart is a lot.
+            Map.entry("world-write", new Bucket(1, 20)),
+            Map.entry("world-write-user", new Bucket(0.2, 10)),
+            Map.entry("media-write", new Bucket(0.2, 10)),
+            Map.entry("media-write-user", new Bucket(0.05, 5)),
+            // The waitlist's form (W6): public, so an address alone, and slow.
+            Map.entry("waitlist", new Bucket(0.05, 5)),
             Map.entry("admin", new Bucket(1, 10))
     ));
 
@@ -251,10 +268,76 @@ public class GatewayShieldProperties {
     public static class Body {
         private boolean enabled = true;
         /**
-         * The cap for every request body. The largest legitimate one is a published world's spec,
-         * at most 64 KB (backend §7), plus a turn or diagnostics; nothing else comes close.
+         * The cap for every request body but the routes below. The largest legitimate one elsewhere is a turn with its
+         * base or diagnostics; nothing else comes close.
          */
         private long maxBytes = 256 * 1024;
+
+        /**
+         * Caps for single routes, by {@code "<METHOD> <path pattern>"} (W2; the creations platform design §10, §11): a
+         * world's save carries its artifact (at most 512 KiB) as escaped JSON text, so its envelope may reach 768 KiB,
+         * and a poster is at most 1 MiB of image. A pattern's {@code {id}} matches one path segment. Every other route,
+         * and a path that matches none, keeps {@link #maxBytes}: the safe side. A profile's entries join these (Spring
+         * merges maps), written bracketed in YAML, e.g. {@code "[POST /v1/worlds]": 786432}.
+         */
+        private Map<String, Long> routes = new LinkedHashMap<>(Map.of(
+                "POST /v1/worlds", 768L * 1024,
+                "POST /v1/worlds/{id}/revisions", 768L * 1024,
+                "POST /v1/worlds/{id}/posters", 1024L * 1024));
+
+        /** {@link #routes}, parsed once for each map that was set. */
+        private volatile ParsedRoutes parsed;
+
+        private record RouteCap(String method, org.springframework.web.util.pattern.PathPattern pattern, long bytes) {
+        }
+
+        private record ParsedRoutes(Map<String, Long> source, List<RouteCap> caps) {
+        }
+
+        /** The cap for one request: its route's, when one of {@link #routes} matches, else the default. */
+        public long limitFor(String method, String path) {
+            org.springframework.http.server.PathContainer container = org.springframework.http.server.PathContainer.parsePath(path);
+            for (RouteCap cap : caps()) {
+                if (cap.method().equals(method) && cap.pattern().matches(container)) {
+                    return cap.bytes();
+                }
+            }
+            return maxBytes;
+        }
+
+        /** Parses every route's key, so a malformed one stops the gateway at startup instead of capping nothing. */
+        public void validate() {
+            caps();
+        }
+
+        private List<RouteCap> caps() {
+            ParsedRoutes current = parsed;
+            if (current != null && current.source() == routes) {
+                return current.caps();
+            }
+            List<RouteCap> caps = new ArrayList<>();
+            for (Map.Entry<String, Long> route : routes.entrySet()) {
+                String[] parts = route.getKey().trim().split(" ", -1);
+                if (parts.length != 2 || !parts[0].matches("[A-Z]+") || !parts[1].startsWith("/") || route.getValue() == null
+                        || route.getValue() <= 0) {
+                    throw new IllegalStateException("wexy.shield.body.routes: \"" + route.getKey()
+                            + "\" must be \"<METHOD> <path>\" with a positive byte count");
+                }
+                caps.add(new RouteCap(parts[0],
+                        org.springframework.web.util.pattern.PathPatternParser.defaultInstance.parse(parts[1]), route.getValue()));
+            }
+            List<RouteCap> frozen = List.copyOf(caps);
+            parsed = new ParsedRoutes(routes, frozen);
+            return frozen;
+        }
+
+        public Map<String, Long> getRoutes() {
+            return routes;
+        }
+
+        public void setRoutes(Map<String, Long> routes) {
+            this.routes = routes;
+        }
 
         public boolean isEnabled() {
             return enabled;

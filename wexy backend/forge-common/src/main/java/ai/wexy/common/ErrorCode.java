@@ -13,6 +13,9 @@ package ai.wexy.common;
  * content safety refused before any grant or model call, and {@code quota}, a signed-in caller's
  * allowance spent, always with {@code Retry-After} to its reset. A spent anonymous allowance is the
  * existing {@code account-required}: signing in is the way on, not waiting.
+ *
+ * W2 (2026-11-03) brings {@code conflict} (409) forward from W3: a write based on a version that has moved on
+ * ({@code expectedVersion}), or a name another account holds (a handle). The studio reads again and says which.
  */
 public enum ErrorCode {
 
@@ -22,6 +25,7 @@ public enum ErrorCode {
     ACCOUNT_REQUIRED("account-required", 403),
     FORBIDDEN("forbidden", 403),
     NOT_FOUND("not-found", 404),
+    CONFLICT("conflict", 409),
     TOO_LARGE("too-large", 413),
     CONTENT_REFUSED("content-refused", 422),
     RATE("rate", 429),
@@ -64,13 +68,15 @@ public enum ErrorCode {
      * The code for an error that arrives with a status and none of ours: a framework 404, a proxy
      * timeout, a refused connection. Statuses with several codes take the one that promises least:
      * 403 is {@code forbidden}, 503 is {@code unavailable}, 429 is {@code rate} (never {@code quota},
-     * whose reset only forge knows), and 422 is {@code bad-request} (never a content refusal).
+     * whose reset only forge knows), and 422 is {@code bad-request} (never a content refusal). 409 has one code,
+     * {@code conflict} (W2).
      */
     public static ErrorCode forStatus(int status) {
         return switch (status) {
             case 401 -> AUTH;
             case 403 -> FORBIDDEN;
             case 404 -> NOT_FOUND;
+            case 409 -> CONFLICT;
             case 413 -> TOO_LARGE;
             case 429 -> RATE;
             case 502 -> UPSTREAM;

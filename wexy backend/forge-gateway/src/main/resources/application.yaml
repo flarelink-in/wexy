@@ -42,6 +42,10 @@ server:
 wexy:
   forge-service:
     url: ${WEXY_FORGE_SERVICE_URL:http://localhost:8410}
+  # W2 (the creations platform design §3): accounts, profiles, worlds, the showcase and the waitlist (PlatformRoutes).
+  # Not running is an answer too: its routes are then 503 `unavailable`, and forge's are untouched.
+  platform-service:
+    url: ${WEXY_PLATFORM_SERVICE_URL:http://localhost:8430}
   internal-jwt:
     # Base64 PKCS#8 RSA key, shared by every instance. Empty generates an ephemeral one (local only).
     private-key: ${WEXY_INTERNAL_JWT_PRIVATE_KEY:}

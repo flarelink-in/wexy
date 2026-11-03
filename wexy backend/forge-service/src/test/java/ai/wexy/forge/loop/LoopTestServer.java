@@ -214,7 +214,8 @@ final class LoopTestServer implements AutoCloseable {
     static String token(String uid, boolean anonymous, boolean admin, String ipk) {
         try {
             long now = System.currentTimeMillis();
-            JWTClaimsSet.Builder builder = new JWTClaimsSet.Builder().issuer(InternalToken.ISSUER).subject(uid)
+            JWTClaimsSet.Builder builder = new JWTClaimsSet.Builder().issuer(InternalToken.ISSUER)
+                    .audience(InternalToken.AUDIENCE_FORGE).subject(uid)
                     .issueTime(new Date(now)).expirationTime(new Date(now + 60_000))
                     .claim(InternalToken.CLAIM_ANONYMOUS, anonymous).claim(InternalToken.CLAIM_ADMIN, admin)
                     .claim(InternalToken.CLAIM_PROVIDER, anonymous ? "anonymous" : "google.com");

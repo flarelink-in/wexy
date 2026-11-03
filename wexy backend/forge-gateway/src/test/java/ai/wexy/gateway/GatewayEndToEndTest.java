@@ -50,13 +50,21 @@ class GatewayEndToEndTest {
     /** What the fake forge-service received: one map of headers per request. */
     private static final List<Map<String, List<String>>> received = new CopyOnWriteArrayList<>();
 
-    private static final HttpServer forgeService = startForgeService();
+    /** What the fake platform service received (W2), and with which method. */
+    private static final List<Map<String, List<String>>> platformReceived = new CopyOnWriteArrayList<>();
+    private static final List<String> platformMethods = new CopyOnWriteArrayList<>();
 
-    private static HttpServer startForgeService() {
+    private static final HttpServer forgeService = startService(received, null);
+    private static final HttpServer platformService = startService(platformReceived, platformMethods);
+
+    private static HttpServer startService(List<Map<String, List<String>>> headersSeen, List<String> methodsSeen) {
         try {
             HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             server.createContext("/", exchange -> {
-                received.add(Map.copyOf(exchange.getRequestHeaders()));
+                headersSeen.add(Map.copyOf(exchange.getRequestHeaders()));
+                if (methodsSeen != null) {
+                    methodsSeen.add(exchange.getRequestMethod());
+                }
                 exchange.getRequestBody().readAllBytes();
                 byte[] body = "{\"mode\":\"live\"}".getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "application/json");
@@ -75,22 +83,26 @@ class GatewayEndToEndTest {
     @DynamicPropertySource
     static void routeToTheFake(DynamicPropertyRegistry registry) {
         registry.add("wexy.forge-service.url", () -> "http://127.0.0.1:" + forgeService.getAddress().getPort());
+        registry.add("wexy.platform-service.url", () -> "http://127.0.0.1:" + platformService.getAddress().getPort());
     }
 
     @AfterAll
     static void stopForgeService() {
         forgeService.stop(0);
+        platformService.stop(0);
     }
 
-    /** Plays Firebase for the one token these tests sign in with. */
+    /** Plays Firebase for the two tokens these tests sign in with: an anonymous user's and a Google user's. */
     @TestConfiguration
     static class FakeFirebase {
         @Bean
         @Primary
         FirebaseTokenVerifier fakeVerifier() {
-            return token -> "h.anonymous.s".equals(token)
-                    ? Mono.just(new VerifiedCaller("anon-uid", "anonymous"))
-                    : Mono.error(new GatewayRejection(ErrorCode.AUTH, "The sign-in token could not be verified."));
+            return token -> switch (token) {
+                case "h.anonymous.s" -> Mono.just(new VerifiedCaller("anon-uid", "anonymous"));
+                case "h.google.s" -> Mono.just(new VerifiedCaller("user-uid", "google.com"));
+                default -> Mono.error(new GatewayRejection(ErrorCode.AUTH, "The sign-in token could not be verified."));
+            };
         }
     }
 
@@ -100,6 +112,8 @@ class GatewayEndToEndTest {
     @BeforeEach
     void clear() {
         received.clear();
+        platformReceived.clear();
+        platformMethods.clear();
         client = client.mutate().responseTimeout(Duration.ofSeconds(20)).build();
     }
 
@@ -166,6 +180,62 @@ class GatewayEndToEndTest {
         assertThat(jwt.verify(new RSASSAVerifier(key))).isTrue();
         assertThat(jwt.getJWTClaimsSet().getSubject()).isEqualTo("anon-uid");
         assertThat(jwt.getJWTClaimsSet().getBooleanClaim(InternalToken.CLAIM_ANONYMOUS)).isTrue();
+        // W2: for forge alone.
+        assertThat(jwt.getJWTClaimsSet().getAudience()).containsExactly(InternalToken.AUDIENCE_FORGE);
+        assertThat(platformReceived).isEmpty();
+    }
+
+    /**
+     * W2: an account's call reaches the platform service, not forge, with the gateway's own token for the platform
+     * alone; a PATCH passes through as a PATCH.
+     */
+    @Test
+    void anAccountCallReachesThePlatformWithATokenForThePlatformAlone() throws Exception {
+        client.get().uri("/v1/me")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer h.google.s")
+                .header(InternalToken.HEADER, "forged.by.client")
+                .exchange()
+                .expectStatus().isOk();
+        client.patch().uri("/v1/me/profile")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer h.google.s")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"expectedVersion\":0,\"handle\":\"nova\"}")
+                .exchange()
+                .expectStatus().isOk();
+
+        assertThat(received).as("forge saw none of it").isEmpty();
+        assertThat(platformMethods).containsExactly("GET", "PATCH");
+        List<String> tokens = headers(platformReceived.get(0), InternalToken.HEADER);
+        assertThat(tokens).hasSize(1).doesNotContain("forged.by.client");
+        String jwks = client.get().uri(InternalToken.JWKS_PATH).exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class).returnResult().getResponseBody();
+        SignedJWT jwt = SignedJWT.parse(tokens.get(0));
+        RSAKey key = (RSAKey) JWKSet.parse(jwks).getKeyByKeyId(jwt.getHeader().getKeyID());
+        assertThat(jwt.verify(new RSASSAVerifier(key))).isTrue();
+        assertThat(jwt.getJWTClaimsSet().getSubject()).isEqualTo("user-uid");
+        assertThat(jwt.getJWTClaimsSet().getAudience()).containsExactly(InternalToken.AUDIENCE_PLATFORM);
+    }
+
+    /** §10's N: an anonymous caller is asked to sign in, and the platform sees nothing. */
+    @Test
+    void anAnonymousCallerIsAskedForAnAccountBeforeThePlatformSeesAnything() {
+        client.post().uri("/v1/me")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer h.anonymous.s")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
+                .exchange()
+                .expectStatus().isForbidden()
+                .expectBody().json("{\"code\":\"account-required\"}");
+        assertThat(platformReceived).isEmpty();
+    }
+
+    /** PL-T17: before W2 a world was a public read; now it is its owner's, so a caller without a sign-in is refused. */
+    @Test
+    void aWorldIsNoLongerAPublicRead() {
+        client.get().uri("/v1/worlds/01JC3W5F6Q7R8S9T0V1W2X3Y4Z").exchange()
+                .expectStatus().isUnauthorized()
+                .expectBody().json("{\"code\":\"auth\"}");
+        assertThat(received).isEmpty();
+        assertThat(platformReceived).isEmpty();
     }
 
     /** The JDK server keys headers by its own casing; look them up without caring. */

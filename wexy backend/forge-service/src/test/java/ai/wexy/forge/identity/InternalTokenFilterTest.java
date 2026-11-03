@@ -49,9 +49,15 @@ class InternalTokenFilterTest {
     }
 
     private static String token(RSAKey key, String issuer, long expiresInMillis) throws Exception {
+        return token(key, issuer, expiresInMillis, InternalToken.AUDIENCE_FORGE);
+    }
+
+    /** As the gateway mints it for `audience` (W2), or with no audience at all when it is null. */
+    private static String token(RSAKey key, String issuer, long expiresInMillis, String audience) throws Exception {
         long now = System.currentTimeMillis();
         JWTClaimsSet claims = new JWTClaimsSet.Builder()
                 .issuer(issuer)
+                .audience(audience)
                 .subject("anon-uid")
                 .issueTime(new Date(now))
                 .expirationTime(new Date(now + expiresInMillis))
@@ -89,8 +95,8 @@ class InternalTokenFilterTest {
     @Test
     void theCallersNetworkKeyComesFromTheToken() throws Exception {
         long now = System.currentTimeMillis();
-        JWTClaimsSet claims = new JWTClaimsSet.Builder().issuer(InternalToken.ISSUER).subject("anon-uid")
-                .issueTime(new Date(now)).expirationTime(new Date(now + 120_000))
+        JWTClaimsSet claims = new JWTClaimsSet.Builder().issuer(InternalToken.ISSUER).audience(InternalToken.AUDIENCE_FORGE)
+                .subject("anon-uid").issueTime(new Date(now)).expirationTime(new Date(now + 120_000))
                 .claim(InternalToken.CLAIM_ANONYMOUS, true).claim(InternalToken.CLAIM_ADMIN, false)
                 .claim(InternalToken.CLAIM_PROVIDER, "anonymous").claim(InternalToken.CLAIM_IPK, "a1b2c3").build();
         SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(gatewayKey.getKeyID())
@@ -127,15 +133,38 @@ class InternalTokenFilterTest {
         assertAuthRefusal(() -> post("/v1/forge/plan", foreign));
     }
 
+    /**
+     * W2: the gateway mints a token per service. One it minted for the platform service, or one with no audience (as
+     * every token before W2 was), is not forge's.
+     */
+    @Test
+    void aTokenForThePlatformServiceOrForNoServiceIsRefused() throws Exception {
+        String forPlatform = token(gatewayKey, InternalToken.ISSUER, 120_000, InternalToken.AUDIENCE_PLATFORM);
+        assertAuthRefusal(() -> post("/v1/forge/plan", forPlatform));
+        String forNone = token(gatewayKey, InternalToken.ISSUER, 120_000, null);
+        assertAuthRefusal(() -> post("/v1/forge/plan", forNone));
+        assertThat(reached.get()).isNull();
+    }
+
     /** Share pages read without signing in, by GET only: the same path refuses a write. */
     @Test
     void publicReadsPassWithoutATokenByGetOnly() {
-        filter.filter(MockServerWebExchange.from(MockServerHttpRequest.get("/v1/worlds/01HZXY")), chain).block();
+        filter.filter(MockServerWebExchange.from(MockServerHttpRequest.get("/v1/forge/mode")), chain).block();
         assertThat(reached.get()).isNotNull();
 
         reached.set(null);
-        assertAuthRefusal(() -> post("/v1/worlds/01HZXY", null));
+        assertAuthRefusal(() -> post("/v1/forge/mode", null));
         assertThat(reached.get()).isNull();
+    }
+
+    /** W2: the worlds and the showcase are the platform service's now, so forge reads them for no one without a token. */
+    @Test
+    void theWorldsAndTheShowcaseAreNoLongerForgesPublicReads() {
+        for (String path : java.util.List.of("/v1/worlds/01HZXY", "/v1/showcase")) {
+            reached.set(null);
+            assertAuthRefusal(() -> filter.filter(MockServerWebExchange.from(MockServerHttpRequest.get(path)), chain).block());
+            assertThat(reached.get()).as(path).isNull();
+        }
     }
 
     /** The mapping to 401 sits before the handlers: a handler's own failure must not become an auth error. */

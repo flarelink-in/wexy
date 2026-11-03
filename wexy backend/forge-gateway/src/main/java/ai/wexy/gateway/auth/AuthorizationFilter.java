@@ -26,8 +26,12 @@ import java.util.stream.Collectors;
  *
  * Adapted from FlareLink's AuthorizationFilter (pre-existing work). Changed: a caller without an
  * email (every Firebase anonymous user) is no longer refused; each route instead picks a policy
- * (backend architecture §4, Q8). Forge and share-link routes allow anonymous callers; publishing
- * to the Showcase needs an account; admin routes need a uid on the allow-list.
+ * (backend architecture §4, Q8). Forge routes allow anonymous callers; the platform's accounts and
+ * creations need a real account (W2); admin routes need a uid on the allow-list.
+ *
+ * Each filter also names the service its route leads to, and the token it mints carries that
+ * audience (W2): forge's filters mint for forge, the platform's for the platform, and each service
+ * refuses the other's tokens.
  *
  * Ordered at -200: after the address-keyed limiter (-500) and App Check (-300), so verification,
  * the most expensive thing the gateway does, is never reachable in unbounded volume.
@@ -44,9 +48,12 @@ public class AuthorizationFilter {
     private final ClientNetworkKey networkKey;
     private final Set<String> adminUids;
 
-    private final PolicyFilter anonymousAllowed = new PolicyFilter(Policy.ANONYMOUS_ALLOWED);
-    private final PolicyFilter accountRequired = new PolicyFilter(Policy.ACCOUNT_REQUIRED);
-    private final PolicyFilter adminOnly = new PolicyFilter(Policy.ADMIN);
+    private final PolicyFilter anonymousAllowed = new PolicyFilter(Policy.ANONYMOUS_ALLOWED, InternalToken.AUDIENCE_FORGE);
+    private final PolicyFilter accountRequired = new PolicyFilter(Policy.ACCOUNT_REQUIRED, InternalToken.AUDIENCE_FORGE);
+    private final PolicyFilter adminOnly = new PolicyFilter(Policy.ADMIN, InternalToken.AUDIENCE_FORGE);
+    // The platform service's (W2): never anonymous. Its own A (an active account) and O (the owner) checks follow there.
+    private final PolicyFilter platformAccount = new PolicyFilter(Policy.ACCOUNT_REQUIRED, InternalToken.AUDIENCE_PLATFORM);
+    private final PolicyFilter platformAdmin = new PolicyFilter(Policy.ADMIN, InternalToken.AUDIENCE_PLATFORM);
 
     // Split by reason, because they mean different things: `header_missing` rising is a broken
     // client, `token_rejected` an expired-session bug or someone trying tokens, `account_required`
@@ -92,32 +99,55 @@ public class AuthorizationFilter {
                 .register(registry);
     }
 
-    /** Forge and share-link routes: any signed-in caller, anonymous included. */
+    /** Forge routes: any signed-in caller, anonymous included. */
     public GatewayFilter anonymousAllowed() {
         return anonymousAllowed;
     }
 
-    /** A real account: Showcase publishing. */
+    /** A real account, on a forge route (none uses it yet). */
     public GatewayFilter accountRequired() {
         return accountRequired;
     }
 
-    /** A uid on {@code wexy.auth.admin-uids}. */
+    /** A uid on {@code wexy.auth.admin-uids}, on a forge route. */
     public GatewayFilter adminOnly() {
         return adminOnly;
     }
 
-    /** The filter for one policy. Always the same instance per policy, so a route can be checked for it. */
+    /**
+     * The platform service's routes that need someone signed in (W2; the creations platform design §10's N, A and O): a
+     * real account, never an anonymous one, and a token minted for the platform.
+     */
+    public GatewayFilter platformAccount() {
+        return platformAccount;
+    }
+
+    /** The platform service's admin routes (§10's D): the allow-list, and a token minted for the platform. */
+    public GatewayFilter platformAdmin() {
+        return platformAdmin;
+    }
+
+    /**
+     * The filter for one policy and one service. Always the same instance per pair, so a route can be checked for
+     * it.
+     */
     public final class PolicyFilter implements GatewayFilter, Ordered {
 
         private final Policy policy;
+        private final String audience;
 
-        private PolicyFilter(Policy policy) {
+        private PolicyFilter(Policy policy, String audience) {
             this.policy = policy;
+            this.audience = audience;
         }
 
         public Policy policy() {
             return policy;
+        }
+
+        /** The service the minted token is for (W2). */
+        public String audience() {
+            return audience;
         }
 
         @Override
@@ -164,7 +194,7 @@ public class AuthorizationFilter {
 
             // The network key comes from the address the gateway resolved, never from a header the client chose (W1).
             ServerHttpRequest outbound = exchange.getRequest().mutate()
-                    .header(InternalToken.HEADER, minter.mint(caller, admin, networkKey.of(exchange)))
+                    .header(InternalToken.HEADER, minter.mint(caller, admin, networkKey.of(exchange), audience))
                     .build();
             return chain.filter(exchange.mutate().request(outbound).build());
         }

@@ -18,7 +18,8 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The route table against the API table (backend architecture §11), and the contract with the
+ * The route table against the API table (backend architecture §11; since W2 with the platform's, the
+ * creations platform design §10, whose policies PlatformRoutesTest checks), and the contract with the
  * frontend: the routes that spend App Check tokens are exactly the ones the page mints a fresh
  * token for. Adding one without the page breaks it the moment replay protection is enforced;
  * dropping one gives a lifted token back its hour of replays. Both must be deliberate, so the set
@@ -28,11 +29,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 @ActiveProfiles("test")
 class ForgeRoutesTest {
 
-    private static final List<String> PUBLIC_READS = List.of("forge-mode", "archive-match", "worlds-read",
-            "showcase", "stats");
+    private static final List<String> PUBLIC_READS = List.of("forge-mode", "archive-match", "stats");
     private static final List<String> SIGNED_IN = List.of("forge-plan", "forge-author", "forge-repair",
-            "forge-direct", "forge-outcomes", "agent-turn", "agent-module", "forge-allowance", "worlds-publish", "worlds-complete",
-            "worlds-report");
+            "forge-direct", "forge-outcomes", "agent-turn", "agent-module", "forge-allowance");
+    /** The platform's routes (W2; PlatformRoutes), all of §10's table. */
+    static final List<String> PLATFORM = List.of("me-bootstrap", "me-read", "me-profile", "me-usage", "me-operation",
+            "me-delete", "profile-read", "profile-worlds", "worlds-create", "me-worlds", "worlds-read", "worlds-update",
+            "worlds-delete", "worlds-revise", "worlds-revision", "worlds-poster", "worlds-submit", "worlds-withdraw",
+            "showcase", "publication-read", "admin-submissions", "admin-submission-decide", "admin-publication-decide",
+            "waitlist");
 
     @Autowired
     private RouteLocator routeLocator;
@@ -50,11 +55,18 @@ class ForgeRoutesTest {
     void theRoutesAreExactlyTheApiTable() {
         List<String> ids = routeLocator.getRoutes().map(Route::getId).collectList().block();
 
-        assertThat(ids).containsExactlyInAnyOrder("forge-plan", "forge-author", "forge-repair", "forge-direct",
-                "forge-outcomes", "agent-turn", "agent-module", "forge-allowance", "forge-mode", "archive-match", "worlds-read",
-                "showcase", "stats", "worlds-publish", "worlds-complete", "worlds-report", "admin");
+        List<String> forge = List.of("forge-plan", "forge-author", "forge-repair", "forge-direct",
+                "forge-outcomes", "agent-turn", "agent-module", "forge-allowance", "forge-mode", "archive-match",
+                "stats", "admin");
+        // W2: the worlds and the showcase left forge for the platform (share links' complete and report are gone).
+        assertThat(ids).containsExactlyInAnyOrderElementsOf(java.util.stream.Stream.concat(forge.stream(), PLATFORM.stream()).toList());
     }
 
+    /**
+     * The routes that spend App Check, as the frontend's SINGLE_USE_ROUTES names them (test/http.test.mjs pins the same
+     * list): POST /v1/forge/plan, /v1/agent/turn and /v1/agent/module; since W2 (§10) POST /v1/me, DELETE /v1/me, POST
+     * /v1/worlds/{id}/submissions and POST /v1/waitlist. POST /v1/worlds left the set: a save takes the cached token.
+     */
     @Test
     void exactlyTheRoutesTheFrontendMintsFreshTokensForSpendThem() {
         List<String> spending = routeLocator.getRoutes()
@@ -63,11 +75,13 @@ class ForgeRoutesTest {
                 .collectList()
                 .block();
 
-        assertThat(spending).containsExactlyInAnyOrder("forge-plan", "agent-turn", "agent-module", "worlds-publish");
+        assertThat(spending).containsExactlyInAnyOrder("forge-plan", "agent-turn", "agent-module",
+                "me-bootstrap", "me-delete", "worlds-submit", "waitlist");
 
         // Spending includes the attestation, so neither runs the plain check as well.
         assertThat(route("forge-plan").getFilters()).doesNotContain(appCheck);
-        assertThat(route("worlds-publish").getFilters()).doesNotContain(appCheck);
+        assertThat(route("me-bootstrap").getFilters()).doesNotContain(appCheck);
+        assertThat(route("worlds-create").getFilters()).contains(appCheck).doesNotContain(appCheck.singleUse());
     }
 
     /**
@@ -85,8 +99,7 @@ class ForgeRoutesTest {
 
     @Test
     void theOtherWritesKeepTheOrdinaryCheck() {
-        for (String id : List.of("forge-author", "forge-repair", "forge-direct", "forge-outcomes",
-                "worlds-complete", "worlds-report")) {
+        for (String id : List.of("forge-author", "forge-repair", "forge-direct", "forge-outcomes")) {
             assertThat(route(id).getFilters()).as(id)
                     .contains(appCheck)
                     .doesNotContain(appCheck.singleUse());
@@ -104,14 +117,22 @@ class ForgeRoutesTest {
         }
     }
 
-    /** Anonymous Firebase users create and share (Q8); only the allow-list administers. */
+    /**
+     * Anonymous Firebase users create (Q8); only the allow-list administers. Every forge route's token is for forge alone
+     * (W2): none of the platform's filters is on a forge route.
+     */
     @Test
     void everyWriteSignsTheCallerInUnderItsPolicy() {
         for (String id : SIGNED_IN) {
-            assertThat(route(id).getFilters()).as(id).contains(authorization.anonymousAllowed());
+            assertThat(route(id).getFilters()).as(id).contains(authorization.anonymousAllowed())
+                    .doesNotContain(authorization.platformAccount(), authorization.platformAdmin());
         }
         assertThat(route("admin").getFilters()).contains(authorization.adminOnly())
-                .doesNotContain(authorization.anonymousAllowed());
+                .doesNotContain(authorization.anonymousAllowed(), authorization.platformAdmin());
+        assertThat(((AuthorizationFilter.PolicyFilter) authorization.anonymousAllowed()).audience())
+                .isEqualTo(ai.wexy.common.InternalToken.AUDIENCE_FORGE);
+        assertThat(((AuthorizationFilter.PolicyFilter) authorization.adminOnly()).audience())
+                .isEqualTo(ai.wexy.common.InternalToken.AUDIENCE_FORGE);
     }
 
     /** Before any signature check, every route is budgeted by address. */
