@@ -89,6 +89,10 @@ test('Hosting uses pinned environment-specific Functions, no broad fallback and 
         }
         assert.ok(!hosting.rewrites.some(item => item.source === '**'));
         assert.equal(hosting.redirects[0].source, '/index.html');
+        // W3.5: the history's address, exactly, and ahead of the public-HTML Function (first match wins).
+        const creations = hosting.rewrites.findIndex(item => item.source === '/creations');
+        assert.ok(creations >= 0 && creations < hosting.rewrites.indexOf(rewrite), 'the /creations rewrite, before the Function');
+        assert.equal(hosting.rewrites[creations].destination, '/creations.html');
     }
 });
 
@@ -101,6 +105,8 @@ test('artifact preparation removes shadowing files, pairs exact templates/assets
             writeFileSync(join(build, 'index.html'), '<head></head><body><script src="/assets/app.js"></script></body>');
             writeFileSync(join(build, 'assets/app.js'), 'browser code');
             writeFileSync(join(build, 'studio.html'), '<h1>Studio</h1>');
+            // W3.5: the history is a page of its own, held to its build as the studio is.
+            writeFileSync(join(build, 'creations.html'), '<h1>Your worlds</h1>');
             writeFileSync(join(build, 'robots.txt'), 'old robots');
             prepareHosting(root, environment);
             assert.ok(!existsSync(join(root, `hosting-${environment}`, 'index.html')));
@@ -108,6 +114,9 @@ test('artifact preparation removes shadowing files, pairs exact templates/assets
             assert.ok(existsSync(join(build, 'index.html')), 'vite preview remains intact');
             writeFileSync(join(root, `hosting-${environment}/assets/app.js`), 'stale');
             assert.throws(() => prepareHosting(root, environment, true), /stale/);
+            prepareHosting(root, environment);
+            writeFileSync(join(root, `hosting-${environment}/creations.html`), 'stale');
+            assert.throws(() => prepareHosting(root, environment, true), /creations\.html artifact is stale/);
             prepareHosting(root, environment);
             writeFileSync(join(root, `hosting-${environment}/index.html`), 'shadow');
             assert.throws(() => prepareHosting(root, environment, true), /shadows/);

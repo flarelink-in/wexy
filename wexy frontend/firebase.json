@@ -12,6 +12,10 @@
           "destination": "/studio.html"
         },
         {
+          "source": "/creations",
+          "destination": "/creations.html"
+        },
+        {
           "regex": "^/(|robots[.]txt|sitemap[.]xml)$",
           "function": {
             "functionId": "renderPublicDev",
@@ -61,6 +65,7 @@
       "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
       "rewrites": [
         { "source": "/studio", "destination": "/studio.html" },
+        { "source": "/creations", "destination": "/creations.html" },
         { "regex": "^/(|robots[.]txt|sitemap[.]xml)$", "function": { "functionId": "renderPublicProd", "region": "us-central1", "pinTag": true } }
       ],
       "headers": [

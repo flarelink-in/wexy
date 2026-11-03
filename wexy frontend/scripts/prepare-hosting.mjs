@@ -18,8 +18,10 @@ export function prepareHosting(root, environment, check = false) {
                 throw new Error(`Hosting asset is stale: ${path}`);
             }
         }
-        if (!readFileSync(resolve(hosting, 'studio.html')).equals(readFileSync(resolve(build, 'studio.html')))) {
-            throw new Error('Studio artifact is stale');
+        for (const page of ['studio.html', 'creations.html']) {
+            if (!readFileSync(resolve(hosting, page)).equals(readFileSync(resolve(build, page)))) {
+                throw new Error(`${page} artifact is stale`);
+            }
         }
         return;
     }
