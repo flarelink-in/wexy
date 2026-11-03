@@ -684,8 +684,10 @@ mutate "W3 a running operation's status read as 0" "$P/world/JdbcWorldStore.java
     's/Integer status = row\.wasNull\(\) \? null : raw;/Integer status = raw;/'
 mutate "W3 a public assets bucket taken for the private one" "$P/storage/StorageConfiguration.java" platform-service StorageConfigurationTest \
     's/if \(PUBLIC_BUCKETS\.contains\(properties\.bucket\(\)\.trim\(\)\)\) \{/if (false) {/'
-mutate "W3 requests signed for a region the endpoint does not name" "$P/storage/StorageProperties.java" platform-service StorageConfigurationTest \
-    's/return m\.matches\(\) \? m\.group\(1\) : region;/return region;/'
+mutate "W3 the assets bucket's endpoint read for the private one" platform-service/src/main/resources/application.yaml platform-service StorageConfigurationTest \
+    's/endpoint: \$\{B2_PRIVATE_ENDPOINT:\}/endpoint: \${B2_ENDPOINT:}/'
+mutate "W3 the assets bucket's region read for the private one" platform-service/src/main/resources/application.yaml platform-service StorageConfigurationTest \
+    's/region: \$\{B2_PRIVATE_REGION:\}/region: \${B2_REGION:}/'
 
 echo "$ran mutation(s)${DRY:+, a dry run}"
 exit $status

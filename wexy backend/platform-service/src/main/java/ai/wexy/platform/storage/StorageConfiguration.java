@@ -11,10 +11,10 @@ import reactor.core.scheduler.Schedulers;
 import java.util.Set;
 
 /**
- * The object store and where its blocking calls run (W3.1). With the five B2 values present, the private bucket; without
- * any of them, a store that answers every call as unavailable, so the world routes say 503 and accounts keep working
- * (the creations platform design §13: "B2 failure gates storage, not unrelated profile reads"). The startup line names
- * what is missing, never a value.
+ * The object store and where its blocking calls run (W3.1). With the private bucket's five values present, the private
+ * bucket; without any of them, a store that answers every call as unavailable, so the world routes say 503 and accounts
+ * keep working (the creations platform design §13: "B2 failure gates storage, not unrelated profile reads"). The same
+ * for a public assets bucket. The startup line names what is missing or refused, never a key.
  */
 @Configuration
 public class StorageConfiguration {
@@ -37,11 +37,7 @@ public class StorageConfiguration {
             log.error("storage.refused bucket={}: a public assets bucket, served to anyone; saving worlds answers 503", properties.bucket());
             return new UnconfiguredObjectStore();
         }
-        if (!properties.signingRegion().equals(properties.region())) {
-            log.warn("storage.region setting={} endpoint's={}: requests are signed for the endpoint's", properties.region(),
-                    properties.signingRegion());
-        }
-        log.info("storage.b2 endpoint={} region={} bucket={}", properties.endpoint(), properties.signingRegion(), properties.bucket());
+        log.info("storage.b2 endpoint={} region={} bucket={}", properties.endpoint(), properties.region(), properties.bucket());
         return new B2ObjectStore(properties);
     }
 
