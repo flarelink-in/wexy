@@ -1,8 +1,9 @@
 // The studio's account session (W1; the creations platform companion §6, F4): who is signed in, as the identity's account
 // port says, and an epoch, E_auth, that moves whenever the account or its provider changes. An answer fetched for an
 // earlier epoch is dropped on arrival, so a slow allowance read can never show one account's numbers to another. The
-// session signs no one in by itself: it reads who is there after the creator's own Create or Sign in, and from then on
-// follows changes (another tab's sign-out included) through one listener. The world on the stage is never its business.
+// session signs no one in by itself: it reads who is there after the creator's own Create or Sign in (a Create's `enter`
+// runs the transport's own sign-in first, EA9.1), and from then on follows changes (another tab's sign-out included)
+// through one listener. The world on the stage is never its business.
 //
 // W2 (the user's choice, 2026-11-03): one bit in the browser, "a Google session is here", written whenever the session
 // learns its kind, so a reload can show a returning creator's account at once. It holds no identity; a fresh or
@@ -57,14 +58,25 @@ export class AccountSession {
     private disposed = false;
     private readonly port: AccountPort;
     private readonly hint: SessionHint;
+    private readonly entry: () => Promise<unknown>;
 
-    constructor(port: AccountPort, hint: SessionHint = browserHint) {
+    /**
+     * `entry` is what an entry call (a Create) does before it is sent, the transport's own lazy sign-in (identity.ts's
+     * `authorization`): the caller signed in, or a new anonymous one when no one is. Only {@link enter} calls it.
+     */
+    constructor(port: AccountPort, hint: SessionHint = browserHint, entry: () => Promise<unknown> = async () => {}) {
         this.port = port;
         this.hint = hint;
+        this.entry = entry;
     }
 
     get current(): SessionState {
         return this.state;
+    }
+
+    /** A caller is signed in, as last read: anonymous or Google. Not before any reading, nor after a sign-out. */
+    get established(): boolean {
+        return this.state.kind === 'anonymous' || this.state.kind === 'google';
     }
 
     /** Whether this browser held a Google session when last seen (W2): worth reading who is signed in on a page load. */
@@ -89,6 +101,19 @@ export class AccountSession {
         this.apply(who);
         this.off ??= this.port.onChange(() => { void this.refresh().catch(() => {}); });
         return this.state;
+    }
+
+    /**
+     * The caller an entry's calls go out as, made or found before the first of them (EA9.1; agent-first-studio-design.md §6
+     * step 1): `entry` signs in as that call would (an anonymous caller when no one is signed in), then the session reads
+     * who it is. So the epoch after it is that caller's, and a creation binds its calls to E_auth only then: learning the
+     * first identity, after a sign-out or on a first visit, is not a switch away from one. Called by the creator's Create,
+     * never by a page view.
+     */
+    async enter(): Promise<SessionState> {
+        if (this.disposed) return this.state;
+        await this.entry();
+        return this.refresh();
     }
 
     /** Google for this browser (the creator's action): on a link or a sign-in, the account is read again and the epoch moves. */

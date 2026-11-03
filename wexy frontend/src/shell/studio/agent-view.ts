@@ -5,15 +5,21 @@
 // at all. A hand-off says checked, not rendered. Nothing here can reach the stage's world or the GPU: the panel is given
 // a client and the idea's fields, nothing else, and imports neither the runtime nor the verifier (test/agent-turn.test.mjs).
 // Given a module client too (EA4.5), a hand-off's modules can be written beneath it: its candidate (candidate-view.ts).
+// EA9.1 (agent-first-studio-design.md §3): the panel owns no session. It watches a creation controller (creation.ts), the
+// studio's own when handed one, so the turn shown is the creation's whoever started it; "Run agent turn" is a Create that
+// stops at the hand-off for Developer view's step-by-step look, and Cancel a cancel. Handed only a client (a harness), it
+// makes a controller of its own over that client, the same code path.
 
 import type { WorldProgram } from '../../contract/agent';
 import type { AgentClient, AgentTurnRequest } from '../../forge-client/agent-client';
 import type { AgentToolResult } from '../../forge-client/agent-stream';
-import { createAgentSession, elapsedMs, PURPOSES, TURN_PHASES, type AgentSession, type AgentTurnState, type TurnCall } from '../../loop/agent-turn';
+import { createAgentSession, elapsedMs, PURPOSES, TURN_PHASES, type AgentTurnState, type TurnCall } from '../../loop/agent-turn';
+import { createCandidateSession } from '../../loop/candidate';
+import { createCreationController, type CreationController, type CreationDeps } from '../../loop/creation';
 import { h } from '../../shared/dom';
 import { fmtBytes, fmtInt, fmtMs } from '../../shared/format';
 import { formatJson } from '../../shared/json';
-import { CandidatePanel, type CandidateOptions } from './candidate-view';
+import { CandidatePanel, type CandidateOptions, type CandidateViewOptions } from './candidate-view';
 
 const INTRO = 'One agent turn (EA2): the backend reads the engine\'s documents, proposes a design and a program of adapter '
     + 'nodes, and checks them. Nothing is built or rendered here, and the world on the stage is never touched.';
@@ -23,12 +29,37 @@ const NO_BACKEND = 'This build has no gateway (VITE_API_ORIGIN), so no turn can 
 /** Micro-USD as dollars, to the hundredth of a cent: a call costs a few cents. */
 const usd = (micro: number) => `$${(micro / 1e6).toFixed(4)}`;
 
+/** A panel's own controller over a client (a harness's): one turn session, a candidate session per creation, its stage. */
+function ownDeps(client: AgentClient, candidate: CandidateOptions | undefined, now: () => number): CreationDeps {
+    return {
+        turnSession: onChange => createAgentSession(client, onChange, now),
+        candidateSession: candidate
+            ? onChange => createCandidateSession({ modules: candidate.modules, revise: candidate.revise, attemptId: candidate.attemptId, compiler: candidate.compiler ?? (() => null) }, onChange)
+            : undefined,
+        stage: candidate?.run,
+    };
+}
+
+export interface AgentPanelOptions {
+    now?: () => number;
+    /**
+     * The controller to watch: the studio's (EA9.1). Absent, the panel makes its own over the client it is given, with
+     * `candidate`'s module client, reviser and stage.
+     */
+    controller?: CreationController;
+    /** The candidate beneath the turn: with the panel's own controller, its seams too; with the studio's, its view alone. */
+    candidate?: CandidateOptions | CandidateViewOptions;
+}
+
 export class AgentPanel {
     readonly el: HTMLElement;
-    /** Null when this build has no backend to call. */
-    readonly session: AgentSession | null;
-    /** A hand-off's candidate (EA4.5); null without a backend or a module client. */
+    /** The controller this panel watches and presses; null when this build has no backend to call. */
+    readonly controller: CreationController | null;
+    /** A hand-off's candidate (EA4.5); null without a backend or a candidate half. */
     readonly candidate: CandidatePanel | null;
+    /** The panel made its controller, so disposing the panel disposes it. */
+    private readonly owns: boolean;
+    private readonly off: () => void;
     private readonly request: () => AgentTurnRequest;
     private readonly now: () => number;
     private readonly runBtn = h('button', { type: 'button', class: 'btn btn-sm' }, 'Run agent turn');
@@ -46,12 +77,15 @@ export class AgentPanel {
     private timer = 0;
     private state: AgentTurnState | null = null;
 
-    constructor(client: AgentClient | null, request: () => AgentTurnRequest, options: { now?: () => number; candidate?: CandidateOptions } = {}) {
+    constructor(client: AgentClient | null, request: () => AgentTurnRequest, options: AgentPanelOptions = {}) {
         this.request = request;
         this.now = options.now ?? (() => performance.now());
-        // Built before the session, so the first state already reaches it.
-        this.candidate = client && options.candidate ? new CandidatePanel(options.candidate) : null;
-        this.session = client ? createAgentSession(client, s => this.render(s), this.now) : null;
+        const own = !options.controller && client ? ownDeps(client, options.candidate && 'modules' in options.candidate ? options.candidate : undefined, this.now) : null;
+        this.controller = options.controller ?? (own ? createCreationController(own) : null);
+        this.owns = !options.controller;
+        const writes = !!options.controller || !!own?.candidateSession;
+        this.candidate = this.controller && options.candidate && writes ? new CandidatePanel(this.controller, options.candidate) : null;
+        this.off = this.controller?.subscribe(st => this.render(st.turn)) ?? (() => {});
         this.runBtn.addEventListener('click', () => void this.run());
         this.cancelBtn.addEventListener('click', () => this.cancel());
         this.el = h('section', { class: 'agent', 'aria-label': 'Agent turn', dataset: { phase: 'idle', success: 'false' } },
@@ -62,20 +96,27 @@ export class AgentPanel {
             this.meta, this.calls, this.design.el, this.program.el, this.cost,
             this.candidate?.el ?? null,
         );
-        this.render(null);
+        this.render(this.controller?.state.turn ?? null);
     }
 
-    /** Runs a turn with the idea as it is now; one already running is superseded. */
+    /**
+     * Runs a turn with the idea as it is now, a Create on the controller that stops at its hand-off (Developer view's
+     * step); any creation under way is superseded. Resolves with the turn's last state.
+     */
     async run(): Promise<AgentTurnState | null> {
-        return this.session ? this.session.start(this.request()) : null;
+        if (!this.controller) return null;
+        await this.controller.create(this.request(), { write: false });
+        return this.controller.state.turn;
     }
 
     cancel(): void {
-        this.session?.cancel();
+        this.controller?.cancel();
     }
 
+    /** The panel is done: a controller of its own is disposed with it (what it runs cancelled); the studio's is left alone. */
     dispose(): void {
-        this.session?.cancel();
+        if (this.owns) this.controller?.dispose();
+        this.off();
         this.candidate?.dispose();
         clearInterval(this.timer);
     }
@@ -92,11 +133,11 @@ export class AgentPanel {
         const phase = s ? TURN_PHASES[s.phase] : null;
         this.el.dataset.phase = s?.phase ?? 'idle';
         this.el.dataset.success = String(phase?.success ?? false);
-        this.runBtn.disabled = !this.session;
+        this.runBtn.disabled = !this.controller;
         this.cancelBtn.disabled = s?.phase !== 'running';
-        this.phase.textContent = phase ? `Turn ${s!.seq}: ${phase.label}` : this.session ? 'No turn yet' : 'No backend';
+        this.phase.textContent = phase ? `Turn ${s!.seq}: ${phase.label}` : this.controller ? 'No turn yet' : 'No backend';
         this.phase.className = `agent-phase tone-${phase?.tone ?? 'quiet'}`;
-        this.note.textContent = !s ? (this.session ? INTRO : NO_BACKEND) : s.phase === 'running' ? running(s) : phase!.note;
+        this.note.textContent = !s ? (this.controller ? INTRO : NO_BACKEND) : s.phase === 'running' ? running(s) : phase!.note;
         this.note.hidden = !this.note.textContent;
         this.reason.hidden = !s?.reason;
         // The code before the reason, unless the reason starts with it already, as the backend's budget reasons do.
@@ -114,7 +155,6 @@ export class AgentPanel {
             const unknown = s.unreported ? ` · ${s.unreported} call${s.unreported === 1 ? '' : 's'} reported no usage: cost unknown` : '';
             this.cost.textContent = `${s.calls.length} model call${s.calls.length === 1 ? '' : 's'} · ${usd(s.costMicroUsd)} reported${s.phase === 'running' ? ' so far' : ''}${unknown}`;
         }
-        this.candidate?.turn(s);
         this.tick();
         // The clock runs only while the turn does; once it ends, its time is fixed.
         if (s?.phase === 'running' && !this.timer) this.timer = window.setInterval(() => this.tick(), 100);

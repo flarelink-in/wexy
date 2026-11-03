@@ -160,7 +160,10 @@ export function adapterIdentity(info: unknown): AdapterIdentity {
     };
 }
 
-/** This device's environment: its key, or why it has none (and so matches no entry, and stays static-only). */
+/**
+ * This device's environment: its key, or why it has none, and so matches no entry. Since 23d37da a normal Run then only
+ * warns (EA_COVERAGE_UNVERIFIED) and the probe decides; the strict policy (EA-G1's) keeps such a device static-only.
+ */
 export type Environment = { key: string } | { unknown: string };
 
 /**

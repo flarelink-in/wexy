@@ -64,6 +64,12 @@ export interface AgentTurnState {
     reason: string | null;
     /** What goes with the reason: a diagnostic (EA_TURN_BUDGET, EA_VERSION_MISMATCH) or an error code (budget, upstream). */
     code: string | null;
+    /**
+     * When a refusal or failure from the transport ended the turn (a ForgeError): its HTTP status (0: no answer) and its
+     * Retry-After in seconds, so the creator's sentence can say when early access's next world opens (EA9.1). Null otherwise.
+     */
+    httpStatus: number | null;
+    retryAfterSeconds: number | null;
     /** What the calls reported so far, in micro-USD: their costs, or their reservations when no usage came. */
     costMicroUsd: number;
     /** Calls that ended the turn without any usage: their cost is unknown, never zero. */
@@ -81,7 +87,7 @@ export function elapsedMs(state: AgentTurnState, now: number): number {
 function initial(seq: number, request: AgentTurnRequest, now: number): AgentTurnState {
     return {
         seq, request, phase: 'running', meta: null, calls: [], findings: [], design: null, program: null, question: null,
-        reason: null, code: null, costMicroUsd: 0, unreported: 0, startedMs: now, endedMs: null,
+        reason: null, code: null, httpStatus: null, retryAfterSeconds: null, costMicroUsd: 0, unreported: 0, startedMs: now, endedMs: null,
     };
 }
 
@@ -120,7 +126,7 @@ function failed(state: AgentTurnState, error: unknown, now: number): AgentTurnSt
     if (error instanceof ForgeError) {
         // Where it came from: an envelope before any stream (its status), the stream itself (200), or no answer at all.
         const where = error.status === 0 ? 'no answer' : error.status === 200 ? 'in the stream' : `HTTP ${error.status}`;
-        return { ...end, phase: 'failed', code: error.code, reason: `${where}: ${error.message}` };
+        return { ...end, phase: 'failed', code: error.code, reason: `${where}: ${error.message}`, httpStatus: error.status, retryAfterSeconds: error.retryAfterSeconds };
     }
     return { ...end, phase: 'failed', code: 'internal', reason: (error as Error)?.message ?? String(error) };
 }

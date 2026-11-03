@@ -17,6 +17,7 @@
 import type { Api } from '../../forge-client/http';
 import type { LinkOutcome } from '../../forge-client/identity';
 import { COPY } from '../../loop/copy';
+import type { CreationAccount } from '../../loop/creation';
 import { chipText, readAllowance } from '../../platform/allowance';
 import { bootstrapAccount, claimHandle, readAccount, typedHandle, type AccountRead, type AccountView, type ClaimOutcome } from '../../platform/client';
 import { STALE, type AccountSession, type SessionState } from '../../platform/session';
@@ -411,6 +412,30 @@ export class AccountControl {
         this.line.textContent = handle ? `@${handle} · ${this.chipWords}` : this.chipWords;
         this.line.hidden = false;
     }
+}
+
+/**
+ * The account as a creation needs it (EA9.1; agent-first-studio-design.md §6), over the session and this control: E_auth,
+ * whether a caller is established, the entry's own caller made first when none is (`enter`), Create waiting while the
+ * account changes, W1's dialog and the read after an entry. One wiring, the studio's and its tests'.
+ */
+export function creationAccount(session: AccountSession, control: Pick<AccountControl, 'changing' | 'afterEntry' | 'limit'>): CreationAccount {
+    return {
+        epoch: () => session.current.epoch,
+        established: () => session.established,
+        enter: async () => {
+            try {
+                await session.enter();
+            } catch (error) {
+                console.warn('Wexy: no caller could be made or found for this Create, so it sent nothing.', error);
+                throw error;
+            }
+        },
+        changing: () => control.changing,
+        subscribe: listener => session.subscribe(() => listener()),
+        afterEntry: () => control.afterEntry(),
+        limit: (kind, sentence) => control.limit(kind, sentence),
+    };
 }
 
 interface DialogAction {

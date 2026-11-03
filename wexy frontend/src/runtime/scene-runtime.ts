@@ -93,6 +93,8 @@ export class SceneRuntime implements WorldRuntime {
     private readonly paramIndex = new Map<string, number>();
     private drawSequence: SequenceNode[] = [];
     private aspect: number;
+    /** Its canvas's pixels now (width × height): what its post chain's targets are sized at. */
+    private pixels: number;
     private paramsDirty = true;
     private destroyed = false;
 
@@ -137,6 +139,7 @@ export class SceneRuntime implements WorldRuntime {
         this.spec = spec;
         this.count = clampParticleCount(countOverride ?? spec.particles.count, this.device);
         this.aspect = width / height;
+        this.pixels = width * height;
         const { uniforms } = spec;
         const modules = modulesOf(spec);
 
@@ -233,6 +236,18 @@ export class SceneRuntime implements WorldRuntime {
      */
     get deviceBytes(): number {
         return this.count * PARTICLE_STRIDE * 4 + this.paramsBuffer.size + this.simBuffer.size + this.post.chain.memoryReport().bytes;
+    }
+
+    /**
+     * What it would hold with its canvas at `pixels` (width × height), and never less than it holds now: its post chain's
+     * targets are sized as fractions of the canvas, so they scale with its pixels; the rest does not. Rounded up. The
+     * stage's ledger counts a Head at the largest canvas the viewport can give it, so a resize does not outgrow its
+     * reservation (EA9.3's review).
+     */
+    deviceBytesAt(pixels: number): number {
+        const post = this.post.chain.memoryReport().bytes;
+        const scaled = Math.ceil(post * Math.max(0, pixels) / Math.max(1, this.pixels));
+        return this.deviceBytes - post + Math.max(post, scaled);
     }
 
     /** The spec's fixed step (WorldRuntime): snapped to 1/60/k by rung L0, so a film holds whole steps. */
@@ -341,6 +356,7 @@ export class SceneRuntime implements WorldRuntime {
     /** Call after engine.resize(): the post targets and the projection follow the canvas. */
     resize(width: number, height: number): void {
         this.aspect = width / height;
+        this.pixels = width * height;
         this.post.chain.resize(width, height);
         this.camera.updateProjection(this.aspect);
         this.drawSequence = [this.pass, ...this.post.chain.getPassSequence()];

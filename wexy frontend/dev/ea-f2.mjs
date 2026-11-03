@@ -11,8 +11,9 @@
 //   - Photo: a 1920×1080 PNG, opaque everywhere, of the world at time zero, from the same view: the film's frame 0 is
 //     that picture, within the codec's error (its last frame is said beside it, for scale);
 //   - no console error and no WebGPU error;
-//   - and for the first world, a 4K film (past what EA-G1 ran, 2048×1152) refused by eligibility at the film's size, in the
-//     studio's words, the world still on the stage.
+//   - and for the first world, a 4K film (past what EA-G1 ran, 2048×1152), measured at its size since coverage became
+//     advisory (G1, 23d37da): offered with its cost, or refused by the probe in the studio's words; the world still on
+//     the stage.
 // Screenshots, the films and photos and steps.json go to dev/out/ea-f2/<gpu>-<time>/. Exit 0 when every step passes; 1
 // otherwise; 2 when Chrome, Vite, ffprobe or ffmpeg cannot start. On the charger only, one GPU a run.
 //   node dev/ea-f2.mjs --gpu amd|nvidia [--worlds block-film,galaxy,foggy-dusk] [--chrome path] [--out dir]
@@ -103,6 +104,13 @@ const gateway = createServer((req, res) => {
             res.end(fixture('test/fixtures/review-wire/terms-shut.json'));
             return;
         }
+        // W1 (EA9.1): the studio reads the chip around a turn; the backend's DTO, as dev/ea9-e1.mjs's stand-in answers it.
+        if (req.method === 'GET' && req.url === '/v1/forge/allowance') {
+            calls.push({ route: 'allowance' });
+            res.writeHead(200, { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+            res.end(JSON.stringify({ label: 'Free', left: 0, resetsAt: null }));
+            return;
+        }
         calls.push({ route: `${req.method} ${req.url}`, unexpected: true });
         res.writeHead(404, { ...cors, 'Content-Type': 'application/json' });
         res.end('{"error":{"code":"not_found"}}');
@@ -151,8 +159,10 @@ const probe = file => {
     return r.status === 0 ? JSON.parse(String(r.stdout)).streams[0] : { error: String(r.stderr) };
 };
 /** RGB bytes of one picture: a film's frame `n`, or a PNG. */
-const rgb = (file, n = null) => {
-    const args = ['-v', 'error', '-i', file, ...(n === null ? [] : ['-vf', `select=eq(n\\,${n})`]), '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'];
+/** A picture's (or a film's frame `n`'s) RGB, at full size or averaged down by `scale` (area). */
+const rgb = (file, n = null, scale = 1) => {
+    const filters = [...(n === null ? [] : [`select=eq(n\\,${n})`]), ...(scale > 1 ? [`scale=iw/${scale}:ih/${scale}:flags=area`] : [])];
+    const args = ['-v', 'error', '-i', file, ...(filters.length ? ['-vf', filters.join(',')] : []), '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'];
     const r = spawnSync('ffmpeg', args, { maxBuffer: 64 * 1024 * 1024 });
     return r.status === 0 ? r.stdout : null;
 };
@@ -243,7 +253,8 @@ try {
             { cand, run, offered });
         await shot(`${name}-on-the-stage`);
         if (run.run !== 'installed') continue;
-        const id = (offered.title ?? '').match(/^Agent world ([0-9a-f]{12})…$/)?.[1] ?? null;
+        // The world's id(C), from Developer view's Run line: its HUD title is its creation's, from the idea (EA9.1).
+        const id = (run.line ?? '').match(/id\(C\) ([0-9a-f]{12})…/)?.[1] ?? null;
 
         // The film: the dialog measures the default size (its candidate built and probed at 1080p), then 6 s.
         await evaluate(`document.querySelector('#btn-export').click()`);
@@ -279,12 +290,17 @@ try {
         const png = photoFile ? decodePNG(photoFile) : null;
         step(`${name}: the photo, a ${FILM.width}×${FILM.height} PNG, opaque everywhere`, png?.width === FILM.width && png?.height === FILM.height && png.translucent === 0, { png });
 
-        // Frame 0 is time zero: the photo's picture, within the codec's error.
-        const picture = photoFile ? rgb(photoFile) : null;
-        const atZero = filmFile ? meanDifference(rgb(filmFile, 0), picture) : null;
-        const atLast = filmFile ? meanDifference(rgb(filmFile, frames - 1), picture) : null;
-        step(`${name}: the film's frame 0 is the photo of time zero (mean difference ≤ ${SAME_PICTURE} levels; its last frame for scale)`,
-            atZero !== null && atZero <= SAME_PICTURE, { frame0: atZero, lastFrame: atLast });
+        // Frame 0 is time zero: the photo's picture, within the codec's error. Both are compared averaged down 4× (area):
+        // since an agent world is framed on what it built (11-02), block-film's picture is busy and its grain per-pixel
+        // noise, which H.264 does not keep (7.1 levels at full size, 2.6 averaged down; 2.1 on 11-02, when the camera
+        // looked at a flat wall). A different view, or another moment of a moving world, does not average out.
+        const SCALE = 4;
+        const picture = photoFile ? rgb(photoFile, null, SCALE) : null;
+        const atZero = filmFile ? meanDifference(rgb(filmFile, 0, SCALE), picture) : null;
+        const atLast = filmFile ? meanDifference(rgb(filmFile, frames - 1, SCALE), picture) : null;
+        const fullSize = photoFile && filmFile ? meanDifference(rgb(filmFile, 0), rgb(photoFile)) : null;
+        step(`${name}: the film's frame 0 is the photo of time zero (mean difference ≤ ${SAME_PICTURE} levels, both averaged down ${SCALE}×; its last frame for scale)`,
+            atZero !== null && atZero <= SAME_PICTURE, { frame0: atZero, lastFrame: atLast, frame0FullSize: fullSize });
 
         // The studio's account of the film and of each measurement: frame k at k·s steps from time zero; nothing held after.
         const lines = consoleLines.slice(since);
@@ -297,24 +313,27 @@ try {
         const errors = lines.filter(l => /^(error|exception)/.test(l) || /WebGPU|GPUValidationError|Invalid /.test(l));
         step(`${name}: no console error and no WebGPU error`, errors.length === 0, errors.slice(0, 5));
 
-        // 4K, past what EA-G1 ran (2048×1152): refused by the gate's eligibility at the film's size, before any of its
-        // work, in the studio's words, its reason in Developer view; the world still on the stage.
+        // 4K, past what EA-G1 ran (2048×1152). Coverage has been advisory since 23d37da (G1): no entry refuses nothing, and
+        // the probe decides at the film's size. So the film is measured at 3840×2160, its cost said, and Make video is
+        // offered, or the probe refuses it in the studio's words, its reason in Developer view; the world still on the stage.
         if (name === WORLDS[0]) {
             await evaluate(`document.querySelector('#btn-export').click()`);
             await until(measured, 120_000);
             await clickText('4K');
             await sleep(300);
-            const refused4k = await until(`(() => { const e = document.querySelector('.export-dialog .ex-estimate'); return !!e && !e.textContent.includes('Measuring'); })()`, 120_000);
+            const measured4k = await until(`(() => { const e = document.querySelector('.export-dialog .ex-estimate'); return !!e && !e.textContent.includes('Measuring'); })()`, 120_000);
             const said = await evaluate(`document.querySelector('.export-dialog .ex-warn')?.textContent ?? ''`);
             const detail = await evaluate(`document.querySelector('.export-dialog .ex-note-block')?.textContent ?? ''`);
-            const go = await evaluate(`[...document.querySelectorAll('.export-dialog button')].find(b => b.textContent.includes('Make video'))?.disabled ?? null`);
-            await shot(`${name}-4k-refused`);
+            const summary4k = await evaluate(`document.querySelector('.export-dialog .ex-summary')?.innerText ?? ''`);
+            const disabled = await evaluate(`[...document.querySelectorAll('.export-dialog button')].find(b => b.textContent.includes('Make video'))?.disabled ?? null`);
+            await shot(`${name}-4k`);
             await evaluate(`document.querySelector('.export-dialog .icon-btn')?.click()`);
             await sleep(500);
             const still = await evaluate(`document.querySelector('#hud-title')?.textContent`);
-            step(`${name}: a 4K film refused at its size by eligibility, in the studio's words, the world still on the stage`,
-                refused4k && said === 'This world could not be filmed at this size; it is still on the stage.' && /^EA_FILM [0-9a-f]{12}… at 3840x2160: EA_ELIGIBILITY /.test(detail)
-                && go === true && still === offered.title, { said, detail: detail.slice(0, 240), go, still });
+            const offered4k = disabled === false && said === '' && /3840×2160/.test(summary4k) && /\d+(\.\d+)? ms per frame/.test(summary4k);
+            const refused4k = disabled === true && said === 'This world could not be filmed at this size; it is still on the stage.' && /^EA_FILM [0-9a-f]{12}… at 3840x2160: /.test(detail);
+            step(`${name}: a 4K film, past EA-G1's sizes, measured at its size (coverage advisory, G1): offered with its cost, or refused by the probe in the studio's words; the world still on the stage`,
+                measured4k && (offered4k || refused4k) && still === offered.title, { offered: offered4k, said, detail: detail.slice(0, 240), summary: summary4k.replace(/\s+/g, ' ').slice(0, 240), disabled, still });
         }
     }
     const unexpected = calls.filter(c => c.unexpected);

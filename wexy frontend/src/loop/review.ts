@@ -167,6 +167,11 @@ export interface ReviewDeps {
     generation(): number;
     /** Why the stage cannot be captured now (a Run, a film or a photo holds it), or null. */
     busy?(): string | null;
+    /**
+     * Why no paid action may answer a review now: a new world is being made (EA9.1, agent-first-studio-design.md §6:
+     * while a replacement is under way, no other paid mutation); null otherwise.
+     */
+    paidBusy?(): string | null;
     /** A model's review (EA6.4); null or absent without a backend. */
     reviewer?(): Reviewer | null;
     /** The creator's consent; absent, it lasts as long as this object. */
@@ -307,6 +312,7 @@ export function sentenceOf(diagnostic: string): string {
     if (diagnostic.startsWith('EA_CAPTURE')) return COPY.review.captureFailed;
     if (diagnostic.startsWith('EA_REVIEW_BUSY a model')) return COPY.review.aiBusy;
     if (diagnostic.startsWith('EA_REVIEW_BUSY an improvement')) return COPY.review.improving;
+    if (diagnostic.startsWith('EA_REVIEW_BUSY a new world')) return COPY.review.making;
     if (diagnostic.startsWith('EA_REVIEW_BUSY')) return COPY.review.busy;
     return COPY.review.notApplied;
 }
@@ -456,6 +462,8 @@ export class StageReviews {
         if (this.deps.generation() !== r.deviceGeneration) return 'EA_STALE_EVIDENCE the device was replaced since this review';
         if (this.improvingNow || r.status === 'improving') return 'EA_REVIEW_BUSY an improvement is under way';
         if (this.reviewingNow || r.status === 'reviewing') return 'EA_REVIEW_BUSY a model\'s review is under way';
+        const paid = this.deps.paidBusy?.() ?? null;
+        if (paid) return `EA_REVIEW_BUSY ${paid}`;
         if (!ANSWERABLE.has(r.status)) return `EA_REVIEW_UNAVAILABLE the review is ${r.status}`;
         const session = this.deps.session();
         const held = session?.snapshot?.id ?? null;

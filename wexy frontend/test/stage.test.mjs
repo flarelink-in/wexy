@@ -10,18 +10,21 @@
 //          probe over the cap reaches no full-size work on the stage's engine; a cancel during the probe stops it; a
 //          world with no post chain is redirected by its main pass
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { createDeviceCompiler } from '../src/exec/device-compiler.ts';
 import { createEngineExecutor } from '../src/exec/engine-executor.ts';
 import { createMemoryLedger, reservationFor } from '../src/exec/gate.ts';
-import { createStage, envelopeOf, retire } from '../src/exec/stage.ts';
+import { createStage, displayTarget, envelopeOf, retire, screenEnvelope } from '../src/exec/stage.ts';
+import { MAX_LIVE_PIXELS, Viewport } from '../src/runtime/viewport.ts';
 import { DEFAULT_LIMITS, ENV, cleanDevice, clock, compileAll, costs, eligibilityFor, fakeHeadless, fakePort, live, present, sealed, sealedLive } from './exec-fakes.mjs';
 
 const VIEW = { target: [0, 0, 0], distance: 12, azimuth: 0.6, polar: 1.2, fov: 45 };
 const SIZE = { width: 1280, height: 720 };
 const LIGHT = costs({ fixed: 0.02, perInvocation: 1e-5, perPixel: 1e-7, perInstance: 1e-5 });
 
-async function stageFor(snapOrName, { model = LIGHT, pixels = null, headlessWrap = h => h, fail = () => false, headlessOptions = {}, quiet = undefined, eligibility = undefined } = {}) {
+async function stageFor(snapOrName, { model = LIGHT, pixels = null, headlessWrap = h => h, fail = () => false, headlessOptions = {}, quiet = undefined, eligibility = undefined, size: canvas = SIZE, display = undefined } = {}) {
+    const SIZE = canvas;
     const snap = typeof snapOrName === 'string' ? await sealedLive(snapOrName) : snapOrName;
     const now = present();
     const time = clock();
@@ -37,10 +40,11 @@ async function stageFor(snapOrName, { model = LIGHT, pixels = null, headlessWrap
         port, headless: headlessWrap(headless), limits: DEFAULT_LIMITS, compiler: () => compiler, present: now, environment: ENV, gpu: 'Fake GPU',
         size: () => SIZE, maxPixels: 2_300_000, view: () => VIEW, restoreHeadCamera: () => port.log.push('head camera'),
         commit: r => { port.log.push('commit'); commits.push(r); }, now: () => time.t, onRefusal: m => refusals.push(m), ledger,
-        eligibility: eligibility ?? eligibilityFor([snap], { pixels: envelope.width * envelope.height }), quiet,
+        eligibility: eligibility ?? eligibilityFor([snap], { pixels: envelope.width * envelope.height }), quiet, display,
     });
     return { snap, now, port, made, compiled, stage, commits, refusals, ledger, envelope };
 }
+
 
 const allReleased = (s, what) => {
     assert.deepEqual([...s.port.live.values()], [], `${what}: every handle the construction made is freed`);
@@ -51,6 +55,96 @@ const allReleased = (s, what) => {
         assert.deepEqual([...h.port.live.values()], [], `${what}: every variant freed`);
     }
 };
+
+test('EA9-U8 G2: a world is tested at what this screen can show, a phone\'s 0.74 MP, not the 2.3 MP live cap; every canvas the display can show runs, a larger one pauses', async () => {
+    // The display in the viewport's own pixels: CSS × min(DPR, 1.5), rounded up as the viewport rounds a canvas.
+    const phone = displayTarget(390, 844, 3);
+    assert.deepEqual(phone, { width: 585, height: 1266 });
+    assert.deepEqual([displayTarget(0, 844, 3), displayTarget(390, 844, Number.NaN)], [null, { width: 390, height: 844 }], 'no size: none; no ratio: 1');
+    assert.deepEqual(displayTarget(1745, 982, 1.1), { width: 1920, height: 1081 }, 'at a zoom of 110%: never below the rounded canvas');
+    // A phone held upright, its stage a box under the header: tested at its screen's pixels, at the canvas's own shape.
+    const CAP = 2_300_000;
+    const box = { width: 585, height: 480 };
+    const e = screenEnvelope(phone, box, CAP);
+    const px = e.width * e.height;
+    assert.ok(px >= 585 * 1266 && px <= 585 * 1266 + e.width + e.height, `${e.width}×${e.height} holds the screen's 0.74 MP, rounded up: ${px}`);
+    assert.ok(Math.abs(e.width / e.height - box.width / box.height) < 0.01, 'the canvas\'s shape kept');
+    // The inverted case, the stage before G2: the 2.3 MP live cap, three times the phone's screen.
+    const before = envelopeOf(box, CAP);
+    assert.ok(before.width * before.height >= CAP && before.width * before.height > 3 * px, 'G2 tests a phone at a third of what it did');
+    // A large display is held to the live cap, rounded up past it by at most a row and a column: what the probe
+    // measures, never less than a frame draws. A canvas is never tested below its size.
+    const wide = screenEnvelope(displayTarget(2560, 1440, 1), { width: 1476, height: 830 }, CAP);
+    assert.ok(wide.width * wide.height >= CAP && wide.width * wide.height <= CAP + wide.width + wide.height, `${wide.width}×${wide.height}`);
+    const small = screenEnvelope({ width: 100, height: 100 }, { width: 800, height: 600 }, CAP);
+    assert.ok(small.width >= 800 && small.height >= 600, 'at least what the canvas draws now');
+    // The stage probes at it when the studio says what its screen can show, and at the live cap when it does not.
+    for (const [display, expect] of [[() => phone, e], [undefined, before]]) {
+        const s = await stageFor('galaxy', { size: box, display });
+        s.stage.press(s.snap);
+        const r = await s.stage.run(s.snap, s.compiled);
+        assert.equal(r.status, 'installed', r.reason);
+        assert.deepEqual(r.report.probe.viewport, { width: expect.width, height: expect.height });
+        r.runtime.destroy();
+        r.held.release();
+        allReleased(s, display ? 'the screen\'s envelope' : 'the live cap');
+    }
+
+    // The EA9.2 review: a world admitted from a canvas smaller than its screen, then resized to that screen in full,
+    // upright or turned, keeps running; only a canvas past what this display can show pauses (EA_RESIZE).
+    const resizes = [
+        ['1920×1080 at 1, from 1000×800', displayTarget(1920, 1080, 1), { width: 1000, height: 800 }, [[1920, 1080], [1080, 1920], [1000, 800]], [2560, 1440]],
+        ['a phone, from its stage box', phone, box, [[585, 1266], [1266, 585], [585, 480]], [1170, 2532]],
+        ['2560×1440 at 1, at the cap', displayTarget(2560, 1440, 1), { width: 1476, height: 830 }, [[2022, 1137], [1137, 2022]], [2560, 1440]],
+    ];
+    for (const [label, display, canvas, fits, past] of resizes) {
+        const s = await stageFor('galaxy', { size: canvas, display: () => display });
+        s.stage.press(s.snap);
+        const r = await s.stage.run(s.snap, s.compiled);
+        assert.equal(r.status, 'installed', `${label}: ${r.reason}`);
+        for (const [w, h] of fits) {
+            r.runtime.resize(w, h);
+            assert.deepEqual(s.refusals.filter(m => m.startsWith('EA_RESIZE')), [], `${label}: ${w}×${h} runs`);
+        }
+        r.runtime.resize(past[0], past[1]);
+        assert.equal(s.refusals.filter(m => m.startsWith('EA_RESIZE')).length, 1, `${label}: ${past[0]}×${past[1]}, past what the display can show, pauses`);
+        r.runtime.destroy();
+        r.held.release();
+    }
+
+    // The viewport's own rounding, for every canvas these displays can show, of any shape: never a pixel past the live
+    // cap, nor past the envelope a world there was admitted at (scaled to the cap and then rounded, it came out over).
+    const ratio = Object.getOwnPropertyDescriptor(globalThis, 'devicePixelRatio');
+    try {
+        for (const [cssW, cssH, dpr] of [[1920, 1080, 1], [390, 844, 3], [844, 390, 3], [2560, 1440, 1], [1536, 864, 1.25], [1745, 982, 1.1], [1280, 800, 2]]) {
+            Object.defineProperty(globalThis, 'devicePixelRatio', { configurable: true, value: dpr });
+            const display = displayTarget(cssW, cssH, dpr);
+            const half = { width: Math.round(cssW * Math.min(dpr, 1.5) / 2), height: Math.round(cssH * Math.min(dpr, 1.5) / 2) };
+            const admitted = screenEnvelope(display, half, CAP);
+            let rect = { width: 0, height: 0 };
+            const vp = Object.assign(Object.create(Viewport.prototype), {
+                canvas: { width: 0, height: 0, getBoundingClientRect: () => rect },
+                engine: { width: 0, height: 0, resize(w, h) { this.width = w; this.height = h; } },
+                stats: { scale: 1, width: 0, height: 0, quality: 1 }, runtime: null, runtimeSize: null, window: [], settleUntil: 0, sizeDirty: true,
+            });
+            for (let i = 1; i <= 24; i++) {
+                for (let j = 1; j <= 24; j++) {
+                    rect = { width: Math.min(cssW, cssW * i / 24 + (i % 3) / 7), height: Math.min(cssH, cssH * j / 24 + (j % 5) / 9) };
+                    vp.applyLiveSize(0);
+                    const area = vp.canvas.width * vp.canvas.height;
+                    assert.ok(area <= MAX_LIVE_PIXELS, `${cssW}×${cssH} at ${dpr}: ${rect.width}×${rect.height} drew ${vp.canvas.width}×${vp.canvas.height}, past the cap`);
+                    assert.ok(area <= admitted.width * admitted.height, `${cssW}×${cssH} at ${dpr}: ${vp.canvas.width}×${vp.canvas.height} past the envelope ${admitted.width}×${admitted.height}`);
+                }
+            }
+        }
+    } finally {
+        if (ratio) Object.defineProperty(globalThis, 'devicePixelRatio', ratio); else delete globalThis.devicePixelRatio;
+    }
+
+    // The studio says what its screen can show: the display's CSS size and its ratio, nothing of the page around it.
+    const main = readFileSync(new URL('../src/shell/studio/main.ts', import.meta.url), 'utf8');
+    assert.match(main, /display: \(\) => stages\.displayTarget\(screen\.width, screen\.height, devicePixelRatio\),/);
+});
 
 test('coverage-only misses reach bounded validation by default; warnings survive success and probe failure', async () => {
     const missing = { ok: true, entries: [] };

@@ -13,35 +13,23 @@
 // "Run on this GPU" (EA5.3, Q89) is the developer's GPU go for the sealed candidate shown: the studio's stage admits,
 // builds, probes and checks it, and only then puts it on the stage. The panel builds and renders nothing itself; it shows
 // what came of the Run, in the developer's words.
+// EA9.1 (agent-first-studio-design.md §3): the panel owns no session. It watches the creation controller (creation.ts),
+// which owns every creation's sessions, and its buttons are presses on it: "Write the modules" a write, Cancel a cancel,
+// "Run on this GPU" the controller's go, the one the creator's "Show it" is.
 
-import type { CompiledBody, ModuleCompiler } from '../../contract/adapters/bodies';
+import type { ModuleCompiler } from '../../contract/adapters/bodies';
 import type { DeepReadonly } from '../../contract/engine/frozen';
 import type { ModuleClient } from '../../forge-client/module-client';
-import type { AgentTurnState } from '../../loop/agent-turn';
-import {
-    candidateBundle, createCandidateSession, turnCallsOf, type BundleReviewsSection, type CandidatePhase, type CandidateSession, type CandidateState, type HandOff,
-    type ModuleState, type Reviser, type TurnRecord,
-} from '../../loop/candidate';
+import { candidateBundle, type BundleReviewsSection, type CandidatePhase, type CandidateSession, type CandidateState, type ModuleState, type Reviser, type TurnRecord } from '../../loop/candidate';
 import type { CandidateEvidence, EvidenceSubject } from '../../loop/candidate-evidence';
-import type { SealedCandidate } from '../../loop/snapshot';
+import type { CreationController, CreationStage, RunSummary } from '../../loop/creation';
 import { download, h } from '../../shared/dom';
 
-/** What a Run came to, as the panel shows it (EA5.3). */
-export interface RunSummary {
-    status: 'installed' | 'refused' | 'stopped' | 'failed';
-    /** The developer's words: why it did not install; null when it did. */
-    reason: string | null;
-    /** The probe's and the sanity look's numbers, in one line; empty when none ran. */
-    numbers: string;
-}
+/** What a Run came to (EA5.3): the controller's, as the panel shows it. */
+export type { RunSummary } from '../../loop/creation';
 
-/** The studio's stage, as the panel reaches it (EA5.3, Q89). */
-export interface RunControl {
-    /** Why Run cannot be pressed now (no stage yet: no WebGPU, or the device still starting); null when it can. */
-    blocked(): string | null;
-    /** The developer's press: the GPU go for this sealed candidate, then the attempt. */
-    go(snapshot: DeepReadonly<SealedCandidate>, compiled: readonly DeepReadonly<CompiledBody>[]): Promise<RunSummary>;
-}
+/** The studio's stage, as a panel's own controller reaches it (EA5.3, Q89): the controller's stage seam. */
+export type RunControl = CreationStage;
 
 /** How each phase reads in Developer view; `idle` is no candidate yet. */
 export const CANDIDATE_PHASES: Readonly<Record<CandidatePhase | 'idle', { label: string; tone: 'quiet' | 'ok' | 'warn' | 'err'; note: string }>> = {
@@ -85,30 +73,36 @@ const usd = (micro: number) => `$${(micro / 1e6).toFixed(4)}`;
 const short = (hash: string) => `${hash.slice(0, 12)}…`;
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-export interface CandidateOptions {
+/** What the panel shows beside the controller's candidate: what judges L3, the bundle's save, the reviews it carries. */
+export interface CandidateViewOptions {
+    /**
+     * L3 (EA5.1): the studio's device compiler, which the next attempt would get; null until the device exists, and with
+     * no WebGPU. Absent: the candidate is checked, never compiled.
+     */
+    compiler?: () => ModuleCompiler | null;
+    /** Saves the bundle: a download by default. */
+    save?: (name: string, text: string) => void;
+    /** The reviews of an attempt's stage as the bundle holds them (Q113 (a)); absent, the bundle's reviews are none. */
+    reviews?: (attempt: string) => BundleReviewsSection | null;
+}
+
+/** The candidate half of a panel's own controller (a harness's, agent-view.ts): its sessions' seams and its stage. */
+export interface CandidateOptions extends CandidateViewOptions {
     modules: ModuleClient;
     /** A program revision (EA4.4); absent, a program's finding ends the candidate. */
     revise?: Reviser;
-    /**
-     * L3 (EA5.1): the studio's device compiler, asked at each attempt's start; null until the device exists, and with no
-     * WebGPU. Absent: the candidate is checked, never compiled.
-     */
-    compiler?: () => ModuleCompiler | null;
     /** A new attempt's id: random by default; a harness names it to replay recorded calls. */
     attemptId?: () => string;
-    /** Saves the bundle: a download by default. */
-    save?: (name: string, text: string) => void;
     /** "Run on this GPU" (EA5.3): the studio's stage. Absent, the panel offers no Run. */
     run?: RunControl;
-    /** The reviews of an attempt's stage as the bundle holds them (Q113 (a)); absent, the bundle's reviews are none. */
-    reviews?: (attempt: string) => BundleReviewsSection | null;
 }
 
 type Candidate = DeepReadonly<CandidateState>;
 
 export class CandidatePanel {
     readonly el: HTMLElement;
-    readonly session: CandidateSession;
+    private readonly controller: CreationController;
+    private readonly off: () => void;
     private readonly save: (name: string, text: string) => void;
     private readonly reviews: ((attempt: string) => BundleReviewsSection | null) | null;
     private readonly compiler: () => ModuleCompiler | null;
@@ -130,25 +124,13 @@ export class CandidatePanel {
     private readonly evidence = h('details', { class: 'cand-evidence', hidden: true }, h('summary', null, 'Evidence ', this.evidenceTag), this.evidenceList);
     private readonly runBtn = h('button', { type: 'button', class: 'btn btn-sm', disabled: true, hidden: true }, 'Run on this GPU');
     private readonly runLine = h('p', { class: 'cand-run', hidden: true });
-    private readonly runControl: RunControl | null;
-    private handOff: HandOff | null = null;
-    private turnSeq: number | null = null;
-    private state: Candidate | null = null;
-    /** Moves with every new turn and every new write: a Run under way from before is superseded (executor.ts's turn). */
-    private turnEpoch = 0;
-    private running = false;
-    /** The last Run's outcome, for the candidate it ran. */
-    private lastRun: { candidate: string; summary: RunSummary } | null = null;
 
-    constructor(options: CandidateOptions) {
+    /** Watches `controller`'s current creation: its candidate, its hand-off, its Run. */
+    constructor(controller: CreationController, options: CandidateViewOptions = {}) {
+        this.controller = controller;
         this.save = options.save ?? ((name, text) => download(new Blob([text], { type: 'application/json' }), name));
         this.reviews = options.reviews ?? null;
         this.compiler = options.compiler ?? (() => null);
-        this.runControl = options.run ?? null;
-        this.session = createCandidateSession({ modules: options.modules, revise: options.revise, attemptId: options.attemptId, compiler: this.compiler }, s => {
-            this.state = s;
-            this.render();
-        });
         this.writeBtn.addEventListener('click', () => void this.write());
         this.cancelBtn.addEventListener('click', () => this.cancel());
         this.downloadBtn.addEventListener('click', () => this.download());
@@ -161,75 +143,49 @@ export class CandidatePanel {
             this.runLine,
             this.budget, this.modules, this.turnList, this.jobs, this.evidence,
         );
+        this.off = controller.subscribe(() => this.render());
         this.render();
     }
 
-    /** The host's turn for the stage's Run (executor.ts's Present): it moves with each new turn and each new write. */
+    /** The host's turn for the stage's Run (executor.ts's Present): the controller's κ, which each turn and write move. */
     get epoch(): number {
-        return this.turnEpoch;
+        return this.controller.n;
+    }
+
+    /** The session of the candidate shown: the current creation's, made at its first write; null before. */
+    get session(): CandidateSession | null {
+        return this.controller.session;
     }
 
     /**
-     * The developer's GPU go for the sealed candidate shown, and its Run on the studio's stage (Q89). Only a sealed
-     * candidate with this device's L3 verdict on every body can be run; the stage decides everything else.
+     * The developer's GPU go for the sealed candidate shown, and its Run on the studio's stage (Q89): the controller's go,
+     * the one the creator's "Show it" is. Only a sealed candidate with this device's L3 verdict on every body can be run;
+     * the stage decides everything else.
      */
     async run(): Promise<RunSummary | null> {
-        const snapshot = this.session.snapshot;
-        const compiled = this.session.compiled;
-        if (!this.runControl || !snapshot || !compiled || this.running || this.runControl.blocked() !== null) return null;
-        this.running = true;
-        this.render();
-        let summary: RunSummary;
-        try {
-            summary = await this.runControl.go(snapshot, compiled);
-        } catch (e) {
-            summary = { status: 'failed', reason: `internal: ${e instanceof Error ? e.message : String(e)}`, numbers: '' };
-        }
-        this.running = false;
-        this.lastRun = { candidate: snapshot.id, summary };
-        this.render();
-        return summary;
+        return this.controller.show();
     }
 
-    /**
-     * The turn as it is now. Its hand-off is what the modules are written for; a new turn retires the last turn's
-     * candidate, cancelled if it still runs, so nothing of it shows beside another turn.
-     */
-    turn(s: AgentTurnState | null): void {
-        if (s && s.seq !== this.turnSeq) {
-            this.turnSeq = s.seq;
-            this.turnEpoch++;
-            if (this.state && RUNNING.has(this.state.phase)) this.session.cancel();
-            this.state = null;
-        }
-        this.handOff = s?.phase === 'handed-off' && s.meta && s.design && s.program
-            ? {
-                turnId: s.meta.turnId, request: s.request, design: s.design, program: s.program, model: s.meta.model, promptVersion: s.meta.promptVersion,
-                calls: turnCallsOf(s.calls),
-            }
-            : null;
-        this.render();
-    }
-
-    /** Writes the hand-off's modules, a candidate of its own; one still running, or a Run of the last, is superseded. */
+    /** Writes the hand-off's modules: the first attempt, or a new one in a session of its own; a Run under way is superseded. */
     async write(): Promise<Candidate | null> {
-        if (!this.handOff) return null;
-        this.turnEpoch++;
-        return this.session.start(this.handOff);
+        await this.controller.write();
+        return this.controller.state.candidate;
     }
 
     cancel(): void {
-        this.session.cancel();
+        this.controller.cancel();
     }
 
     /** The candidate as a JSON bundle, saved by the developer's own click. */
     download(): void {
-        if (!this.state) return;
-        this.save(`wexy-candidate-${this.state.attempt}.json`, `${JSON.stringify(candidateBundle(this.state, this.reviews?.(this.state.attempt) ?? null), null, 2)}\n`);
+        const s = this.controller.state.candidate;
+        if (!s) return;
+        this.save(`wexy-candidate-${s.attempt}.json`, `${JSON.stringify(candidateBundle(s, this.reviews?.(s.attempt) ?? null), null, 2)}\n`);
     }
 
+    /** Stops watching; the controller and whatever it runs belong to its owner. */
     dispose(): void {
-        this.session.cancel();
+        this.off();
     }
 
     /** Shows the panel again as it is now: the studio calls it once its device compiler exists. */
@@ -238,7 +194,8 @@ export class CandidatePanel {
     }
 
     private render(): void {
-        const s = this.state;
+        const st = this.controller.state;
+        const s = st.candidate;
         // What judges L3: the attempt's own compiler once one runs, else the one the next attempt would get.
         const now = this.compiler();
         const judge = s ? s.l3 : now ? { producedBy: now.producedBy, gpu: now.gpu ?? null } : null;
@@ -251,7 +208,7 @@ export class CandidatePanel {
         this.sub.textContent = device ? 'EA5.1 · checked, compiled on this device, never built' : 'EA4 · checked, never compiled';
         this.l3.textContent = !judge ? 'L3 not run: no device compiler here, so bodies are checked, never compiled.'
             : judge.producedBy === 'device' ? `L3 on this device: ${judge.gpu ?? 'its GPU'}.` : 'L3 by a fake compiler: its verdicts prove nothing about a device.';
-        this.writeBtn.disabled = !this.handOff || running;
+        this.writeBtn.disabled = !st.handOff || running;
         this.writeBtn.textContent = s && !running ? 'Write the modules again' : 'Write the modules';
         this.cancelBtn.disabled = !running;
         this.downloadBtn.disabled = !s;
@@ -259,7 +216,7 @@ export class CandidatePanel {
         this.phase.className = `cand-phase tone-${look.tone}`;
         this.id.textContent = s?.id ? `id(C) ${short(s.id)}` : s?.verified ? `last verified ${short(s.verified.id)}` : '';
         // The creator's sentence when it stopped, in the words the studio would show; the developer's beneath.
-        this.note.textContent = s?.stop ? s.stop.sentence : !s && !this.handOff ? 'A turn that hands off comes first.' : look.note;
+        this.note.textContent = s?.stop ? s.stop.sentence : !s && !st.handOff ? 'A turn that hands off comes first.' : look.note;
         this.note.hidden = !this.note.textContent;
         this.reason.hidden = !s?.stop;
         this.reason.replaceChildren(...(s?.stop ? [h('code', null, s.stop.scope), ' ', s.stop.diagnostic] : []));
@@ -281,21 +238,23 @@ export class CandidatePanel {
 
     /** "Run on this GPU": offered for a sealed candidate with this device's verdicts, and what the last Run came to. */
     private renderRun(writing: boolean): void {
-        const control = this.runControl;
-        this.runBtn.hidden = !control;
-        this.runLine.hidden = !control;
-        if (!control) return;
-        const snapshot = this.session.snapshot;
+        const c = this.controller;
+        this.runBtn.hidden = !c.showable;
+        this.runLine.hidden = !c.showable;
+        if (!c.showable) return;
+        const session = c.session;
+        const snapshot = session?.snapshot ?? null;
+        const running = c.state.phase === 'running';
         const blocked = !snapshot ? 'Run needs a sealed candidate: Write the modules first.'
-            : !this.session.compiled ? 'Run needs this device\'s L3 verdict on every body (a device compiler here).'
-                : control.blocked();
-        this.runBtn.disabled = this.running || writing || blocked !== null;
+            : !session?.compiled ? 'Run needs this device\'s L3 verdict on every body (a device compiler here).'
+                : c.stageBlocked();
+        this.runBtn.disabled = running || writing || blocked !== null;
         this.runBtn.title = blocked ?? 'The GPU go for this candidate: admitted, built, probed and checked here before it reaches the stage.';
-        this.runBtn.textContent = this.running ? 'Running…' : 'Run on this GPU';
-        const last = this.lastRun && snapshot && this.lastRun.candidate === snapshot.id ? this.lastRun.summary : null;
-        this.el.dataset.run = this.running ? 'running' : last?.status ?? 'idle';
+        this.runBtn.textContent = running ? 'Running…' : 'Run on this GPU';
+        const last = c.state.run;
+        this.el.dataset.run = running ? 'running' : last?.status ?? 'idle';
         this.runLine.className = `cand-run${last ? ` is-${last.status}` : ''}`;
-        if (this.running) this.runLine.textContent = 'Running on this GPU: the gate, the build, the probe, the first frame offscreen. The world on the stage keeps running, and holds while the probe times its work.';
+        if (running) this.runLine.textContent = 'Running on this GPU: the gate, the build, the probe, the first frame offscreen. The world on the stage keeps running, and holds while the probe times its work.';
         else if (last?.status === 'installed') this.runLine.textContent = `On the stage: id(C) ${short(snapshot!.id)}${last.numbers ? ` · ${last.numbers}` : ''}`;
         else if (last) this.runLine.textContent = `${last.status}: ${last.reason ?? ''}${last.numbers ? ` · ${last.numbers}` : ''}`;
         else this.runLine.textContent = blocked ?? 'Ready: Run on this GPU puts it on the stage once every check passes; the world there now stays until then.';

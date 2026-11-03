@@ -82,9 +82,11 @@ try {
 
     // EA-V6, the studio itself, its GPU still off: the panel mounts only behind ?agent=1, before WebGPU is asked for,
     // above h1's trace in Developer view, with h1's Create as it was; without the flag, none of the agent path loads.
+    // EA9-E1b (EA9.1): ?create=agent loads the creation controller and the creator's controls, not Developer view; with
+    // no backend to reach (?source=mock) its Create stays off and the steps say why; the plain page loads none of it.
     const evaluate = async expression => (await page.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })).result?.value;
     const studio = {};
-    for (const [label, query] of [['agent', '?agent=1&source=mock'], ['plain', '?source=mock']]) {
+    for (const [label, query] of [['agent', '?agent=1&source=mock'], ['create', '?create=agent&source=mock'], ['plain', '?source=mock']]) {
         await page.send('Page.navigate', { url: `${origin}/studio.html${query}` });
         let seen = null;
         for (let i = 0; i < 50 && !seen?.settled; i++) {
@@ -95,13 +97,16 @@ try {
                 const forge = document.querySelector('.btn-forge');
                 const loaded = performance.getEntriesByType('resource').map(e => new URL(e.name).pathname);
                 return {
-                    settled: !!forge && (${label === 'agent'} ? !!panel : document.readyState === 'complete'),
+                    settled: !!forge && (${label === 'agent'} ? !!panel : ${label === 'create'} ? loaded.some(n => n.endsWith('/src/shell/studio/creation-view.ts')) && document.readyState === 'complete' : document.readyState === 'complete'),
                     panel: !!panel,
                     aboveTrace: !!(panel && trace && (panel.compareDocumentPosition(trace) & Node.DOCUMENT_POSITION_FOLLOWING)),
                     dev: document.body.classList.contains('dev'),
                     status: panel?.querySelector('.agent-phase')?.textContent ?? null,
                     forge: forge?.textContent ?? null,
                     agentCode: loaded.filter(n => /agent-(view|stream|client|turn)|contract\\/agent/.test(n)),
+                    creationCode: loaded.filter(n => /loop\\/creation|creation-view/.test(n)),
+                    forgeDisabled: !!forge?.disabled,
+                    idle: document.querySelector('.journey-idle')?.textContent ?? null,
                     gpu: document.querySelector('#gpu-pill')?.textContent ?? null,
                 };
             })()`);
@@ -109,14 +114,57 @@ try {
         studio[label] = seen;
     }
     await sleep(1000); // a late-loading agent chunk would show on the plain page now
-    studio.plainLate = await evaluate(`performance.getEntriesByType('resource').map(e => new URL(e.name).pathname).filter(n => /agent-(view|stream|client|turn)|contract\\/agent/.test(n))`);
+    studio.plainLate = await evaluate(`performance.getEntriesByType('resource').map(e => new URL(e.name).pathname).filter(n => /agent-(view|stream|client|turn)|contract\\/agent|loop\\/creation|creation-view/.test(n))`);
     const a = studio.agent ?? {};
+    const c = studio.create ?? {};
     const p = studio.plain ?? {};
     result.checks.push({
         name: 'EA-V6 the studio mounts the panel only behind ?agent=1: above h1\'s trace, in Developer view, h1\'s Create as it was',
         ok: !!(a.panel && a.aboveTrace && a.dev && /^(No backend|No turn yet)$/.test(a.status ?? '') && /Create world/.test(a.forge ?? '')
             && !p.panel && !p.dev && p.agentCode?.length === 0 && studio.plainLate?.length === 0 && /Create world/.test(p.forge ?? '')),
         detail: studio,
+    });
+    result.ok = result.ok && result.checks.at(-1).ok;
+    result.checks.push({
+        name: 'EA9-E1b ?create=agent loads the creation controller and the creator\'s controls, not Developer view; with no backend its Create stays off and says why; the plain page loads none of it',
+        ok: !!(c.creationCode?.length >= 2 && !c.panel && !c.dev && /Create world/.test(c.forge ?? '') && c.forgeDisabled
+            && /^Making a new world needs the Wexy service/.test(c.idle ?? '') && p.creationCode?.length === 0 && a.creationCode?.length >= 1),
+        detail: { create: c, plainCreation: p.creationCode, agentCreation: a.creationCode },
+    });
+    result.ok = result.ok && result.checks.at(-1).ok;
+
+    // EA9-E4 (EA9.2), its GPU-off half: the studio behind ?create=agent at phone sizes, upright and turned, is exactly as
+    // wide as the screen, with the idea box's Create and the steps within it. Show it, which needs a world written on a
+    // device, is its GPU half (dev/ea9-e1.mjs).
+    const phones = [];
+    for (const [width, height] of [[390, 844], [360, 740], [320, 640], [844, 390]]) {
+        await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: true });
+        await page.send('Page.navigate', { url: `${origin}/studio.html?create=agent&source=mock` });
+        let seen = null;
+        for (let i = 0; i < 50 && !seen?.settled; i++) {
+            await sleep(200);
+            seen = await evaluate(`(() => {
+                const loaded = performance.getEntriesByType('resource').map(e => new URL(e.name).pathname);
+                const forge = document.querySelector('.btn-forge');
+                const journey = document.querySelector('.journey');
+                if (!forge || !journey || document.readyState !== 'complete' || !loaded.some(n => n.endsWith('/src/shell/studio/creation-view.ts'))) return { settled: false };
+                forge.scrollIntoView({ block: 'center' });
+                const f = forge.getBoundingClientRect();
+                const j = journey.getBoundingClientRect();
+                return {
+                    settled: true, page: document.documentElement.scrollWidth, body: document.body.scrollWidth,
+                    forge: [f.left, f.right, f.top, f.bottom].map(Math.round), journey: [j.left, j.right].map(Math.round),
+                };
+            })()`);
+        }
+        phones.push({ width, height, ...seen });
+    }
+    await page.send('Emulation.clearDeviceMetricsOverride');
+    result.checks.push({
+        name: 'EA9-E4 the studio behind ?create=agent at 390×844, 360×740, 320×640 and 844×390: exactly as wide as the screen, Create and the steps within it',
+        ok: phones.length === 4 && phones.every(p => p.settled && p.page <= p.width && p.body <= p.width && p.forge[0] >= 0 && p.forge[1] <= p.width
+            && p.forge[2] >= 0 && p.forge[3] <= p.height && p.journey[0] >= 0 && p.journey[1] <= p.width),
+        detail: phones,
     });
     result.ok = result.ok && result.checks.at(-1).ok;
     writeFileSync(join(OUT, 'result.json'), JSON.stringify({ ...result, console: consoleLines.slice(0, harnessLines), studioConsole: consoleLines.slice(harnessLines) }, null, 1));
