@@ -31,10 +31,17 @@
 #     ssh -L 8400:127.0.0.1:8500 "$WEXY_SSH"    # dev:  compose.dev.yaml, project wexy-dev, on the laptop's 8400
 #     ssh -L 8600:127.0.0.1:8400 "$WEXY_SSH"    # prod: compose.prod.yaml, project wexy, on the laptop's 8600
 #
-# `smoke` (2026-11-03, for the deployment test of W2 and EA6.4) asks a running stack, through that tunnel (dev's by
-# default: http://127.0.0.1:8400), what any visitor can ask: no token, no App Check, no secret, nothing spent. Each check
-# says which part of the release it proves; a failure exits 1. WEXY_SMOKE_ORIGIN (https://dev.wexy.ai) is the studio's
-# origin for the CORS check; use https://wexy.ai with prod's tunnel (http://127.0.0.1:8600).
+# `smoke` (2026-11-03, for the deployment test of W2 and EA6.4) asks a running stack what any visitor can ask: no token,
+# no App Check, no secret, nothing spent. Each check says which part of the release it proves; a failure exits 1. Run it
+# twice:
+#
+#     bash deploy.sh smoke                           # the origin, through dev's tunnel (http://127.0.0.1:8400)
+#     bash deploy.sh smoke https://api-dev.wexy.ai   # the same through Cloudflare, whose rules the tunnel never meets
+#
+# Only the gateway's own JSON passes a check: Cloudflare's block page is an HTML 403, the same status as App Check's
+# refusal (2026-11-03: the zone's method rule still allowed only GET, POST and OPTIONS, so W2's PATCH died at the edge
+# and the browser called it a CORS error). WEXY_SMOKE_ORIGIN (https://dev.wexy.ai) is the studio's origin for the CORS
+# check; use https://wexy.ai with prod's tunnel (http://127.0.0.1:8600) or https://api.wexy.ai.
 set -euo pipefail
 
 if [ "${1:-}" = "smoke" ]; then
@@ -42,28 +49,40 @@ if [ "${1:-}" = "smoke" ]; then
     BASE=${BASE%/}
     ORIGIN=${WEXY_SMOKE_ORIGIN:-https://dev.wexy.ai}
     failed=0
-    # The status a request answers, or 000 when nothing answered (no tunnel, no gateway).
-    code() { curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$@" || true; }
-    # check "<statuses that pass>" <status> <what it proves> <what a failure means>
+    # The status and the media type a request answers: "000 " when nothing answered (no tunnel, no gateway).
+    answer() { curl -s -o /dev/null -w '%{http_code} %{content_type}' --max-time 15 "$@" || true; }
+    # check "<statuses that pass>" "<answer>" <what it proves> <what a failure means>. A status passes only with a JSON
+    # body, the gateway's and the services' envelope: an HTML page is the edge's.
     check() {
         local want=$1 got=$2 what=$3 otherwise=$4
-        if [[ " $want " == *" $got "* ]]; then
-            echo "PASS  $what ($got)"
+        local status=${got%% *} type=${got#* }
+        if [[ " $want " == *" $status "* && $type == application/json* ]]; then
+            echo "PASS  $what ($status)"
+        elif [[ $type == text/html* ]]; then
+            echo "FAIL  $what: $status, an HTML page, not the gateway's JSON: Cloudflare stopped it (its rules, or a challenge). $otherwise"
+            failed=1
         else
-            echo "FAIL  $what: $got, expected ${want// / or }. $otherwise"
+            echo "FAIL  $what: $status ${type:-with no body}, expected ${want// / or } as JSON. $otherwise"
             failed=1
         fi
     }
+    edge="An HTML 403 here is the zone's method rule: it must allow GET, POST, PATCH, DELETE and OPTIONS (the deploy design's zone rules)."
     echo "smoke: $BASE, the studio's origin $ORIGIN"
-    check 200 "$(code "$BASE/v1/forge/mode")" "the gateway answers and reaches forge (GET /v1/forge/mode)" \
+    check 200 "$(answer "$BASE/v1/forge/mode")" "the gateway answers and reaches forge (GET /v1/forge/mode)" \
         "000 is no tunnel or no gateway; 502 or 503 is forge down."
-    check 404 "$(code "$BASE/v1/showcase")" "the gateway reaches the platform service (GET /v1/showcase, 404 until W4)" \
+    check 404 "$(answer "$BASE/v1/showcase")" "the gateway reaches the platform service (GET /v1/showcase, 404 until W4)" \
         "503 is the platform down, or compose.platform.yaml left out of the host's command (WEXY_PLATFORM_SERVICE_URL)."
     # A guarded route without tokens: 403 where App Check enforces (it runs before the sign-in), 401 where it only watches.
-    check "401 403" "$(code "$BASE/v1/me")" "the platform's account routes are guarded (GET /v1/me, no token)" \
+    check "401 403" "$(answer "$BASE/v1/me")" "the platform's account routes are guarded (GET /v1/me, no token)" \
         "404 is a gateway from before W2."
-    check "401 403" "$(code "$BASE/v1/agent/review")" "the review's terms are guarded (GET /v1/agent/review, no token)" \
+    check "401 403" "$(answer "$BASE/v1/agent/review")" "the review's terms are guarded (GET /v1/agent/review, no token)" \
         "404 is a gateway from before EA6.4."
+    # W2's methods past the edge: a handle's claim is a PATCH, and deletions (W3, W5) are DELETEs. Without tokens the
+    # gateway refuses both itself, so neither reaches a service.
+    check "401 403" "$(answer -X PATCH -H 'Content-Type: application/json' --data '{}' "$BASE/v1/me/profile")" \
+        "a PATCH reaches the gateway (PATCH /v1/me/profile, no token)" "$edge"
+    check "401 403" "$(answer -X DELETE "$BASE/v1/worlds/00000000000000000000000000")" \
+        "a DELETE reaches the gateway (DELETE /v1/worlds/<id>, no token)" "$edge"
     # W2's CORS: the studio's PATCH of a profile, with the headers it sends, allowed for its origin.
     allowed=$(curl -s -o /dev/null -D - --max-time 15 -X OPTIONS "$BASE/v1/me/profile" -H "Origin: $ORIGIN" \
         -H 'Access-Control-Request-Method: PATCH' \
@@ -195,6 +214,8 @@ echo "    infisical run --env=dev -- docker compose -f compose.dev.yaml -f compo
 echo "    infisical run --env=dev -- docker compose -f compose.dev.yaml -f compose.platform.yaml -f compose.tunnel.yaml up -d"
 echo "  then, on the host, the gate (W2's exit): docker ps (each container up, healthy); docker stats --no-stream; free -m"
 echo "  then, on the laptop, through dev's tunnel (ssh -L 8400:127.0.0.1:8500 \"\$WEXY_SSH\"): bash deploy.sh smoke"
+echo "  and through Cloudflare: bash deploy.sh smoke https://api-dev.wexy.ai (the zone's method rule must allow PATCH and"
+echo "  DELETE since W2: Security > WAF > custom rules, the deploy design's zone rules)"
 echo "  then the studio's half (wexy frontend): npm run build:dev; firebase deploy --only hosting:dev --project wexy-bf8f8"
 echo "  prod, pinned, once $NEW has run on dev (the platform stays dev's until W2 has run there):"
 echo "    WEXY_IMAGE_TAG=$NEW infisical run --env=prod -- docker compose -f compose.prod.yaml -f compose.tunnel.yaml up -d"

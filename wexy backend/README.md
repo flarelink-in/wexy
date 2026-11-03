@@ -59,7 +59,9 @@ and `latest`, and pushes the version, then `latest`. `bash deploy.sh forge-gatew
 `WEXY_VERSION` sets the version, `WEXY_REGISTRY` the registry, and `WEXY_DRY_RUN=1` builds without pushing.
 After the host's `up -d`, `bash deploy.sh smoke` asks the running stack, through its SSH tunnel, what any visitor
 can: that the gateway reaches forge and the platform service, that the guarded routes refuse a request with no
-token, and that CORS lets the studio's origin `PATCH` a profile. It sends no token and spends nothing.
+token, that a `PATCH` and a `DELETE` reach the gateway, and that CORS lets the studio's origin `PATCH` a profile. It
+sends no token and spends nothing. `bash deploy.sh smoke https://api-dev.wexy.ai` asks the same through Cloudflare,
+whose rules the tunnel never meets; only the gateway's own JSON passes, since Cloudflare's block page is a 403 too.
 
 On the host, `compose.dev.yaml` (dev, on `latest`) and `compose.prod.yaml` (prod, pinned to a version) each
 run Redis, the gateway and the service; `compose.platform.yaml` adds MariaDB and the platform service, and
