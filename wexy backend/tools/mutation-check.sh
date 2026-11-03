@@ -682,6 +682,10 @@ mutate "W3 one key, two saves" "$V" platform-service WorldRoutesTest \
     's/\n\s*UNIQUE KEY operation_key \(owner_id, route, idempotency_key\),//'
 mutate "W3 a running operation's status read as 0" "$P/world/JdbcWorldStore.java" platform-service WorldRoutesTest \
     's/Integer status = row\.wasNull\(\) \? null : raw;/Integer status = raw;/'
+mutate "W3 a public assets bucket taken for the private one" "$P/storage/StorageConfiguration.java" platform-service StorageConfigurationTest \
+    's/if \(PUBLIC_BUCKETS\.contains\(properties\.bucket\(\)\.trim\(\)\)\) \{/if (false) {/'
+mutate "W3 requests signed for a region the endpoint does not name" "$P/storage/StorageProperties.java" platform-service StorageConfigurationTest \
+    's/return m\.matches\(\) \? m\.group\(1\) : region;/return region;/'
 
 echo "$ran mutation(s)${DRY:+, a dry run}"
 exit $status

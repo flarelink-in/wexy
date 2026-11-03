@@ -46,18 +46,20 @@ wexy:
     hmac-version: 1
     key-required: false
     policy-version: 1
-  # W3: the private bucket for saved worlds (StorageProperties), under the names the user put in Infisical
-  # (2026-11-03). Without any of the five the world routes answer 503 and accounts keep working.
+  # W3: the private bucket for saved worlds (StorageProperties). Its name and key are its own (B2_PRIVATE_*): the
+  # B2_BUCKET_NAME, B2_ACCESS_KEY and B2_SECRET_KEY in Infisical dev are the public assets bucket's (wexy-assets-dev,
+  # found 2026-11-03), which W4's published copies will use. B2_ENDPOINT is shared; the region is the endpoint's. Without
+  # any value the world routes answer 503 and accounts keep working.
   storage:
     threads: 4
     queued-calls: 32
     b2:
       endpoint: ${B2_ENDPOINT:}
       region: ${B2_REGION:}
-      # Taken to be the private bucket's name (to confirm): never the public assets bucket.
-      bucket: ${B2_BUCKET_KEY:}
-      access-key: ${B2_ACCESS_KEY:}
-      secret-key: ${B2_SECRET_KEY:}
+      # The private bucket's name: never a public assets bucket, which StorageConfiguration refuses.
+      bucket: ${B2_PRIVATE_BUCKET_NAME:}
+      access-key: ${B2_PRIVATE_ACCESS_KEY:}
+      secret-key: ${B2_PRIVATE_SECRET_KEY:}
       attempt-timeout: 5s
       call-timeout: 15s
   # W3's bounds (the creations platform design §11; WorldProperties): proposals for qualification.

@@ -52,7 +52,7 @@ public final class B2ObjectStore implements ObjectStore, AutoCloseable {
         this.bucket = p.bucket();
         this.s3 = S3Client.builder()
                 .endpointOverride(URI.create(endpoint))
-                .region(Region.of(p.region()))
+                .region(Region.of(p.signingRegion()))
                 .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(p.accessKey(), p.secretKey())))
                 .forcePathStyle(true)
                 .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)

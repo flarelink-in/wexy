@@ -8,6 +8,8 @@ import org.springframework.context.annotation.Configuration;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
+import java.util.Set;
+
 /**
  * The object store and where its blocking calls run (W3.1). With the five B2 values present, the private bucket; without
  * any of them, a store that answers every call as unavailable, so the world routes say 503 and accounts keep working
@@ -19,13 +21,27 @@ public class StorageConfiguration {
 
     private static final Logger log = LoggerFactory.getLogger(StorageConfiguration.class);
 
+    /**
+     * The public assets buckets, which the CDN Worker serves whole to anyone (the design's §8): a saved world must never
+     * be written there, so a setting that names one is refused as if no bucket were set.
+     */
+    static final Set<String> PUBLIC_BUCKETS = Set.of("wexy-assets-dev", "wexy-assets-prod");
+
     @Bean
     public ObjectStore objectStore(StorageProperties properties) {
         if (!properties.complete()) {
             log.warn("storage.unconfigured missing={}: saving worlds answers 503 until they are set", properties.missing());
             return new UnconfiguredObjectStore();
         }
-        log.info("storage.b2 endpoint={} region={} bucket={}", properties.endpoint(), properties.region(), properties.bucket());
+        if (PUBLIC_BUCKETS.contains(properties.bucket().trim())) {
+            log.error("storage.refused bucket={}: a public assets bucket, served to anyone; saving worlds answers 503", properties.bucket());
+            return new UnconfiguredObjectStore();
+        }
+        if (!properties.signingRegion().equals(properties.region())) {
+            log.warn("storage.region setting={} endpoint's={}: requests are signed for the endpoint's", properties.region(),
+                    properties.signingRegion());
+        }
+        log.info("storage.b2 endpoint={} region={} bucket={}", properties.endpoint(), properties.signingRegion(), properties.bucket());
         return new B2ObjectStore(properties);
     }
 
