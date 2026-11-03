@@ -4,10 +4,13 @@
 // by this host and compiled by L3 on this device (loop/replay.ts). "Run on this GPU" is then the studio's own Run for
 // it, the developer's GPU go: the gate, eligibility, the probe and the first frame, as for any candidate (Q89). No
 // model is called and nothing is spent. Everything from the file is set as text, never as HTML.
+//
+// A v3 bundle (Q113 (a), EA6.4) also shows what was judged: each saved review's frames, only where the file's bytes are
+// the ones their hash names, and what the host, the creator and a model said of them; what was left out is said.
 
 import type { CompiledBody, ModuleCompiler } from '../../contract/adapters/bodies';
 import type { DeepReadonly } from '../../contract/engine/frozen';
-import { compileSaved, sealSaved, type Replay } from '../../loop/replay';
+import { compileSaved, sealSaved, type Replay, type SavedReview } from '../../loop/replay';
 import { h } from '../../shared/dom';
 import type { RunControl, RunSummary } from './candidate-view';
 
@@ -36,6 +39,11 @@ export class ReplayPanel {
     private readonly openBtn = h('button', { type: 'button', class: 'btn btn-sm btn-quiet' }, 'Open a saved attempt…');
     private readonly runBtn = h('button', { type: 'button', class: 'btn btn-sm', disabled: true }, 'Run on this GPU');
     private readonly runLine = h('p', { class: 'cand-run' });
+    /** A v3 bundle's reviews (Q113 (a)): what was judged, shown once a replay is sealed. */
+    private readonly judged = h('div', { class: 'rev-saved' });
+    /** The saved frames' object URLs, released with the replay that showed them. */
+    private urls: string[] = [];
+    private shownFor: Replay | null = null;
     private replay: Replay | null = null;
     private compiled: DeepReadonly<CompiledBody>[] | null = null;
     private problem: string | null = null;
@@ -65,7 +73,7 @@ export class ReplayPanel {
             h('header', { class: 'cand-head' }, h('h3', null, 'Replay'), h('span', { class: 'panel-sub' }, 'a saved attempt, sealed and compiled here; no model call')),
             this.source, this.l3, this.reason,
             h('div', { class: 'cand-actions' }, this.openBtn, this.picker, this.runBtn),
-            this.runLine,
+            this.runLine, this.judged,
         );
         this.render();
     }
@@ -172,5 +180,54 @@ export class ReplayPanel {
             : last?.status === 'installed' ? `On the stage: id(C) ${short(replay!.snapshot.id)}${last.numbers ? ` · ${last.numbers}` : ''}`
                 : last ? `${last.status}: ${last.reason ?? ''}${last.numbers ? ` · ${last.numbers}` : ''}`
                     : replay ? blocked ?? 'Ready: Run on this GPU puts it on the stage once every check passes.' : '';
+        this.renderJudged(replay);
+    }
+
+    /** What a v3 bundle's reviews judged: drawn once for each replay, its frames' URLs released with the one before. */
+    private renderJudged(replay: Replay | null): void {
+        if (replay === this.shownFor) return;
+        this.shownFor = replay;
+        for (const url of this.urls) URL.revokeObjectURL(url);
+        this.urls = [];
+        if (!replay || (!replay.reviews.length && !replay.notes.length)) {
+            this.judged.replaceChildren();
+            this.judged.hidden = true;
+            return;
+        }
+        this.judged.hidden = false;
+        this.judged.replaceChildren(
+            h('h4', null, `What was judged: ${replay.reviews.length} review${replay.reviews.length === 1 ? '' : 's'} saved with it`),
+            ...replay.reviews.map(r => this.savedReview(r)),
+            ...(replay.notes.length ? [h('ul', { class: 'rev-gaps' }, ...replay.notes.map(n => h('li', { class: 'rev-gap' }, n)))] : []),
+        );
+    }
+
+    private savedReview(r: SavedReview): HTMLElement {
+        const said = [
+            r.creator ? `the creator: ${r.creator}` : 'the creator: no answer',
+            r.host ? `the host: ${r.host.verdict}` : '',
+            r.model ? `${r.model.model || 'a model'}: ${r.model.verdict}` : '',
+        ].filter(Boolean).join(' · ');
+        const frames = r.frames.map(f => {
+            let url: string | null = null;
+            if (f.bytes) {
+                url = URL.createObjectURL(new Blob([f.bytes as Uint8Array<ArrayBuffer>], { type: 'image/jpeg' }));
+                this.urls.push(url);
+            }
+            return h('figure', { class: 'rev-frame' },
+                url ? h('img', { src: url, alt: f.describes || `The ${f.view} view.`, width: String(f.width || 768), height: String(f.height || 432), loading: 'lazy' })
+                    : h('div', { class: 'rev-missing' }, 'Not in the file, or not the image its hash names'),
+                h('figcaption', null, `${f.view} · sha256 ${f.sha256 ? short(f.sha256) : 'none'}`));
+        });
+        const lines = [
+            ...(r.host?.findings ?? []).map(x => h('li', { class: 'rev-finding' }, h('span', { class: 'cand-finding-code' }, x.code), ` ${x.message}`)),
+            ...(r.model?.issues ?? []).map(x => h('li', { class: 'rev-finding' }, h('span', { class: 'cand-finding-code' }, `${x.kind} · ${x.severity}`), ` ${x.sentence}`)),
+        ];
+        return h('div', { class: 'rev-saved-review' },
+            h('p', { class: 'rev-status' }, `${r.id} · ${r.ofThis ? 'this candidate' : `an earlier candidate, id(C) ${short(r.candidate)}`}`
+                + `${r.tick === null ? '' : ` · tick ${r.tick}`}${r.gpu ? ` · ${r.gpu}` : ''} · ${said}`),
+            h('div', { class: 'rev-frames' }, ...frames),
+            ...(lines.length ? [h('ul', { class: 'rev-findings' }, ...lines)] : []),
+        );
     }
 }

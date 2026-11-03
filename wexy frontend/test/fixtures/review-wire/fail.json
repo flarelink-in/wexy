@@ -1,0 +1,50 @@
+{
+  "reviewId" : "review-1",
+  "generationId" : "gen-1",
+  "model" : "muse-spark-1.3",
+  "source" : "live",
+  "role" : "review",
+  "promptVersion" : "review.v1",
+  "subject" : {
+    "attempt" : "attempt-1",
+    "revision" : 1,
+    "programHash" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "graph" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "candidate" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "module" : null,
+    "interfaceHash" : null,
+    "codeHash" : null
+  },
+  "frames" : [ {
+    "id" : "review-1.v1",
+    "sha256" : "1111111111111111111111111111111111111111111111111111111111111111"
+  }, {
+    "id" : "review-1.v2",
+    "sha256" : "2222222222222222222222222222222222222222222222222222222222222222"
+  } ],
+  "verdict" : {
+    "verdict" : "fail",
+    "issues" : [ {
+      "n" : 1,
+      "kind" : "floating",
+      "severity" : "error",
+      "sentence" : "The castle floats about two units above the hill in the side view; its walls should stand on the hill.",
+      "scope" : "modules",
+      "modules" : [ "castlePlace" ]
+    }, {
+      "n" : 2,
+      "kind" : "scale",
+      "severity" : "warning",
+      "sentence" : "The hill dwarfs the castle in the framed view.",
+      "scope" : "program",
+      "modules" : [ ]
+    } ]
+  },
+  "usage" : {
+    "in" : 3100,
+    "out" : 420,
+    "reasoning" : 300,
+    "cached" : null,
+    "costMicroUsd" : 5660
+  }
+}

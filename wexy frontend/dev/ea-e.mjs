@@ -98,6 +98,14 @@ const gateway = createServer((req, res) => {
             sse(moduleStream(call, answer));
             return;
         }
+        // EA6.4: the studio reads a model's review's terms once a review reaches the session; the backend's recording,
+        // every gate shut, so no review is ever sent.
+        if (req.method === 'GET' && req.url === '/v1/agent/review') {
+            calls.push({ route: 'review-terms' });
+            res.writeHead(200, { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+            res.end(fixture('test/fixtures/review-wire/terms-shut.json'));
+            return;
+        }
         calls.push({ route: `${req.method} ${req.url}`, unexpected: true });
         res.writeHead(404, { ...cors, 'Content-Type': 'application/json' });
         res.end('{"error":{"code":"not_found"}}');

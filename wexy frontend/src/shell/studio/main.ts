@@ -361,6 +361,8 @@ class Studio {
             candidate: api && client ? {
                 modules: createModuleClient(api), revise: createReviser(client), compiler: () => this.deviceCompiler,
                 run: { blocked: () => this.runBlocked(), go: (snapshot, compiled) => this.runCandidate(snapshot, compiled) },
+                // The bundle carries the reviews of the attempt's stage and their frames (Q113 (a), EA6.4).
+                reviews: attempt => this.reviews?.bundled(attempt) ?? null,
             } : undefined,
         });
         this.candidatePanel = panel.candidate;
@@ -378,14 +380,20 @@ class Studio {
         $('#left').insertBefore(replay.el, this.trace.el);
         // The review of the world on the stage (EA6.2; Q109: Developer view only): captured after each install, the host's
         // findings, and the creator's "Looks right" or "Improve it" through the candidate session that holds that world.
-        const [{ ReviewPanel }, { StageReviews }] = await Promise.all([import('./review-view'), import('../../loop/review')]);
+        const [{ ReviewPanel, browserConsent }, { StageReviews }, { createReviewClient }] = await Promise.all([
+            import('./review-view'), import('../../loop/review'), import('../../forge-client/review-client'),
+        ]);
         let view: InstanceType<typeof ReviewPanel> | null = null;
+        // A model's review (EA6.4): its terms read once a review is bound to a live session, its consent kept in this browser.
+        const reviewer = api ? createReviewClient(api) : null;
         const reviews = new StageReviews({
             stage: () => this.stageWorld(),
             capture: (world, stale) => this.captureReview(world, stale),
             session: () => this.candidatePanel?.session ?? null,
             generation: () => this.deviceGeneration,
             busy: () => this.reviewBusy(),
+            reviewer: () => reviewer,
+            consent: browserConsent(),
             // Run waits while the stage is captured (runBlocked): the panels that offer it are shown again as it ends.
             onChange: () => {
                 view?.render();

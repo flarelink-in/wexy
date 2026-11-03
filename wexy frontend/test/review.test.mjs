@@ -12,13 +12,19 @@
 //          nothing to the newer one
 //   EA-VR9 the newest three reviews keep their JPEGs, the older say theirs were dropped, whatever shows them is told; at
 //          most REVIEW_HISTORY reviews, the evictions counted
+//   EA-VR6 (EA6.4) a model's review refuses before any call while a gate is unverified, the terms are unread, this build
+//          holds no disclosure for their policy, or the creator has not consented to that provider, model and policy
+//   EA6.4  "Review with AI": one call carrying the frames, R, S and the findings kept; its verdict E_v by the model; its
+//          issues chosen into "Improve it"; three an attempt; a late answer pinned on nothing newer; refusals said
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { NOTE_CODE, createCandidateSession } from '../src/loop/candidate.ts';
 import { Q_C } from '../src/loop/candidate-ledger.ts';
 import { COPY } from '../src/loop/copy.ts';
-import { KEEP_FRAMES, KEPT_BYTES, REVIEW_HISTORY, StageReviews, sentenceOf } from '../src/loop/review.ts';
+import { CONSENT_KEY, KEEP_FRAMES, KEPT_BYTES, REVIEW_HISTORY, StageReviews, memoryConsent, sentenceOf, storedConsent, termsKey } from '../src/loop/review.ts';
+import { ForgeError } from '../src/forge-client/errors.ts';
+import { candidateBundle } from '../src/loop/candidate.ts';
 
 const node = (id, adapterId, config, inputs = []) => ({ id, adapterId, adapterVersion: 1, config: JSON.stringify(config), inputs });
 const from = (port, nodeId, output) => ({ port, nodeId, output });
@@ -142,15 +148,20 @@ function captured({ size = 40_000, bounds = CASTLE, tick = 120, shade = 0 } = {}
  * that answers `next()` (a StageCapture or a promise of one), a device generation, the panel's redraws and drops.
  */
 let attempts = 0;
-function studio({ reviser = fakeReviser([handedOff(world({ size: 0.5 }))]), modules = fakeModules(), limits = Q_C, capture = () => captured() } = {}) {
+function studio({ reviser = fakeReviser([handedOff(world({ size: 0.5 }))]), modules = fakeModules(), limits = Q_C, capture = () => captured(), reviewer = null,
+    consent = memoryConsent(), revisable = true } = {}) {
     // Attempt ids unique across studios, so one studio's attempt is never mistaken for another's.
-    const s = createCandidateSession({ modules, revise: reviser.revise, limits, attemptId: () => `attempt-${++attempts}`, now: () => 1_000 }, () => {});
-    const st = { world: null, generation: 1, changes: 0, drops: [], captures: [] };
+    const s = createCandidateSession({ modules, revise: revisable ? reviser.revise : undefined, limits, attemptId: () => `attempt-${++attempts}`, now: () => 1_000 }, () => {});
+    /** `busy`: why the stage cannot be captured now (a Run, a film), or null. */
+    const st = { world: null, generation: 1, changes: 0, drops: [], captures: [], busy: null };
     const reviews = new StageReviews({
         stage: () => st.world,
         capture: (w, stale) => { st.captures.push({ world: w, stale }); return capture(w, stale); },
         session: () => s,
         generation: () => st.generation,
+        busy: () => st.busy,
+        reviewer: () => reviewer,
+        consent,
         onChange: () => { st.changes++; },
         onDrop: ids => st.drops.push(...ids),
     });
@@ -253,10 +264,12 @@ test('EA-VR3 "Looks right" records the creator\'s pass and spends nothing; an em
     // A render record is the device's to make, a verdict the creator's or a model's.
     assert.deepEqual(t.s.review({ expected: { attempt: first.attempt, candidate: first.id }, phase: 'render', verdict: 'pass', producedBy: 'creator' }),
         { ok: false, diagnostic: 'a render record is not the creator\'s to make' });
-    // Only the host's findings about the stage are chosen: a verdict's own finding is not one of them.
-    const said = t.s.visual({ verdict: 'fail', producedBy: 'model', findings: [{ code: 'floating', message: 'it floats' }] });
-    assert.deepEqual(await t.s.improve({ expected: { attempt: first.attempt, candidate: first.id }, words: '', findings: [said.findings[0].id] }),
-        { ok: false, diagnostic: `${said.findings[0].id} is not one of the host's findings about the stage (visual)` });
+    // Only the host's findings and (EA6.4) a model's issues about the stage are chosen: the creator's own verdict's
+    // finding is not one of them; it is what "Improve it" records.
+    const said = t.s.review({ expected: { attempt: first.attempt, candidate: first.id }, phase: 'visual', verdict: 'fail', producedBy: 'creator',
+        findings: [{ code: 'creator', message: 'it floats' }] });
+    assert.deepEqual(await t.s.improve({ expected: { attempt: first.attempt, candidate: first.id }, words: '', findings: [said.evidence.findings[0].id] }),
+        { ok: false, diagnostic: `${said.evidence.findings[0].id} is not one of the host's or a model's findings about the stage (visual)` });
     assert.equal(t.reviser.calls.length, 0);
     assert.deepEqual(t.s.state.budget, spent, 'nothing spent');
 
@@ -552,4 +565,740 @@ test('EA-VR4g a round whose revised program the browser refuses, with no revisio
     assert.equal(t.modules.calls.length, 3, 'no repair: the notes went with the program the browser refused');
     assert.equal(t.s.snapshot?.id, first.id, 'the stage\'s candidate, with its own bodies');
     assert.equal(t.s.state.evidence.filter(e => e.findings.some(f => f.code === NOTE_CODE)).length, 0);
+});
+
+/** The backend's terms with every gate verified (its ReviewRoutesTest's open terms), or with `gate` the first one shut. */
+function terms(gate = null, over = {}) {
+    const gates = { images: 'verified', transport: 'verified', privacy: 'verified', metering: 'verified' };
+    if (gate) for (const g of ['images', 'transport', 'privacy', 'metering'].slice(['images', 'transport', 'privacy', 'metering'].indexOf(gate))) gates[g] = 'unverified';
+    return {
+        available: gate === null, gate, gates, provider: 'meta', model: 'muse-spark-1.3', mode: 'standard', policyVersion: 'meta-standard.2026-11-03',
+        limits: { frames: 2, width: 768, height: 432, jpegBytes: 300_000, pairBytes: 600_000, requestBytes: 1_048_576, findings: 32, modules: 12 }, ...over,
+    };
+}
+const FLOAT = { kind: 'floating', severity: 'error', sentence: 'The castle floats above the hill in the side view.', scope: 'modules', modules: ['motion'] };
+const SCALE = { kind: 'scale', severity: 'warning', sentence: 'The hill dwarfs the castle.', scope: 'program', modules: [] };
+/** What the review client returns for `body`: the echo of what was sent, a verdict, a usage. */
+const answerFor = (body, verdict = { verdict: 'fail', issues: [{ n: 1, ...FLOAT }, { n: 2, ...SCALE }] }) => ({
+    reviewId: body.reviewId, generationId: '01JBZ6Q3G8XW0Y4N6R2T5V7K9M', model: 'muse-spark-1.3', source: 'live', role: 'review', promptVersion: 'review.v1',
+    subject: { ...body.subject }, frames: body.frames.map(f => ({ id: f.id, sha256: f.sha256 })), verdict, usage: { in: 3100, out: 420, reasoning: 300, cached: null, costMicroUsd: 5660 },
+});
+/** A model's review over a fake transport: its terms, and each call's answer from `answer` (`{ hold: true }` open until released). */
+function fakeReviewer({ termsAre = terms(), answer = body => answerFor(body), hold = false } = {}) {
+    const calls = [];
+    const held = [];
+    /** Each call's signal: what the transport would watch while it waits for its identity and App Check token. */
+    const signals = [];
+    const r = {
+        calls, held, signals, termsAre, termsRead: 0,
+        async terms() {
+            r.termsRead++;
+            if (r.termsAre instanceof Error) throw r.termsAre;
+            return structuredClone(r.termsAre);
+        },
+        async review(body, limits, signal) {
+            calls.push(structuredClone(body));
+            signals.push(signal);
+            if (hold) await new Promise((resolve, reject) => { held.push(resolve); signal.addEventListener('abort', () => reject(signal.reason), { once: true }); });
+            const a = answer(body);
+            if (a instanceof Error) throw a;
+            return a;
+        },
+    };
+    return r;
+}
+/** A studio with a reviewer, its first candidate on the stage, reviewed and bound; its terms read. */
+async function reviewed(options = {}) {
+    const t = studio(options);
+    const first = await t.s.start(handOff());
+    t.install(first.id);
+    await waitFor(() => t.reviews.latest?.status === 'ready', 'the review');
+    await t.reviews.loadTerms();
+    return { ...t, first, r: t.reviews.latest };
+}
+
+test('EA-VR6 a model\'s review is refused before any call while a gate is unverified, the terms are unread, the policy has no disclosure here, or the creator has not consented', { timeout: 20_000 }, async () => {
+    const reviewer = fakeReviewer({ termsAre: terms('images') });
+    const t = await reviewed({ reviewer });
+    const spent = structuredClone(t.s.state.budget);
+    const refused = async (label, pattern, sentence) => {
+        const out = await t.reviews.aiReview(t.r.id, [0, 1]);
+        assert.equal(out.ok, false, label);
+        assert.match(out.diagnostic, pattern, label);
+        assert.equal(out.sentence, sentence, label);
+        assert.equal(reviewer.calls.length, 0, `${label}: no call`);
+        assert.deepEqual(t.s.state.budget, spent, `${label}: nothing spent`);
+        assert.equal(t.r.status, 'ready', `${label}: the review as it was`);
+    };
+    // Each gate, in order: the first unverified is the one named.
+    for (const gate of ['images', 'transport', 'privacy', 'metering']) {
+        reviewer.termsAre = terms(gate);
+        await t.reviews.loadTerms();
+        await refused(gate, new RegExp(`^EA_VISION_UNAVAILABLE ${gate}: `), COPY.review.aiUnavailable);
+        assert.equal(t.reviews.giveConsent().ok, false, `${gate}: no consent to a shut review`);
+    }
+    // The terms unread: a backend that did not answer is not a verified one.
+    reviewer.termsAre = new ForgeError('unavailable', 503, 'The backend did not answer.');
+    await t.reviews.loadTerms();
+    await refused('terms unread', /^EA_VISION_UNAVAILABLE terms: unavailable: The backend did not answer\.$/, COPY.review.aiUnavailable);
+    // A policy this build has no words for: nothing to consent to, so nothing is sent.
+    reviewer.termsAre = terms(null, { policyVersion: 'meta-standard.2027-01-01' });
+    await t.reviews.loadTerms();
+    await refused('an unknown policy', /^EA_VISION_UNAVAILABLE privacy: this build holds no disclosure for policy meta-standard\.2027-01-01$/, COPY.review.aiUnavailable);
+    // Every gate verified, no consent yet: asked first.
+    reviewer.termsAre = terms();
+    await t.reviews.loadTerms();
+    await refused('no consent', /^EA_REVIEW_CONSENT the creator has not allowed review by meta's muse-spark-1\.3 under policy meta-standard\.2026-11-03$/, COPY.review.aiConsent);
+    // Consent binds to the provider, the model and the policy: a change asks again; a withdrawal stops it.
+    assert.deepEqual(t.reviews.giveConsent(), { ok: true });
+    assert.deepEqual(t.reviews.consent, { provider: 'meta', model: 'muse-spark-1.3', policyVersion: 'meta-standard.2026-11-03' });
+    assert.equal(t.reviews.aiReviewable(t.r), null);
+    reviewer.termsAre = terms(null, { model: 'muse-spark-1.4' });
+    await t.reviews.loadTerms();
+    assert.equal(t.reviews.consent, null, 'another model: asked again');
+    await refused('another model', /^EA_REVIEW_CONSENT /, COPY.review.aiConsent);
+    // Whatever this browser holds can still be withdrawn while the terms differ (the independent review of EA6.4).
+    assert.deepEqual(t.reviews.heldConsent, { provider: 'meta', model: 'muse-spark-1.3', policyVersion: 'meta-standard.2026-11-03' }, 'held, to the old terms');
+    // Contributor mode, or another provider, under words written for Meta's Standard mode: what they say would be untrue
+    // there, so the review stays shut and there is nothing to consent to (the independent review of EA6.4, both halves).
+    reviewer.termsAre = terms(null, { model: 'muse-spark-1.3-contributor', mode: 'contributor' });
+    await t.reviews.loadTerms();
+    await refused('contributor mode', /^EA_VISION_UNAVAILABLE privacy: the disclosure for policy meta-standard\.2026-11-03 is for meta's standard mode, not meta's contributor mode$/,
+        COPY.review.aiUnavailable);
+    assert.equal(t.reviews.giveConsent().ok, false, 'contributor mode: nothing to consent to');
+    reviewer.termsAre = terms(null, { provider: 'another' });
+    await t.reviews.loadTerms();
+    await refused('another provider', /^EA_VISION_UNAVAILABLE privacy: .*, not another's standard mode$/, COPY.review.aiUnavailable);
+    reviewer.termsAre = terms();
+    await t.reviews.loadTerms();
+    assert.notEqual(t.reviews.consent, null, 'the same terms again: the consent holds');
+    // "Allow" takes only the terms whose disclosure was on screen: terms that moved since are read again first.
+    t.reviews.withdrawConsent();
+    assert.equal(t.reviews.heldConsent, null);
+    const shown = termsKey(t.reviews.terms);
+    reviewer.termsAre = terms(null, { model: 'muse-spark-1.4' });
+    await t.reviews.loadTerms();
+    const moved = t.reviews.giveConsent(shown);
+    assert.deepEqual([moved.ok, moved.diagnostic, moved.sentence], [false, 'EA_REVIEW_CONSENT the terms moved after they were shown: read them again', COPY.review.aiConsent]);
+    assert.equal(t.reviews.heldConsent, null, 'nothing taken');
+    assert.deepEqual(t.reviews.giveConsent(termsKey(t.reviews.terms)), { ok: true });
+    assert.equal(t.reviews.heldConsent.model, 'muse-spark-1.4', 'the terms read');
+    reviewer.termsAre = terms();
+    await t.reviews.loadTerms();
+    t.reviews.giveConsent();
+    // A new policy version this build has words for: the consent to the old one does not carry over.
+    COPY.disclosures['meta-standard.2099-01-01'] = COPY.disclosures['meta-standard.2026-11-03'];
+    try {
+        reviewer.termsAre = terms(null, { policyVersion: 'meta-standard.2099-01-01' });
+        await t.reviews.loadTerms();
+        assert.equal(t.reviews.consent, null, 'another policy: asked again');
+        await refused('another policy', /^EA_REVIEW_CONSENT .* under policy meta-standard\.2099-01-01$/, COPY.review.aiConsent);
+    } finally {
+        delete COPY.disclosures['meta-standard.2099-01-01'];
+    }
+    reviewer.termsAre = terms();
+    await t.reviews.loadTerms();
+    t.reviews.withdrawConsent();
+    await refused('withdrawn', /^EA_REVIEW_CONSENT /, COPY.review.aiConsent);
+    // No backend at all.
+    const none = await reviewed();
+    assert.match(none.reviews.aiReviewable(none.r), /^EA_VISION_UNAVAILABLE backend: /);
+});
+
+test('EA6.4 "Review with AI": one call with the frames, R, S and the findings kept; its verdict E_v by the model; its issues chosen into "Improve it"', { timeout: 20_000 }, async () => {
+    const reviewer = fakeReviewer();
+    const t = await reviewed({ reviewer });
+    t.reviews.giveConsent();
+    const before = structuredClone(t.s.state.budget);
+    // The session holds a review to the host's findings about this very candidate: the creator's own words, or an id it
+    // never made, are refused before any call.
+    const expected = { attempt: t.first.attempt, candidate: t.first.id };
+    const theirs = t.s.review({ expected, phase: 'visual', verdict: 'fail', producedBy: 'creator', findings: [{ code: 'creator', message: 'it floats' }] });
+    for (const id of [theirs.evidence.findings[0].id, 'ev-404.f1']) {
+        const direct = await t.s.modelReview({ expected, reviewId: 'review-x', findings: [id], run: async () => { throw new Error('never called'); } });
+        assert.equal(direct.ok, false, id);
+        assert.match(direct.diagnostic, /^EA_STALE_EVIDENCE expected a finding of the host's about id\(C\) /, id);
+        assert.equal(direct.dispatched, false, id);
+    }
+    assert.deepEqual(t.s.state.budget, before, 'nothing reserved');
+    // The creator keeps EA_SCALE checked, drops EA_FRAME.
+    assert.deepEqual(await t.reviews.aiReview(t.r.id, [0]), { ok: true });
+    assert.equal(reviewer.calls.length, 1, 'one call');
+    const body = reviewer.calls[0];
+    const st = t.s.state;
+    assert.deepEqual([body.reviewId, body.turnId, body.request, body.design], [t.r.id, 'turn-1', R, DESIGN], 'R and S verbatim, the candidate\'s turn');
+    assert.deepEqual(body.subject, { attempt: st.attempt, revision: st.revision, programHash: st.programHash, graph: st.graph, candidate: t.first.id, module: null, interfaceHash: null, codeHash: null });
+    assert.deepEqual(body.modules, t.s.snapshot.bodies.map(b => b.module));
+    assert.deepEqual(body.frames.map(f => [f.id, f.view, f.tick, f.width, f.height, f.sha256]), t.r.frames.map(f => [f.id, f.view, f.tick, 768, 432, f.sha256]));
+    assert.equal(Buffer.from(body.frames[0].jpeg, 'base64').equals(Buffer.from(t.reviews.bytesOf(t.r.frames[0].id))), true, 'the kept JPEG, as base64');
+    assert.deepEqual(body.hostFindings.map(f => f.code), ['EA_SCALE'], 'only the finding kept checked');
+    assert.deepEqual(body.consent, { provider: 'meta', model: 'muse-spark-1.3', policyVersion: 'meta-standard.2026-11-03' });
+
+    // Counted: one call of the 34, one review of the three, settled known.
+    const after = t.s.state.budget;
+    assert.deepEqual([after.reviews, after.calls.settled - before.calls.settled, after.calls.unknown], [1, 1, 0]);
+    const call = t.s.state.reviews.at(-1);
+    assert.deepEqual([call.reviewId, call.candidate, call.status, call.charge, call.costMicroUsd, call.promptVersion], [t.r.id, t.first.id, 'ok', 'known', 5660, 'review.v1']);
+    // The verdict: E_v by the model about this very candidate, on the host's look it carried; never a technical verdict.
+    const ev = t.s.state.evidence.find(e => e.producedBy === 'model' && e.phase === 'visual');
+    assert.deepEqual([ev.verdict, ev.subject.candidate, ev.refs, ev.findings.map(f => [f.code, f.severity])],
+        ['fail', t.first.id, [t.r.renderEvidenceId], [['floating', 'error'], ['scale', 'warning']]]);
+    assert.equal(ev.findings[0].message, 'The castle floats above the hill in the side view. (suggested: modules, motion)');
+    assert.equal(t.s.state.phase, 'static-verified', 'P4: a visual verdict moves no technical one');
+    assert.deepEqual([t.r.model.verdict, t.r.model.issues.length, t.r.model.sent, t.r.modelFindingIds], ['fail', 2, ['EA_SCALE'], ev.findings.map(f => f.id)]);
+    assert.ok(t.r.visualEvidenceIds.includes(ev.id));
+    assert.equal(t.r.status, 'ready', 'the review answerable again');
+    assert.match(t.reviews.budget(), /AI reviews 1 of 3$/);
+    // The bundle lists the call, with its template.
+    const bundle = candidateBundle(t.s.state);
+    assert.deepEqual(bundle.calls.reviews.map(r => [r.reviewId, r.status, r.charge]), [[t.r.id, 'ok', 'known']]);
+    assert.ok(bundle.versions.templates.includes('review.v1'));
+
+    // "Improve it" with the model's floating issue alone: one revision citing exactly it.
+    assert.deepEqual(await t.reviews.improve(t.r.id, '', [], [0]), { ok: true });
+    const rq = t.reviser.calls[0];
+    assert.deepEqual(rq.findings.filter(f => f.code !== 'EA_REPAIR_BUDGET').map(f => [f.id, f.code, f.message]), [[ev.findings[0].id, 'floating', ev.findings[0].message]]);
+    const creator = t.s.state.evidence.filter(e => e.producedBy === 'creator').at(-1);
+    assert.deepEqual(creator.refs, [ev.id], 'the creator\'s verdict stands on the model\'s record it chose from');
+    assert.equal(t.r.status, 'awaiting-run');
+});
+
+test('EA6.4 a review in flight blocks every other paid action; three an attempt; a late answer is pinned on nothing newer and stays counted', { timeout: 20_000 }, async () => {
+    const reviewer = fakeReviewer({ hold: true });
+    const t = await reviewed({ reviewer });
+    t.reviews.giveConsent();
+    const pending = t.reviews.aiReview(t.r.id, [0, 1]);
+    await waitFor(() => reviewer.held.length === 1, 'the call');
+    assert.equal(t.r.status, 'reviewing');
+    // A double press, "Improve it" and the session's own correction all wait for it; nothing more is spent.
+    assert.deepEqual(await t.reviews.aiReview(t.r.id, []), { ok: false, diagnostic: 'EA_REVIEW_BUSY a model\'s review is under way', sentence: COPY.review.aiBusy });
+    assert.match((await t.reviews.improve(t.r.id, 'smaller hill', [])).diagnostic, /^EA_REVIEW_BUSY a model's review is under way$/);
+    assert.match((await t.s.improve({ expected: { attempt: t.first.attempt, candidate: t.first.id }, words: 'x', findings: [] })).diagnostic, /^EA_REVIEW_BUSY /);
+    assert.equal(reviewer.calls.length, 1);
+    assert.equal(t.reviser.calls.length, 0);
+    assert.equal(t.s.state.budget.calls.reserved, 1, 'the call held while it runs');
+    // The stage captured again meanwhile: a newer review of the same candidate. The answer for the superseded one is
+    // discarded (§9, the outside review of EA6.4): no verdict recorded, none attached; its call still counted, known.
+    const settled = t.s.state.budget.calls.settled;
+    await t.reviews.capture();
+    const newer = t.reviews.latest;
+    assert.notEqual(newer, t.r);
+    held(reviewer);
+    const discarded = await pending;
+    assert.equal(discarded.ok, false);
+    assert.equal(discarded.diagnostic, `EA_STALE_EVIDENCE a newer review (${newer.id}) supersedes ${t.r.id}: its answer is discarded`);
+    assert.equal(discarded.sentence, COPY.review.stale);
+    assert.deepEqual([t.r.model, t.r.modelFindingIds, newer.model, newer.modelFindingIds], [null, [], null, []], 'attached to neither review');
+    assert.equal(t.s.state.evidence.some(e => e.producedBy === 'model'), false, 'no model verdict recorded');
+    const call = t.s.state.reviews.at(-1);
+    assert.deepEqual([call.reviewId, call.status, call.charge, t.s.state.budget.reviews, t.s.state.budget.calls.settled], [t.r.id, 'stale', 'known', 1, settled + 1]);
+    assert.equal(t.r.status, 'superseded');
+    // The newer one is the one a model may review now: the second and third reviews run, a fourth refuses before its call.
+    for (let i = 0; i < 2; i++) {
+        const p = t.reviews.aiReview(t.reviews.latest.id, []);
+        await waitFor(() => reviewer.held.length === 1, `review ${i + 2}`);
+        held(reviewer);
+        assert.deepEqual(await p, { ok: true });
+    }
+    const fourth = await t.reviews.aiReview(t.reviews.latest.id, []);
+    assert.deepEqual(fourth, { ok: false, diagnostic: 'EA_TURN_BUDGET reviews: 3 of 3', sentence: COPY.review.budget });
+    assert.equal(reviewer.calls.length, 3);
+    assert.deepEqual([t.s.state.budget.reviews, t.s.state.budget.calls.reserved], [3, 0]);
+
+    // A new attempt while a review runs: the call is aborted, counted unknown in its attempt, and nothing recorded.
+    const u = await reviewed({ reviewer: fakeReviewer({ hold: true }) });
+    u.reviews.giveConsent();
+    const late = u.reviews.aiReview(u.r.id, []);
+    await waitFor(() => u.s.state.reviews.length === 1, 'the call');
+    const old = u.s.state;
+    void u.s.start(handOff());
+    const out = await late;
+    assert.equal(out.ok, false);
+    assert.match(out.diagnostic, /^EA_STALE_EVIDENCE the attempt ended while the review ran: /);
+    assert.equal(out.sentence, COPY.review.stale);
+    assert.deepEqual([old.reviews[0].status, old.budget.reviews], ['running', 1], 'the call went out in the attempt that ended');
+    const closed = old.reviews[0].reviewId;
+    assert.equal(closed, u.r.id);
+    assert.equal(u.r.model, null, 'no verdict pinned on anything');
+
+    // An answer that ignores its cancel and lands after its attempt ended: counted, its verdict pinned on nothing.
+    const deafCalls = [];
+    let land = () => {};
+    const deaf = {
+        terms: async () => terms(),
+        async review(body) {
+            deafCalls.push(body);
+            await new Promise(resolve => { land = resolve; });
+            return answerFor(body);
+        },
+    };
+    const v = await reviewed({ reviewer: deaf });
+    v.reviews.giveConsent();
+    const lateAnswer = v.reviews.aiReview(v.r.id, []);
+    await waitFor(() => deafCalls.length === 1, 'the deaf call');
+    const ended = v.s.state;
+    void v.s.start(handOff());
+    land();
+    const landed = await lateAnswer;
+    assert.equal(landed.ok, false);
+    assert.match(landed.diagnostic, /^EA_STALE_EVIDENCE the attempt ended while the review ran$/);
+    assert.equal(v.r.model, null, 'the late verdict is pinned on nothing');
+    assert.equal(ended.reviews[0].reviewId, v.r.id);
+    assert.equal(v.s.state.evidence.some(e => e.producedBy === 'model'), false, 'the new attempt holds no model verdict');
+});
+
+/** Releases the reviewer's held call. */
+function held(reviewer) {
+    reviewer.held.shift()();
+}
+
+test('EA6.4 a refusal, an invalid answer or frames past the limits are said, counted when a call went out, and record nothing', { timeout: 20_000 }, async () => {
+    // The backend refused (W1: the prompt's reviews spent): counted unknown, said as the AI's failure, nothing recorded.
+    const refusing = fakeReviewer({ answer: () => new ForgeError('rate', 429, 'This prompt has made all of its reviews.') });
+    const a = await reviewed({ reviewer: refusing });
+    a.reviews.giveConsent();
+    const out = await a.reviews.aiReview(a.r.id, []);
+    assert.deepEqual(out, { ok: false, diagnostic: 'EA_REVIEW_FAILED rate: This prompt has made all of its reviews.', sentence: COPY.review.aiFailed });
+    assert.deepEqual([a.s.state.budget.reviews, a.s.state.budget.calls.unknown, a.s.state.reviews[0].status], [1, 1, 'refused']);
+    assert.equal(a.s.state.evidence.some(e => e.producedBy === 'model'), false);
+    assert.equal(a.r.status, 'ready');
+    // A gate the server says is shut after all: said as unavailable.
+    const shut = fakeReviewer({ answer: () => new ForgeError('unavailable', 503, 'EA_VISION_UNAVAILABLE metering: no bound') });
+    const b = await reviewed({ reviewer: shut });
+    b.reviews.giveConsent();
+    assert.equal((await b.reviews.aiReview(b.r.id, [])).sentence, COPY.review.aiUnavailable);
+    // An answer the client could not hold to what was sent: never a pass.
+    const invalid = fakeReviewer({ answer: () => new Error('EA_REVIEW_INVALID verdict: a pass with 2 issues; review review-1') });
+    const c = await reviewed({ reviewer: invalid });
+    c.reviews.giveConsent();
+    const bad = await c.reviews.aiReview(c.r.id, []);
+    assert.deepEqual([bad.ok, bad.sentence, c.s.state.reviews[0].status], [false, COPY.review.aiInvalid, 'invalid']);
+    assert.equal(c.r.model, null);
+    // Frames past the terms' limits: refused here, before any call or reservation.
+    const big = fakeReviewer();
+    const d = await reviewed({ reviewer: big, capture: () => captured({ size: 300_001 }) });
+    d.reviews.giveConsent();
+    const size = await d.reviews.aiReview(d.r.id, []);
+    assert.deepEqual(size, { ok: false, diagnostic: 'EA_REVIEW_SIZE frames[0].jpeg: 300001 exceeds 300000 bytes', sentence: COPY.review.tooLarge });
+    assert.deepEqual([big.calls.length, d.s.state.budget.reviews], [0, 0]);
+    // The newest review's JPEGs dropped by the session's own bound (frames past it): nothing to send, capture again.
+    const huge = await reviewed({ reviewer: fakeReviewer(), capture: () => captured({ size: 1_000_000 }) });
+    huge.reviews.giveConsent();
+    assert.equal(huge.r.bytesDropped, true);
+    assert.deepEqual(await huge.reviews.aiReview(huge.r.id, []), {
+        ok: false, diagnostic: 'EA_REVIEW_DROPPED the frames\' JPEGs are no longer kept: capture the world again', sentence: COPY.review.aiDropped,
+    });
+    // A review whose JPEGs the bound dropped cannot be sent: capture again.
+    const e = await reviewed({ reviewer: fakeReviewer() });
+    e.reviews.giveConsent();
+    const first = e.r;
+    for (let i = 0; i < KEEP_FRAMES; i++) await e.reviews.capture();
+    assert.equal(first.bytesDropped, true);
+    assert.match(e.reviews.aiReviewable(first), /^EA_STALE_EVIDENCE a newer review/);
+    assert.equal(sentenceOf('EA_REVIEW_DROPPED the frames\' JPEGs are no longer kept: capture the world again'), COPY.review.aiDropped);
+});
+
+test('EA-VR9b the bundle holds this attempt\'s reviews newest first, at most 600,000 JPEG bytes, each the bytes its hash names; every frame left out said', { timeout: 20_000 }, async () => {
+    const t = studio({ capture: () => captured({ size: 250_000 }) });
+    const first = await t.s.start(handOff());
+    t.install(first.id);
+    await waitFor(() => t.reviews.latest?.status === 'ready', 'the first review');
+    for (let i = 0; i < 3; i++) await t.reviews.capture();
+    // Four reviews of 500,000 bytes each: the session keeps the newest three's JPEGs (1,500,000 bytes), the bundle 600,000.
+    const b = t.reviews.bundled(first.attempt);
+    assert.deepEqual(b.records.map(r => r.id), ['review-4', 'review-3', 'review-2', 'review-1'], 'newest first');
+    assert.deepEqual(b.records.map(r => r.frames.map(f => f.jpeg === null ? null : Buffer.from(f.jpeg, 'base64').length)),
+        [[250_000, 250_000], [null, null], [null, null], [null, null]]);
+    assert.equal(b.jpegBytes, 500_000);
+    assert.ok(b.jpegBytes <= b.bound && b.bound === 600_000);
+    for (const f of b.records[0].frames) assert.equal(sha(Buffer.from(f.jpeg, 'base64')), f.sha256, 'the bytes its hash names');
+    assert.deepEqual(b.omitted.map(o => [o.review, o.why.startsWith('the bundle holds at most 600000') ? 'bound' : o.why.startsWith('its bytes were dropped') ? 'dropped' : o.why]),
+        [['review-3', 'bound'], ['review-3', 'bound'], ['review-2', 'bound'], ['review-2', 'bound'], ['review-1', 'dropped'], ['review-1', 'dropped']]);
+    // What was judged stays whole beside its bytes: the host's look, its evidence, its frames' identities.
+    assert.deepEqual(b.records[3].host.findings.map(f => f.code), ['EA_SCALE', 'EA_FRAME']);
+    assert.equal(b.records[3].frames[0].sha256, t.reviews.records[0].frames[0].sha256);
+    // Another attempt's reviews are not this one's.
+    assert.deepEqual(t.reviews.bundled('attempt-elsewhere'), { records: [], jpegBytes: 0, bound: 600_000, omitted: [] });
+    // In the bundle as Developer view downloads it.
+    const bundle = candidateBundle(t.s.state, b);
+    assert.equal(bundle.format, 'wexy-candidate-bundle.v3');
+    assert.equal(bundle.reviews.records.length, 4);
+});
+
+test('EA-VR6b the consent is the shared storage\'s: withdrawn in another tab, cleared or unreadable, it is none; only a storage that will not keep it leaves it to the page', { timeout: 20_000 }, async () => {
+    // Two tabs over one storage (the outside review of EA6.4, finding 1: a tab fell back on its own memory of a consent).
+    const shared = new Map();
+    const storage = { getItem: k => (shared.has(k) ? shared.get(k) : null), setItem: (k, v) => { shared.set(k, String(v)); }, removeItem: k => { shared.delete(k); } };
+    const consent = { provider: 'meta', model: 'muse-spark-1.3', policyVersion: 'meta-standard.2026-11-03' };
+    const a = storedConsent(() => storage);
+    const b = storedConsent(() => storage);
+    a.write(consent);
+    assert.deepEqual(b.read(), consent, 'given in one tab, held in the other');
+    b.write(null);
+    assert.equal(a.read(), null, 'withdrawn in the other tab: none in this one');
+    a.write(consent);
+    shared.clear();
+    assert.equal(a.read(), null, 'the site\'s data cleared: none');
+    shared.set(CONSENT_KEY, '{not json');
+    assert.equal(a.read(), null, 'an entry that does not parse: none');
+    shared.set(CONSENT_KEY, JSON.stringify({ provider: 'meta' }));
+    assert.equal(a.read(), null, 'an entry that is not a consent: none');
+    // A storage that refuses everything: the page keeps its own word, its withdrawal included.
+    const refusing = { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); }, removeItem: () => { throw new Error('blocked'); } };
+    const c = storedConsent(() => refusing);
+    assert.equal(c.read(), null);
+    c.write(consent);
+    assert.deepEqual(c.read(), consent, 'kept for this page');
+    c.write(null);
+    assert.equal(c.read(), null);
+    // A storage that reads but will not write, over an entry it holds: this page's withdrawal still withdraws here.
+    shared.set(CONSENT_KEY, JSON.stringify({ ...consent, at: '2026-11-03T00:00:00Z' }));
+    const stuck = { getItem: k => storage.getItem(k), setItem: () => { throw new Error('quota'); }, removeItem: () => { throw new Error('denied'); } };
+    const d = storedConsent(() => stuck);
+    assert.deepEqual(d.read(), consent, 'the stored consent, read');
+    d.write(null);
+    assert.equal(d.read(), null, 'a withdrawal the storage refused');
+    // No storage at all: the page's own.
+    const e = storedConsent(() => null);
+    assert.equal(e.read(), null);
+    e.write(consent);
+    assert.deepEqual(e.read(), consent);
+    assert.equal(e.pageOnly(), true, 'said: the page only');
+
+    // A storage that refuses one write and keeps the next: page-only, said, until it keeps one; then it is the truth again,
+    // another tab's withdrawal included (the independent review of EA6.4: nothing pinned that).
+    shared.clear();
+    let refuse = true;
+    const flaky = { getItem: k => storage.getItem(k), setItem: (k, v) => { if (refuse) { refuse = false; throw new Error('quota'); } storage.setItem(k, v); }, removeItem: k => storage.removeItem(k) };
+    const f = storedConsent(() => flaky);
+    assert.equal(f.pageOnly(), false);
+    f.write(consent);
+    assert.deepEqual([f.read(), f.pageOnly(), shared.has(CONSENT_KEY)], [consent, true, false], 'kept on this page only, and said');
+    f.write(consent);
+    assert.deepEqual([f.pageOnly(), shared.has(CONSENT_KEY)], [false, true], 'kept by the storage this time');
+    storedConsent(() => storage).write(null);
+    assert.equal(f.read(), null, 'withdrawn in another tab: none here');
+    // Another tab's word reaches a page-only store through `watch`: the newest word wins, and the watcher hears it.
+    shared.clear();
+    refuse = true;
+    let fire = () => {};
+    let stopped = 0;
+    const g = storedConsent(() => flaky, CONSENT_KEY, changed => { fire = changed; return () => { stopped++; }; });
+    let heard = 0;
+    const stop = g.watch(() => { heard++; });
+    g.write(consent);
+    assert.deepEqual([g.read(), g.pageOnly()], [consent, true], 'refused by the storage: this page\'s own');
+    fire();
+    assert.deepEqual([g.read(), g.pageOnly(), heard], [null, false, 1], 'another tab wrote: its word (none) is the truth');
+    stop();
+    assert.equal(stopped, 1);
+    assert.equal(storedConsent(() => storage).watch, undefined, 'nothing to watch without a source');
+
+    // Through the review: another tab's withdrawal shuts this tab's review before any call.
+    shared.clear();
+    const reviewer = fakeReviewer();
+    const t = await reviewed({ reviewer, consent: storedConsent(() => storage) });
+    assert.deepEqual(t.reviews.giveConsent(), { ok: true });
+    assert.equal(t.reviews.aiReviewable(t.r), null);
+    storedConsent(() => storage).write(null);
+    const out = await t.reviews.aiReview(t.r.id, []);
+    assert.equal(out.ok, false);
+    assert.match(out.diagnostic, /^EA_REVIEW_CONSENT /);
+    assert.equal(reviewer.calls.length, 0, 'no call');
+    assert.equal(t.s.state.budget.reviews, 0, 'nothing reserved');
+});
+
+test('EA-VR6c a withdrawal, here or in another tab, stops a review under way: nothing more is sent, its answer is not taken, its call stays counted', { timeout: 20_000 }, async () => {
+    // Here: the call waits (for its identity and App Check token, say), and the creator withdraws. The call's signal is
+    // pulled, so the transport sends nothing after (the independent review of EA6.4: it used to go out anyway).
+    const reviewer = fakeReviewer({ hold: true });
+    const t = await reviewed({ reviewer });
+    t.reviews.giveConsent();
+    const pending = t.reviews.aiReview(t.r.id, []);
+    await waitFor(() => reviewer.held.length === 1, 'the call');
+    assert.equal(reviewer.signals[0].aborted, false);
+    t.reviews.withdrawConsent();
+    assert.equal(reviewer.signals[0].aborted, true, 'the call pulled');
+    assert.deepEqual(await pending, {
+        ok: false, diagnostic: 'EA_REVIEW_CONSENT the creator withdrew consent while the review was under way: it was stopped, and its call is counted',
+        sentence: COPY.review.aiConsent,
+    });
+    assert.equal(t.s.state.evidence.some(e => e.producedBy === 'model'), false, 'nothing recorded');
+    assert.deepEqual([t.s.state.budget.reviews, t.s.state.budget.calls.unknown, t.s.state.reviews[0].status], [1, 1, 'cancelled'], 'counted, its end unseen');
+    assert.deepEqual([t.r.model, t.r.status, t.reviews.reviewing], [null, 'ready', false]);
+    assert.match(t.reviews.aiReviewable(t.r), /^EA_REVIEW_CONSENT /, 'nothing more until the creator allows it again');
+
+    // An answer that ignores its cancel and lands after the withdrawal: not taken either; counted, its cost known.
+    let land = () => {};
+    const deaf = { terms: async () => terms(), async review(body) { await new Promise(resolve => { land = resolve; }); return answerFor(body); } };
+    const v = await reviewed({ reviewer: deaf });
+    v.reviews.giveConsent();
+    const late = v.reviews.aiReview(v.r.id, []);
+    await waitFor(() => v.s.state.reviews.length === 1, 'the deaf call');
+    v.reviews.withdrawConsent();
+    land();
+    const landed = await late;
+    assert.equal(landed.diagnostic, 'EA_REVIEW_CONSENT the creator withdrew consent while the review was under way: it was stopped, and its call is counted');
+    assert.deepEqual([v.r.model, v.s.state.evidence.some(e => e.producedBy === 'model'), v.s.state.reviews[0].status, v.s.state.reviews[0].charge], [null, false, 'stale', 'known']);
+
+    // In another tab: its storage event reaches this one, which pulls the call its consent no longer covers.
+    const shared = new Map();
+    const storage = { getItem: k => (shared.has(k) ? shared.get(k) : null), setItem: (k, val) => { shared.set(k, String(val)); }, removeItem: k => { shared.delete(k); } };
+    let event = () => {};
+    const watched = storedConsent(() => storage, CONSENT_KEY, changed => { event = changed; return () => {}; });
+    const other = fakeReviewer({ hold: true });
+    const u = await reviewed({ reviewer: other, consent: watched });
+    u.reviews.giveConsent();
+    // A change elsewhere that leaves this tab's consent standing (the same terms allowed again) pulls nothing.
+    const kept = u.reviews.aiReview(u.r.id, []);
+    await waitFor(() => other.held.length === 1, 'the first call');
+    storedConsent(() => storage).write({ provider: 'meta', model: 'muse-spark-1.3', policyVersion: 'meta-standard.2026-11-03' });
+    event();
+    assert.equal(other.signals[0].aborted, false, 'still covered');
+    held(other);
+    assert.deepEqual(await kept, { ok: true });
+    const changes = u.st.changes;
+    const elsewhere = u.reviews.aiReview(u.r.id, []);
+    await waitFor(() => other.held.length === 1, 'the second call');
+    storedConsent(() => storage).write(null);
+    event();
+    assert.equal(other.signals[1].aborted, true, 'pulled by the other tab\'s withdrawal');
+    assert.ok(u.st.changes > changes, 'the panel told at once');
+    const out = await elsewhere;
+    assert.equal(out.diagnostic, 'EA_REVIEW_CONSENT the consent was withdrawn or changed in another tab while the review was under way: it was stopped, and its call is counted');
+    assert.deepEqual([u.s.state.budget.reviews, u.r.model.verdict], [2, 'fail'], 'the first review\'s verdict stands; the second is counted');
+});
+
+test('EA-VR7c a model\'s answer for a review whose device was replaced, or whose world was put on the stage again, is discarded and stays counted', { timeout: 20_000 }, async () => {
+    // The device replaced mid-review: the studio counts a new generation and captures nothing (main.ts).
+    const reviewer = fakeReviewer({ hold: true });
+    const t = await reviewed({ reviewer });
+    t.reviews.giveConsent();
+    const pending = t.reviews.aiReview(t.r.id, []);
+    await waitFor(() => reviewer.held.length === 1, 'the call');
+    t.st.generation++;
+    held(reviewer);
+    const lost = await pending;
+    assert.equal(lost.diagnostic, 'EA_STALE_EVIDENCE the device was replaced since this review: its answer is discarded');
+    assert.equal(t.s.state.evidence.some(e => e.producedBy === 'model'), false, 'no verdict recorded');
+    assert.deepEqual([t.s.state.reviews[0].status, t.s.state.reviews[0].charge, t.s.state.budget.reviews, t.r.model], ['stale', 'known', 1, null]);
+    // The same candidate put on the stage again while the stage is busy: its capture refused, so the review is still the
+    // newest, yet of an install no longer on the stage.
+    const other = fakeReviewer({ hold: true });
+    const u = await reviewed({ reviewer: other });
+    u.reviews.giveConsent();
+    const again = u.reviews.aiReview(u.r.id, []);
+    await waitFor(() => other.held.length === 1, 'the call');
+    u.st.busy = 'a Run holds the stage';
+    u.install(u.first.id);
+    assert.equal(u.reviews.latest, u.r, 'no newer review: its capture was refused');
+    assert.equal(u.reviews.refusal.diagnostic, 'EA_REVIEW_BUSY a Run holds the stage');
+    held(other);
+    const moved = await again;
+    assert.equal(moved.diagnostic, 'EA_STALE_EVIDENCE another world is on the stage: its answer is discarded');
+    assert.deepEqual([u.s.state.evidence.some(e => e.producedBy === 'model'), u.s.state.reviews[0].status, u.r.model], [false, 'stale', null]);
+});
+
+/**
+ * A DOM just big enough for the review panel (shared/dom.ts's h() and what the panel reads), installed for one test and
+ * taken away after it: the rest of this file runs with none (the panel module touches `document` only when it builds).
+ */
+function fakeDom() {
+    class FakeNode {}
+    class FakeText extends FakeNode {
+        constructor(data) { super(); this.data = String(data); }
+        get textContent() { return this.data; }
+    }
+    class FakeElement extends FakeNode {
+        constructor(tag) {
+            super();
+            Object.assign(this, { tagName: tag.toUpperCase(), children: [], dataset: {}, listeners: new Map(), className: '', hidden: false, disabled: false, checked: false, value: '' });
+        }
+        setAttribute(name, value) {
+            if (name === 'hidden' || name === 'disabled' || name === 'checked') this[name] = true;
+            else this[name] = value;
+        }
+        addEventListener(type, listener) {
+            if (!this.listeners.has(type)) this.listeners.set(type, []);
+            this.listeners.get(type).push(listener);
+        }
+        /** As a browser's: a disabled button does nothing. */
+        click() {
+            if (!this.disabled) for (const l of this.listeners.get('click') ?? []) l({ type: 'click', target: this });
+        }
+        append(...nodes) { for (const n of nodes) this.children.push(n instanceof FakeNode ? n : new FakeText(n)); }
+        replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
+        focus() {}
+        get childElementCount() { return this.children.filter(c => c instanceof FakeElement).length; }
+        get textContent() { return this.children.map(c => c.textContent).join(''); }
+        set textContent(text) { this.children = text === '' ? [] : [new FakeText(text)]; }
+        /** Every element under this one, depth first. */
+        *all() { for (const c of this.children) if (c instanceof FakeElement) { yield c; yield* c.all(); } }
+    }
+    const saved = { Node: globalThis.Node, document: globalThis.document };
+    globalThis.Node = FakeNode;
+    globalThis.document = { createElement: tag => new FakeElement(tag) };
+    return {
+        button: (root, text) => [...root.all()].find(e => e.tagName === 'BUTTON' && e.textContent === text) ?? null,
+        byClass: (root, name) => [...root.all()].find(e => e.className.split(' ').includes(name)) ?? null,
+        restore() { Object.assign(globalThis, saved); },
+    };
+}
+
+test('EA6.4 the panel: the disclosure follows the terms; "Allow" takes only those shown; Withdraw reaches any consent held; a page-only consent said; no capture or second press while a review runs', { timeout: 20_000 }, async () => {
+    const dom = fakeDom();
+    try {
+        const { ReviewPanel } = await import('../src/shell/studio/review-view.ts');
+        const reviewer = fakeReviewer({ hold: true });
+        const t = await reviewed({ reviewer });
+        const panel = new ReviewPanel(t.reviews);
+        const disclosure = () => dom.byClass(panel.el, 'rev-disclosure');
+        const allow = () => dom.button(panel.el, 'Allow AI review with Meta');
+        const withdraw = () => [...panel.el.all()].find(e => e.tagName === 'BUTTON' && e.textContent === 'Withdraw consent');
+        panel.render();
+        assert.equal(disclosure().hidden, false, 'asked before anything is sent');
+        assert.match(disclosure().textContent, /to Meta's model muse-spark-1\.3,/);
+        assert.equal(withdraw().hidden, true, 'nothing held, nothing to withdraw');
+        // The backend moves the review to another model under the same policy: the words are drawn again for it, and
+        // "Allow" binds what they name (the independent review of EA6.4: the old model's words stayed on screen).
+        reviewer.termsAre = terms(null, { model: 'muse-spark-1.4' });
+        await t.reviews.loadTerms();
+        panel.render();
+        assert.match(disclosure().textContent, /to Meta's model muse-spark-1\.4,/);
+        allow().click();
+        assert.equal(t.reviews.consent?.model, 'muse-spark-1.4');
+        // Terms that move after the words were drawn, with no redraw between: "Allow" takes nothing.
+        t.reviews.withdrawConsent();
+        panel.render();
+        reviewer.termsAre = terms(null, { model: 'muse-spark-1.5' });
+        await t.reviews.loadTerms();
+        allow().click();
+        assert.equal(t.reviews.heldConsent, null, 'the words on screen named another model');
+        panel.render();
+        assert.match(disclosure().textContent, /muse-spark-1\.5/);
+        allow().click();
+        assert.equal(t.reviews.consent?.model, 'muse-spark-1.5');
+        // A consent to terms that moved on, or with the backend away: still withdrawable.
+        reviewer.termsAre = terms();
+        await t.reviews.loadTerms();
+        panel.render();
+        assert.equal(t.reviews.consent, null);
+        assert.equal(withdraw().hidden, false, 'held, to other terms: withdrawable');
+        withdraw().click();
+        assert.equal(t.reviews.heldConsent, null);
+        // Contributor mode under Standard-mode words: shut, nothing drawn to consent to.
+        reviewer.termsAre = terms(null, { model: 'muse-spark-1.3-contributor', mode: 'contributor' });
+        await t.reviews.loadTerms();
+        panel.render();
+        assert.deepEqual([disclosure().hidden, allow().hidden], [true, true]);
+        assert.match(dom.byClass(panel.el, 'rev-ai-gate').textContent, /not meta's contributor mode/);
+
+        // While a review runs: "Capture again" waits (a capture would void its paid answer), and a second press does
+        // nothing, so nothing is left said once it answers.
+        reviewer.termsAre = terms();
+        await t.reviews.loadTerms();
+        panel.render();
+        allow().click();
+        panel.render();
+        const review = dom.button(panel.el, 'Review with AI');
+        assert.equal(review.disabled, false);
+        review.click();
+        review.click();
+        await waitFor(() => reviewer.held.length === 1, 'the call');
+        await settle();
+        assert.equal(t.r.error, null, 'the second press did nothing, so said nothing');
+        panel.render();
+        assert.equal(dom.button(panel.el, 'Capture again').disabled, true, 'no capture while a review runs');
+        held(reviewer);
+        await waitFor(() => !t.reviews.reviewing && t.r.model !== null, 'the answer');
+        await settle();
+        panel.render();
+        assert.equal(reviewer.calls.length, 1, 'one call for two presses');
+        assert.deepEqual([t.r.error, dom.byClass(panel.el, 'cand-note').hidden], [null, true], 'nothing left said');
+        assert.equal(dom.button(panel.el, 'Capture again').disabled, false);
+        panel.dispose();
+
+        // A storage that would not keep the go-ahead, or its withdrawal: said, never silent.
+        const refusing = { getItem: () => null, setItem: () => { throw new Error('quota'); }, removeItem: () => { throw new Error('denied'); } };
+        const u = await reviewed({ reviewer: fakeReviewer(), consent: storedConsent(() => refusing) });
+        const other = new ReviewPanel(u.reviews);
+        other.render();
+        dom.button(other.el, 'Allow AI review with Meta').click();
+        other.render();
+        assert.equal(u.reviews.consent?.model, 'muse-spark-1.3', 'held on this page');
+        assert.deepEqual([dom.byClass(other.el, 'rev-ai-kept').hidden, dom.byClass(other.el, 'rev-ai-kept').textContent], [false, COPY.review.aiKeptHere]);
+        dom.button(other.el, 'Withdraw consent').click();
+        other.render();
+        assert.equal(u.reviews.heldConsent, null);
+        assert.equal(dom.byClass(other.el, 'rev-ai-kept').textContent, COPY.review.aiWithdrawnHere);
+        other.dispose();
+    } finally {
+        dom.restore();
+    }
+});
+
+test('EA6.4 the independent review\'s smaller fixes: a double press leaves nothing said; the backend\'s 413 and consent refusals in §11\'s words; a withheld capture; a session that cannot revise; terms read again while shut', { timeout: 20_000 }, async () => {
+    // A press refused while one runs writes its BUSY onto the review; the answer of the first clears it.
+    const reviewer = fakeReviewer({ hold: true });
+    const t = await reviewed({ reviewer });
+    t.reviews.giveConsent();
+    const first = t.reviews.aiReview(t.r.id, []);
+    await waitFor(() => reviewer.held.length === 1, 'the call');
+    const second = await t.reviews.aiReview(t.r.id, []);
+    assert.equal(second.diagnostic, 'EA_REVIEW_BUSY a model\'s review is under way');
+    assert.equal(t.r.error, 'EA_REVIEW_BUSY a model\'s review is under way', 'said while the first runs');
+    held(reviewer);
+    assert.deepEqual(await first, { ok: true });
+    assert.deepEqual([t.r.error, t.r.sentence], [null, null], 'nothing left said once it answered');
+
+    // The backend's 413 (its own size words, or the gateway's) and its refusal of a consent to terms that moved meanwhile.
+    const outcome = async error => {
+        const r = fakeReviewer({ answer: () => error });
+        const x = await reviewed({ reviewer: r });
+        x.reviews.giveConsent();
+        const read = r.termsRead;
+        return { out: await x.reviews.aiReview(x.r.id, []), reread: r.termsRead > read, x };
+    };
+    const own = await outcome(new ForgeError('too-large', 413, 'EA_REVIEW_SIZE frames: 600001 exceeds 600000 bytes together.'));
+    assert.deepEqual(own.out, { ok: false, diagnostic: 'EA_REVIEW_SIZE frames: 600001 exceeds 600000 bytes together.', sentence: COPY.review.tooLarge });
+    assert.deepEqual([own.x.s.state.budget.reviews, own.x.s.state.reviews[0].status], [1, 'refused'], 'counted: it went out');
+    const gateway = await outcome(new ForgeError('too-large', 413, 'The request is too large.'));
+    assert.deepEqual(gateway.out, { ok: false, diagnostic: 'EA_REVIEW_SIZE request: The request is too large.', sentence: COPY.review.tooLarge });
+    const moved = await outcome(new ForgeError('bad-request', 400,
+        'consent names "meta", "muse-spark-1.3" and policy "meta-standard.2026-11-03"; this server sends frames to meta\'s muse-spark-1.4 under policy meta-standard.2026-11-03: ask the creator again.'));
+    assert.match(moved.out.diagnostic, /^EA_REVIEW_CONSENT the backend's terms moved: consent names "meta"/);
+    assert.equal(moved.out.sentence, COPY.review.aiConsent);
+    assert.equal(moved.reread, true, 'the terms read again, so the panel asks again');
+    const other = await outcome(new ForgeError('bad-request', 400, 'frames[0].jpeg does not decode whole: Corrupt JPEG data: bad Huffman code.'));
+    assert.equal(other.out.diagnostic, 'EA_REVIEW_FAILED bad-request: frames[0].jpeg does not decode whole: Corrupt JPEG data: bad Huffman code.');
+
+    // A world whose capture was withheld has no frame to send: its own reason (§11), not "capture again".
+    const withheld = () => {
+        const c = captured();
+        const why = 'EA_CAPTURE_UNAVAILABLE state: foggy-dusk#fx writes a buffer its frame schedule keeps';
+        return { ...c, outcome: { ...c.outcome, frames: [], missing: [{ name: 'framed', why }, { name: 'side', why }] } };
+    };
+    const w = await reviewed({ reviewer: fakeReviewer(), capture: withheld });
+    w.reviews.giveConsent();
+    assert.equal(w.r.frames.length, 0);
+    assert.equal(w.reviews.aiReviewable(w.r), 'EA_CAPTURE_UNAVAILABLE state: foggy-dusk#fx writes a buffer its frame schedule keeps');
+    assert.equal(sentenceOf(w.reviews.aiReviewable(w.r)), COPY.review.unavailable);
+
+    // A session that cannot revise offers no model's review either (§9.1): its issues would have nowhere to go.
+    const n = await reviewed({ reviewer: fakeReviewer(), revisable: false });
+    n.reviews.giveConsent();
+    assert.match(n.reviews.aiReviewable(n.r), /^EA_REVIEW_UNAVAILABLE stage .*, active revisable session none$/);
+
+    // Terms that said shut are read again with the next capture: gates opened meanwhile are seen without a reload.
+    const later = fakeReviewer({ termsAre: terms('images') });
+    const s = await reviewed({ reviewer: later });
+    assert.match(s.reviews.aiGate(), /^EA_VISION_UNAVAILABLE images: /);
+    later.termsAre = terms();
+    await s.reviews.capture();
+    await waitFor(() => s.reviews.terms?.available === true, 'the terms read again');
+    // Open terms are not read on every capture (a review reads them again itself, before its call).
+    const reads = later.termsRead;
+    await s.reviews.capture();
+    await settle();
+    assert.equal(later.termsRead, reads);
 });

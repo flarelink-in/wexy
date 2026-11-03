@@ -30,6 +30,11 @@ export interface CandidateLimits {
      * what they saw. Not calls: each round's calls count in the rest of Q_C like any other.
      */
     visualRounds: number;
+    /**
+     * A model's reviews of the world on the stage (EA6.4, visual-review-design.md §9.1): each one call of `calls`, under
+     * the ledger's kind `review`. Three: one before each visual round and one after the last.
+     */
+    reviews: number;
 }
 
 /**
@@ -43,20 +48,23 @@ export interface CandidateLimits {
  * Q110, decided 2026-11-02 night (the user: "revision limit can be raised but max cap as is"): 3 program revisions, up
  * from 1, and 2 visual rounds an attempt (visual-review-design.md §8.3), the 34 calls kept as the cap on everything. Three
  * revisions are ceilings, not three turns: 6 + 12 + 10 + 3 × 6 = 46 is past 34, so the calls refuse first.
+ *
+ * EA6.4 (Q112 (a), decided 2026-11-03): 3 reviews by a model an attempt, each one of the 34 calls. The backend holds a
+ * prompt to two attempts' reviews (`review-calls`, 6) and paces them by `AgentTurn.REVIEWS`.
  */
 export const Q_C: CandidateLimits = Object.freeze({
-    calls: 34, modules: 12, authors: 12, concurrent: 4, repairs: 10, repairsPerModule: 2, revisions: 3, revisionCalls: 6, visualRounds: 2,
+    calls: 34, modules: 12, authors: 12, concurrent: 4, repairs: 10, repairsPerModule: 2, revisions: 3, revisionCalls: 6, visualRounds: 2, reviews: 3,
 });
 
 /** A budget a refusal names. `concurrent` is the scheduler's bound: wait for a call to end, never an exhaustion. */
-export type Budget = 'calls' | 'modules' | 'authors' | 'repairs' | 'repairs-per-module' | 'revisions' | 'concurrent' | 'visual-rounds';
+export type Budget = 'calls' | 'modules' | 'authors' | 'repairs' | 'repairs-per-module' | 'revisions' | 'concurrent' | 'visual-rounds' | 'reviews';
 
-export type CallKind = 'author' | 'repair' | 'revision';
+export type CallKind = 'author' | 'repair' | 'revision' | 'review';
 
 export interface Reservation {
     readonly id: number;
     readonly kind: CallKind;
-    /** The module an author or a repair is for; null for a revision. */
+    /** The module an author or a repair is for; null for a revision or a review. */
     readonly module: string | null;
     /** Calls held: one for a module call, the revision's whole allowance for a revision. */
     readonly calls: number;
@@ -80,7 +88,9 @@ export interface LedgerState {
     revisions: number;
     /** Visual rounds accepted (EA6): a dispatched round stays counted whatever came of it. */
     visualRounds: number;
-    /** Module calls in flight. */
+    /** A model's reviews reserved (EA6.4): a dispatched one stays counted whatever came of it. */
+    reviews: number;
+    /** Calls in flight but a revision's: module calls and a model's review. */
     inFlight: number;
 }
 
@@ -102,6 +112,7 @@ export class Ledger {
     private readonly moduleRepairs = new Map<string, number>();
     private revisions = 0;
     private visualRounds = 0;
+    private reviews = 0;
     private readonly open = new Map<number, Open>();
     private next = 1;
 
@@ -125,7 +136,7 @@ export class Ledger {
 
     /** A module call's slot and its category, or the budget that refuses it. */
     reserveModule(kind: 'author' | 'repair', module: string): Reserved {
-        if (this.revisionOpen()) return { ok: false, budget: 'concurrent', used: 1, limit: 0 };
+        if (this.revisionOpen() || this.reviewOpen()) return { ok: false, budget: 'concurrent', used: 1, limit: 0 };
         if (this.inFlight >= this.limits.concurrent) return { ok: false, budget: 'concurrent', used: this.inFlight, limit: this.limits.concurrent };
         if (this.used + 1 > this.limits.calls) return { ok: false, budget: 'calls', used: this.used, limit: this.limits.calls };
         if (kind === 'author') {
@@ -164,6 +175,20 @@ export class Ledger {
         return { ok: true };
     }
 
+    /**
+     * A model's review (EA6.4): one call, or the budget that refuses it. It competes with every other paid action, so
+     * none may be open: a revision or a module call in flight refuses it as `concurrent`, and while it is open a revision
+     * or a module call is refused the same way. A limit absent from older limits is none (the safe direction).
+     */
+    reserveReview(): Reserved {
+        if (this.open.size > 0) return { ok: false, budget: 'concurrent', used: this.open.size, limit: 0 };
+        const limit = this.limits.reviews ?? 0;
+        if (this.reviews + 1 > limit) return { ok: false, budget: 'reviews', used: this.reviews, limit };
+        if (this.used + 1 > this.limits.calls) return { ok: false, budget: 'calls', used: this.used, limit: this.limits.calls };
+        this.reviews++;
+        return { ok: true, reservation: this.hold('review', null, 1) };
+    }
+
     /** Gives a visual round back: only for a round whose revision was never dispatched (the caller's word). */
     returnVisualRound(): void {
         this.visualRounds = Math.max(0, this.visualRounds - 1);
@@ -188,6 +213,7 @@ export class Ledger {
             this.moduleRepairs.set(r.module!, (this.moduleRepairs.get(r.module!) ?? 1) - 1);
         }
         if (r.kind === 'revision') this.revisions--;
+        if (r.kind === 'review') this.reviews--;
         return true;
     }
 
@@ -212,12 +238,18 @@ export class Ledger {
             moduleRepairs: Object.freeze(Object.fromEntries(this.moduleRepairs)),
             revisions: this.revisions,
             visualRounds: this.visualRounds,
+            reviews: this.reviews,
             inFlight: this.inFlight,
         };
     }
 
     private revisionOpen(): boolean {
         for (const o of this.open.values()) if (o.reservation.kind === 'revision') return true;
+        return false;
+    }
+
+    private reviewOpen(): boolean {
+        for (const o of this.open.values()) if (o.reservation.kind === 'review') return true;
         return false;
     }
 

@@ -29,13 +29,15 @@ function fakeFetch(...answers) {
     return { fetchImpl, requests };
 }
 
-test('U15 the single-use App Check routes are exactly the gateway\'s (ForgeRoutesTest: forge-plan, agent-turn, agent-module, worlds-publish)', () => {
-    assert.deepEqual([...SINGLE_USE_ROUTES], ['POST /v1/forge/plan', 'POST /v1/agent/turn', 'POST /v1/agent/module', 'POST /v1/worlds']);
+test('U15 the single-use App Check routes are exactly the gateway\'s (ForgeRoutesTest: forge-plan, agent-turn, agent-module, agent-review, worlds-publish)', () => {
+    assert.deepEqual([...SINGLE_USE_ROUTES], ['POST /v1/forge/plan', 'POST /v1/agent/turn', 'POST /v1/agent/module', 'POST /v1/agent/review', 'POST /v1/worlds']);
     assert.ok(needsSingleUseAppCheck('POST', '/v1/forge/plan'));
     assert.ok(needsSingleUseAppCheck('POST', '/v1/agent/turn'));
     assert.ok(needsSingleUseAppCheck('POST', '/v1/agent/module'));
+    // EA6.4: a model's review spends its token; its terms (GET) do not.
+    assert.ok(needsSingleUseAppCheck('POST', '/v1/agent/review'));
     assert.ok(needsSingleUseAppCheck('post', '/v1/worlds?draft=1'));
-    for (const [m, p] of [['POST', '/v1/forge/author'], ['POST', '/v1/worlds/abc/complete'], ['GET', '/v1/worlds'], ['GET', '/v1/forge/plan'], ['GET', '/v1/agent/turn'], ['POST', '/v1/agent/turns']]) {
+    for (const [m, p] of [['POST', '/v1/forge/author'], ['POST', '/v1/worlds/abc/complete'], ['GET', '/v1/worlds'], ['GET', '/v1/forge/plan'], ['GET', '/v1/agent/turn'], ['POST', '/v1/agent/turns'], ['GET', '/v1/agent/review']]) {
         assert.ok(!needsSingleUseAppCheck(m, p), `${m} ${p}`);
     }
 });

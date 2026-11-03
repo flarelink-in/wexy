@@ -116,7 +116,47 @@ export const COPY = {
         busy: 'The stage is busy right now; capture it again in a moment.',
         improving: 'An improvement is already under way; this world stays on the stage.',
         notApplied: 'This improvement could not be applied; the previous world is still on the stage.',
+        /** A model's review (EA6.4, visual-review-design.md §9.1, §11): never offered before Q62's gates and the creator's consent. */
+        aiUnavailable: 'AI review is not available; tell us what to improve.',
+        aiConsent: 'AI review needs your go-ahead to send these frames first.',
+        aiInvalid: 'AI review did not return a usable verdict; you can still give your own feedback.',
+        aiFailed: 'AI review did not answer this time; you can still give your own feedback.',
+        aiBusy: 'An AI review is already under way; this world stays on the stage.',
+        aiDropped: 'These frames are no longer kept here; capture the world again to review it.',
+        /** When this browser would not keep the creator's go-ahead, or its withdrawal (EA6.4): never silently. */
+        aiKeptHere: 'This browser would not keep your go-ahead: it holds on this page only, until you leave it.',
+        aiWithdrawnHere: 'This browser would not forget your go-ahead: it is withdrawn on this page only. Clear this site\'s data to withdraw it everywhere.',
     },
+    /**
+     * What the creator consents to before a model's review sends anything (EA6.4, §9's privacy gate), word for word, by
+     * the policy version the backend reports (`wexy.review.policy-version`): a version this build has no text for keeps
+     * the review shut, and so do terms of another provider or mode than the text was written for (`providerId`, `mode`:
+     * what it says of Standard mode is not true of contributor mode). Drafted from Meta's Data Commitments, Terms and
+     * docs, read 2026-11-03: what they say, and what they do not (no retention period is stated). Links are this
+     * module's own, never the server's.
+     */
+    disclosures: {
+        'meta-standard.2026-11-03': {
+            providerId: 'meta',
+            mode: 'standard',
+            provider: 'Meta',
+            sends: (model: string) => `Review with AI sends the two frames shown here, your idea, the world's design and the host's findings you keep `
+                + `checked to Meta's model ${model}, through Wexy's server, which keeps none of the frames.`,
+            statements: [
+                'Meta says it does not use content sent to its Standard service to train its models.',
+                'Meta keeps what it receives as its Terms and Privacy Policy describe; it does not state for how long.',
+                'Meta may process it to detect and respond to misuse of its API.',
+            ],
+            links: [
+                { label: 'Meta\'s data commitments', url: 'https://dev.meta.ai/legal/commitments' },
+                { label: 'Meta Model API terms', url: 'https://dev.meta.ai/legal/terms-of-service' },
+                { label: 'Meta\'s Privacy Policy', url: 'https://www.facebook.com/privacy/policy/' },
+            ],
+            agree: 'Allow AI review with Meta',
+            withdraw: 'Withdraw consent',
+        },
+    } as Readonly<Record<string, { providerId: string; mode: 'standard' | 'contributor'; provider: string; sends: (model: string) => string;
+        statements: readonly string[]; links: readonly { label: string; url: string }[]; agree: string; withdraw: string }>>,
     /** An edit that failed after repairs keeps the world (design guidelines §4). */
     editFailed: 'That change didn\'t work on your device. Your world is as it was.',
     deviceLost: 'Your graphics card reset while running this change. We went back to the last version that worked.',
