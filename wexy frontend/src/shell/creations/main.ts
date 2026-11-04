@@ -7,7 +7,7 @@
 import '../../styles/base.css';
 import '../../styles/creations.css';
 import { readConfig } from '../../forge-client/config';
-import { createApi } from '../../forge-client/http';
+import { boundTo, createApi } from '../../forge-client/http';
 import { createIdentity, type LinkOutcome } from '../../forge-client/identity';
 import { bootstrapAccount, readAccount } from '../../platform/client';
 import { AccountSession } from '../../platform/session';
@@ -71,23 +71,26 @@ async function main(): Promise<void> {
         if (state.kind !== 'google') return say(COPY.signIn, { label: 'Sign in with Google', run: () => void signIn() });
         const epoch = state.epoch;
         const mine = () => turn === shown && session.current.epoch === epoch;
+        const caller = session.caller();
+        if (!caller) return say(COPY.unavailable, { label: 'Try again', run: () => void show() });
+        // Every call of this page goes out as the epoch's caller or not at all (W3's review): a rename's retry after a
+        // 401 never reaches the platform under an account signed in meanwhile.
+        const own = boundTo(api, { uid: caller.uid, still: () => mine() && caller.still() });
         say(COPY.loading);
-        let account = await readAccount(api);
-        if (account.kind === 'none') account = await bootstrapAccount(api);
-        const page = account.kind === 'account' ? await listWorlds(api) : null;
-        const usage = page ? await readUsage(api) : null;
+        let account = await readAccount(own);
+        if (account.kind === 'none') account = await bootstrapAccount(own);
+        const page = account.kind === 'account' ? await listWorlds(own) : null;
+        const usage = page ? await readUsage(own) : null;
         if (!mine()) return;
         if (!page) return say(COPY.unavailable, { label: 'Try again', run: () => void show() });
         const history = renderHistory(root, page, usage, {
-            rename: (world, title) => renameWorld(api, world, title),
-            remove: world => deleteWorld(api, world, crypto.randomUUID()),
-            reread: async world => {
-                const now = await readWorld(api, world.worldId);
-                return typeof now === 'string' ? null : now;
-            },
-            more: cursor => listWorlds(api, { cursor }),
+            rename: (world, title) => renameWorld(own, world, title),
+            remove: world => deleteWorld(own, world, crypto.randomUUID()),
+            // Gone (or another's) takes the card away; no answer just now keeps it (W3's review, its low).
+            reread: world => readWorld(own, world.worldId),
+            more: cursor => listWorlds(own, { cursor }),
             confirm: confirmDialog,
-            removed: () => { void readUsage(api).then(u => { if (mine()) history.usage(u); }); },
+            removed: () => { void readUsage(own).then(u => { if (mine()) history.usage(u); }); },
         });
     };
 

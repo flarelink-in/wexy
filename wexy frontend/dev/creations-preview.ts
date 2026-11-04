@@ -19,6 +19,6 @@ renderHistory(document.getElementById('history') as HTMLElement, {
     ],
     next: 'page-2',
 }, { usedBytes: 82_164, reservedBytes: 0, worlds: 4, limits: { bytes: 104_857_600, worlds: 50 } }, {
-    rename: nothing, remove: nothing, reread: async () => null, more: async () => null, confirm: async () => false, removed: () => {},
+    rename: nothing, remove: nothing, reread: async () => 'unavailable', more: async () => null, confirm: async () => false, removed: () => {},
 });
 document.body.dataset.ready = '1';

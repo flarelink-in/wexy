@@ -76,6 +76,18 @@ export class ForgeError extends Error {
 }
 
 /**
+ * A request bound to a caller (http.ts's `Caller`) who is no longer the one signed in, or whose account epoch has moved:
+ * it was not sent (W3's review, its high: a save's retry went out under the account signed in meanwhile). Never a
+ * ForgeError: the backend said nothing, so there is no code of its to give.
+ */
+export class StaleCaller extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'StaleCaller';
+    }
+}
+
+/**
  * The error a non-2xx response stands for. The body is read as the envelope when it is one; an unknown code,
  * or a body that is not ours (an HTML error page from a proxy), falls back to the status's code.
  */

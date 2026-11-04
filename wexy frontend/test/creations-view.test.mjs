@@ -102,7 +102,11 @@ test('PL-FE6 a world this build cannot open says so; the usage line counts what 
     assert.equal(byClass(now, 'world-badge')[0].hidden, true);
     assert.equal(byClass(root, 'history-usage')[0].textContent, usageLine(usage));
     assert.equal(usageLine(usage), '1 of 50 worlds · 20 KB of 100.0 MB');
-    assert.ok(!all(root).some(e => e.tagName === 'BUTTON' && /open/i.test(e.textContent)), 'no inert "Open": it waits for W3.6');
+    // W3.6: a world this build opens is opened in the studio by its id; one it cannot open offers no Open at all.
+    const openOf = card => all(card).find(e => e.tagName === 'A' && e.textContent === COPY.open);
+    assert.deepEqual([openOf(now).hidden, openOf(now).getAttribute('href')], [false, '/studio.html?create=agent&world=01JC3W5F6Q7R8S9T0V1W2X3Y4Y']);
+    assert.equal(openOf(old).hidden, true, 'no Open for a line this build does not open');
+    assert.ok(!all(root).some(e => e.tagName === 'BUTTON' && /open/i.test(e.textContent)), 'Open is a link to the studio, never a button that does nothing');
 });
 
 test('PL-FE6 a rename goes through the page\'s call, and each answer is said: done, a conflict, a refusal, a gone world', async () => {
@@ -141,6 +145,30 @@ test('PL-FE6 a rename goes through the page\'s call, and each answer is said: do
     all(c4).find(e => e.tagName === 'INPUT').value = 'Anything';
     await button(c4, 'Save').fire('click');
     assert.equal(list.children.length, 0, 'a world gone elsewhere leaves the list');
+    assert.deepEqual(gone.calls.at(-1), ['removed']);
+});
+
+test('W3-review low: after a rename\'s conflict, a world that cannot be read just now stays on the list; only one gone leaves it', async () => {
+    const list = new FakeElement('ul');
+    const unread = actions({ rename: () => ({ kind: 'conflict' }), reread: () => 'unavailable' });
+    const card = worldCard(world(), unread);
+    list.append(card);
+    await button(card, 'Rename').fire('click');
+    all(card).find(e => e.tagName === 'INPUT').value = 'Mine';
+    await button(card, 'Save').fire('click');
+    assert.equal(list.children.length, 1, 'still listed: it was not deleted, it could not be read');
+    assert.equal(byClass(card, 'world-title')[0].textContent, 'The castle', 'shown as last read');
+    assert.equal(byClass(card, 'world-note')[0].textContent, COPY.renameConflictUnread);
+    assert.equal(byClass(card, 'world-rename')[0].hidden, true);
+    assert.ok(!unread.calls.some(c => c[0] === 'removed'), 'the usage is not read again: nothing left');
+
+    const gone = actions({ rename: () => ({ kind: 'conflict' }), reread: () => 'missing' });
+    const c2 = worldCard(world(), gone);
+    list.append(c2);
+    await button(c2, 'Rename').fire('click');
+    all(c2).find(e => e.tagName === 'INPUT').value = 'Mine';
+    await button(c2, 'Save').fire('click');
+    assert.equal(list.children.length, 1, 'the gone one left');
     assert.deepEqual(gone.calls.at(-1), ['removed']);
 });
 

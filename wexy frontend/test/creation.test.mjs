@@ -21,7 +21,7 @@ import { elapsed, spoken, timed } from '../src/shell/studio/creation-view.ts';
 import { AccountSession } from '../src/platform/session.ts';
 import { Viewport } from '../src/runtime/viewport.ts';
 import { creationAccount } from '../src/shell/studio/account.ts';
-import { selectCreationPath } from '../src/shell/studio/creation-path.ts';
+import { selectCreationPath, worldLink } from '../src/shell/studio/creation-path.ts';
 import { stageTaken } from '../src/shell/studio/stage-holds.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -198,7 +198,8 @@ test('EA9-U1 Create runs the turn and writes its module, then waits; Show it is 
     const [go] = r.stage.gos;
     assert.equal(go.snapshot, session.snapshot, 'the session\'s own sealed candidate');
     assert.equal(go.compiled, session.compiled, 'its L3 verdicts, the very objects (EA5.1: no copy is admitted)');
-    assert.deepEqual(go.about, { title: titleOf(IDEA.prompt) });
+    // W3.6: its save needs S and whether it revises the world on the stage; a first world revises nothing.
+    assert.deepEqual(go.about, { title: titleOf(IDEA.prompt), design: ready.handOff.design, revises: false });
     const after = r.controller.state;
     assert.equal(after.phase, 'installed');
     assert.ok(Object.values(after.steps).every(s => s.state === 'done'), JSON.stringify(after.steps));
@@ -787,6 +788,56 @@ test('EA9-U19 a world written for Show it is never stranded: the review\'s paid 
     assert.match(panel, /this\.creation\?\.subscribe\(\(\) => \{\s*const now = `\$\{!!this\.creation\?\.creating\}\|\$\{!!this\.creation\?\.sessionFor\(this\.agentWorld\?\.candidate \?\? null\)\}`;\s*if \(now === gate\) return;\s*gate = now;\s*view\?\.render\(\);/);
 });
 
+test('W3.6 the go says what a save needs: its design, and whether it revises the world on the stage (a round, or the same world shown again), never another creation\'s', async () => {
+    // The fakes of EA9-U19: a turn that hands off at once, sessions that seal at once and run a round on demand.
+    const handedOff = (request, design) => ({
+        seq: 1, request, phase: 'handed-off', meta: { turnId: 'turn-1', model: 'm', promptVersion: 'p' }, calls: [], findings: [],
+        design, program: { nodes: [] }, question: null, reason: null, code: null, httpStatus: null, retryAfterSeconds: null,
+        costMicroUsd: 0, unreported: 0, startedMs: 0, endedMs: 0,
+    });
+    const sessions = [];
+    const gos = [];
+    const controller = createCreationController({
+        turnSession: () => ({ state: null, cancel() {}, start: async request => handedOff(request, { idea: request.prompt }) }),
+        candidateSession: onChange => {
+            const s = {
+                k: sessions.length, snapshot: null, compiled: null, cancel() {},
+                async start() {
+                    s.snapshot = { id: `world-${s.k}` };
+                    s.compiled = [];
+                    onChange({ phase: 'static-verified', modules: [] });
+                    return { phase: 'static-verified' };
+                },
+                // The review's "Improve it": a round, then its improved candidate sealed in the same session.
+                improve() {
+                    onChange({ phase: 'correcting', modules: [] });
+                    s.snapshot = { id: `world-${s.k}-improved` };
+                    onChange({ phase: 'static-verified', modules: [] });
+                },
+            };
+            sessions.push(s);
+            return s;
+        },
+        stage: { blocked: () => null, go: async (snapshot, compiled, about) => { gos.push({ id: snapshot.id, about }); return INSTALLED; } },
+    });
+    await controller.create(IDEA);
+    await controller.show();
+    sessions[0].improve();
+    assert.equal(controller.state.phase, 'ready', 'the improved world waits for Show it');
+    await controller.show();
+    // Past its envelope, the same world again (the EA9.2 review's Show it).
+    await controller.show();
+    const b = { ...IDEA, prompt: 'a lighthouse on a cliff in a storm' };
+    await controller.create(b);
+    await controller.show();
+    assert.deepEqual(gos.map(g => [g.id, g.about.revises, g.about.design.idea]), [
+        ['world-0', false, IDEA.prompt],
+        ['world-0-improved', true, IDEA.prompt],
+        ['world-0-improved', true, IDEA.prompt],
+        ['world-1', false, b.prompt],
+    ], 'a round and the same world shown again revise; another creation never does, its own design with it');
+});
+
 test('EA9-U20 a world written for Show it outlives a new idea that never starts: refused at entry or stopped first, it comes back ready; admitted, it goes (Q126 (b))', async () => {
     // The turn route answers in order: A's hand-off first, then what each case puts on the queue.
     const answers = [];
@@ -1077,6 +1128,13 @@ test('EA9-U16 the creation path from the URL: one path, legacy wins, a loader su
     assert.deepEqual([scene.loader, scene.autorun], [{ kind: 'scene', name: 'galaxy' }, false], 'a loader calls no model, and suppresses the autorun');
     const replay = pick('?agent=1&create=agent&replay=castle&autorun=1');
     assert.deepEqual([replay.loader, replay.autorun], [{ kind: 'replay', name: 'castle' }, false]);
+    // W3.6: a saved world by its id is a loader too, and it needs the stage, so it selects the agent path; legacy still
+    // wins, and then nothing opens (the studio needs the agent path's stage for it).
+    const world = pick('?world=01JC3W5F6Q7R8S9T0V1W2X3Y4Z&autorun=1');
+    assert.deepEqual([world.create, world.agentPath, world.loader, world.autorun], ['agent', true, { kind: 'world', name: '01JC3W5F6Q7R8S9T0V1W2X3Y4Z' }, false]);
+    assert.deepEqual(row(pick('?world=01JC3W5F6Q7R8S9T0V1W2X3Y4Z&legacy=1')), ['h1', false, false, false, false, null, null], 'legacy wins');
+    assert.equal(worldLink('01JC3W5F6Q7R8S9T0V1W2X3Y4Z'), '/studio.html?create=agent&world=01JC3W5F6Q7R8S9T0V1W2X3Y4Z');
+    assert.deepEqual(pick(new URL(worldLink('a b&c'), 'http://x').search).loader, { kind: 'world', name: 'a b&c' }, 'an id is carried as given, for the studio to check');
     // Unknown selectors start nothing and say so; they never pick a path of their own.
     for (const q of ['?create=h2&autorun=1', '?legacy=yes&autorun=1', '?create=&autorun=1']) {
         const s = pick(q);

@@ -8,6 +8,7 @@
 import type { AppCheck } from 'firebase/app-check';
 import type { Auth, AuthCredential, AuthProvider, User, UserCredential } from 'firebase/auth';
 import { isLoopback, type FirebaseWebConfig, type PublicConfig } from './config';
+import { StaleCaller } from './errors';
 
 /** How a caller is signed in: an anonymous Firebase user, or one with Google (W1; the creations platform companion §6). */
 export type Provider = 'anonymous' | 'google';
@@ -51,8 +52,12 @@ export interface AccountPort {
 }
 
 export interface Identity {
-    /** The `Authorization` value, or null when this build has no way to sign in (the gateway then answers 401). */
-    authorization(forceRefresh: boolean): Promise<string | null>;
+    /**
+     * The `Authorization` value, or null when this build has no way to sign in (the gateway then answers 401). With `as`
+     * (W3's review: a request bound to a caller, http.ts's `Caller`), only that uid's own token: never a sign-in, and a
+     * {@link StaleCaller} rejection when someone else, or no one, is signed in, before or after the token is read.
+     */
+    authorization(forceRefresh: boolean, as?: string): Promise<string | null>;
     /**
      * The `X-Firebase-AppCheck` value, or null when App Check is off or no token could be minted: attestation is
      * defence in depth, and the gateway decides what an unattested request is worth. `singleUse` mints a
@@ -100,7 +105,11 @@ export function createIdentity(config: PublicConfig): Identity {
         const dev = !!(config.dev && config.apiOrigin && isLoopback(new URL(config.apiOrigin).hostname));
         if (!dev) return { authorization: async () => null, appCheck: async () => null };
         return {
-            authorization: async () => `Bearer dev.${devProvider()}.${devUid()}`,
+            async authorization(_forceRefresh, as) {
+                // Bound: the uid kept now must be the caller's; a uid is never made for it (that is a sign-in).
+                if (as !== undefined && keptDevUid() !== as) throw new StaleCaller('identity: the dev caller is no longer signed in.');
+                return `Bearer dev.${devProvider()}.${devUid()}`;
+            },
             appCheck: async () => null,
             account: devAccount(),
         };
@@ -126,11 +135,10 @@ export function createIdentity(config: PublicConfig): Identity {
             const fb = await load();
             return { auth: fb.auth, fns: fb.fns };
         }),
-        async authorization(forceRefresh) {
+        authorization: firebaseAuthorization(async () => {
             const fb = await load();
-            const user = fb.auth.currentUser ?? (await signIn(fb));
-            return `Bearer ${await user.getIdToken(forceRefresh)}`;
-        },
+            return { auth: fb.auth, signIn: () => signIn(fb) };
+        }),
         async appCheck(singleUse) {
             if (!config.appCheckSiteKey) return null;
             try {
@@ -149,6 +157,38 @@ export function createIdentity(config: PublicConfig): Identity {
             }
         },
     };
+}
+
+/** A Firebase user as the identity uses it: its uid and its ID token. */
+type TokenUser = Pick<User, 'uid' | 'getIdToken'>;
+
+/**
+ * The Firebase identity's `authorization` (exported for the tests, which hand it a fake Auth): a bound request (`as`) gets
+ * only that uid's own token and never signs anyone in ({@link boundToken}); any other goes as whoever is signed in, or as
+ * a new anonymous caller when no one is (`signIn`), so the first world needs no wall.
+ */
+export function firebaseAuthorization(load: () => Promise<{ auth: { readonly currentUser: TokenUser | null }; signIn: () => Promise<TokenUser> }>):
+    (forceRefresh: boolean, as?: string) => Promise<string> {
+    return async (forceRefresh, as) => {
+        const { auth, signIn } = await load();
+        if (as !== undefined) return boundToken(auth, as, forceRefresh);
+        const user = auth.currentUser ?? (await signIn());
+        return `Bearer ${await user.getIdToken(forceRefresh)}`;
+    };
+}
+
+/**
+ * The `Authorization` value of `uid`'s own Firebase user, for a request bound to that caller (W3's review): the signed-in
+ * user must be `uid` before the token is read and still after, so a token minted while the account switched (another
+ * tab's sign-in, a sign-out) never goes out. Never signs anyone in. Exported for the tests, which hand it a fake Auth.
+ */
+export async function boundToken(auth: { readonly currentUser: TokenUser | null }, uid: string,
+    forceRefresh: boolean): Promise<string> {
+    const user = auth.currentUser;
+    if (!user || user.uid !== uid) throw new StaleCaller('identity: the caller is no longer the one signed in.');
+    const token = await user.getIdToken(forceRefresh);
+    if (auth.currentUser?.uid !== uid) throw new StaleCaller('identity: the account changed while the token was read.');
+    return `Bearer ${token}`;
 }
 
 /** Firebase codes that mean the creator closed or replaced the window: nothing happened, and nothing is said. */
@@ -316,6 +356,17 @@ function devUid(): string {
         return uid;
     } catch {
         return (memoryUid ??= fresh());
+    }
+}
+
+/** The dev identity's uid as kept now, or null when none is: read only, never made (a bound request's check). */
+function keptDevUid(): string | null {
+    try {
+        const kept = localStorage.getItem(DEV_UID_KEY);
+        if (kept && /^[a-f0-9]{32}$/.test(kept)) return kept;
+        return null;
+    } catch {
+        return memoryUid;
     }
 }
 

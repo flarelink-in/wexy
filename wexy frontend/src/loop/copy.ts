@@ -215,6 +215,54 @@ export const COPY = {
         invalid: 'This link asks for a way of making worlds this page doesn\'t have, so nothing was started.',
         noControls: 'This world has no sliders. Drag to look around, then take a photo or make a video.',
     },
+    /**
+     * The world on the stage's save, beside its title (W3.6; the creations platform companion §7, §9 and §12): what its
+     * save came to, in a word or a few, and the one thing to do. The world stays on the stage in every one (F2). Nothing
+     * here offers a download: a creator has none for an agent world yet.
+     */
+    save: {
+        saving: 'Saving…',
+        saved: 'Saved',
+        yourWorlds: 'Your worlds',
+        signIn: 'Sign in to keep this world',
+        signInWhy: 'Sign in with Google to save this world to your account.',
+        notSaved: 'Not saved',
+        tryAgain: 'Try again',
+        save: 'Save',
+        failedWhy: 'Saving isn\'t available right now. Your world is still here: you can still film it and take photos.',
+        offline: 'Not saved: no connection',
+        offlineWhy: 'Wexy couldn\'t reach its server. Check your connection, then press Try again.',
+        notSavedWhy: 'This world isn\'t saved to the account signed in now. Press Save to keep it there.',
+        conflict: 'Not saved: changed in another tab',
+        conflictWhy: 'A newer version of this world was saved elsewhere. Save your copy as a new world, or open the saved one.',
+        saveAsNew: 'Save as a new world',
+        openSaved: 'Open the saved one',
+        openSavedConfirm: 'Open the saved version? The world on the stage isn\'t saved, and the saved one will replace it.',
+        full: 'Not saved: your storage is full',
+        fullWhy: 'Your saved worlds are full. Delete one you no longer need in Your worlds, then press Try again.',
+        tooLarge: 'Not saved: too large',
+        tooLargeWhy: 'This world is too large to save. It stays here: you can still film it and take photos.',
+    },
+    /**
+     * A saved world opened in the studio (W3.6; the companion §8 and §12): one sentence a step. Show it is the GPU go,
+     * as for any world (Q115): the link that opened the page grants none. The world on the stage stays until then.
+     */
+    open: {
+        opening: 'Opening your saved world…',
+        signIn: 'Sign in with Google to open your saved worlds.',
+        checking: 'Checking it on your graphics card…',
+        ready: (title: string) => `“${title}” is ready. Press Show it to test it on your graphics card.`,
+        show: 'Show it',
+        testing: 'Testing it on your graphics card…',
+        missing: 'This world isn\'t available. It may have been deleted, or saved to another account.',
+        unavailable: 'Your saved worlds can\'t be reached right now. Reload the page to try again.',
+        incompatible: 'This world was made for another version of the studio, so it can\'t be opened here.',
+        unsealed: 'This saved world can\'t be opened in this version of the studio.',
+        notHere: 'This saved world can\'t be tested on this device.',
+        runRefused: 'This saved world didn\'t pass its test on your graphics card; your current world is unchanged. Press Show it to try again.',
+        accountChanged: 'You signed in or out while this world was opening. Open it again from Your worlds.',
+        noStage: 'Opening a saved world needs WebGPU, which this browser doesn\'t offer.',
+    },
     /** An edit that failed after repairs keeps the world (design guidelines §4). */
     editFailed: 'That change didn\'t work on your device. Your world is as it was.',
     deviceLost: 'Your graphics card reset while running this change. We went back to the last version that worked.',

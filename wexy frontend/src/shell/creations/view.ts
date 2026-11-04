@@ -1,11 +1,12 @@
 // The history, `/creations` (W3.5; the creations platform companion §9's /creations row): a signed-in creator's saved
 // worlds, the newest made first, each to rename or delete, and the account's usage. Every string a creator or a server
 // wrote (a title above all) goes into the page as text, never as markup (P7, PL-FE6): `h()` appends strings as text
-// nodes, and nothing here uses its `html` attribute. A world this build cannot open says so; opening one in the studio
-// waits for W3.6, so no inert button is offered. The page's own wiring (main.ts) hands the calls in, so this runs
-// under node --test with a DOM shim.
+// nodes, and nothing here uses its `html` attribute. A world this build can open is opened in the studio by its id
+// (W3.6: `/studio.html?create=agent&world=<id>`, the studio's own Show it then the GPU go); one it cannot says so, and
+// offers no Open. The page's own wiring (main.ts) hands the calls in, so this runs under node --test with a DOM shim.
 
 import { opensLine } from '../../platform/lines';
+import { worldLink } from '../studio/creation-path';
 import type { DeleteAnswer, EditAnswer, WorldPage, WorldUsage, WorldView } from '../../platform/worlds';
 import { h } from '../../shared/dom';
 
@@ -13,8 +14,11 @@ import { h } from '../../shared/dom';
 export interface HistoryActions {
     rename(world: WorldView, title: string): Promise<EditAnswer>;
     remove(world: WorldView): Promise<DeleteAnswer>;
-    /** The world as it is now, after a conflict; null when it is gone or cannot be read. */
-    reread(world: WorldView): Promise<WorldView | null>;
+    /**
+     * The world as it is now, after a conflict: `missing` when it is gone (or another's), `unavailable` when it cannot be
+     * read just now, which never takes it off the list (W3's review, its low).
+     */
+    reread(world: WorldView): Promise<WorldView | 'missing' | 'unavailable'>;
     more(cursor: string): Promise<WorldPage | null>;
     confirm(question: string): Promise<boolean>;
     /** A world left the list: the usage line is read again. */
@@ -24,7 +28,9 @@ export interface HistoryActions {
 export const COPY = {
     empty: 'No saved worlds yet. Worlds you make in the studio while signed in are saved here once they are on the stage.',
     cantOpen: 'Made for another version of the studio',
+    open: 'Open in the studio',
     renameConflict: 'This world changed elsewhere. Here it is as it is now.',
+    renameConflictUnread: 'This world changed elsewhere, and it can\'t be read right now. Reload the page to see it as it is.',
     renameRefused: 'That title can\'t be used. A title is 1 to 120 characters, on one line.',
     unavailable: 'That didn\'t work just now. Try again in a moment.',
     deleteConflict: 'This world changed elsewhere. Reload the page to see it.',
@@ -60,9 +66,11 @@ export function worldCard(world: WorldView, actions: HistoryActions): HTMLLIElem
     const cancel = h('button', { type: 'button', class: 'btn btn-quiet' }, 'Cancel');
     const form = h('div', { class: 'world-rename' }, input, save, cancel);
     form.hidden = true;
+    const open = h('a', { class: 'btn world-open', href: worldLink(current.worldId) }, COPY.open);
+    open.hidden = !opensLine(current.head.line);
     const rename = h('button', { type: 'button', class: 'btn btn-quiet' }, 'Rename');
     const remove = h('button', { type: 'button', class: 'btn btn-quiet world-delete' }, 'Delete');
-    const buttons = h('div', { class: 'world-actions' }, rename, remove);
+    const buttons = h('div', { class: 'world-actions' }, open, rename, remove);
     const card = h('li', { class: 'world-card' }, title, form, meta, badge, note, buttons);
 
     const busy = (on: boolean) => { for (const b of [rename, remove, save, cancel]) b.disabled = on; };
@@ -71,6 +79,7 @@ export function worldCard(world: WorldView, actions: HistoryActions): HTMLLIElem
         title.textContent = w.title;
         meta.textContent = savedAt(w.updatedAt);
         badge.hidden = opensLine(w.head.line);
+        open.hidden = !opensLine(w.head.line);
     };
     const editing = (on: boolean) => {
         form.hidden = !on;
@@ -98,7 +107,12 @@ export function worldCard(world: WorldView, actions: HistoryActions): HTMLLIElem
                     return editing(false);
                 case 'conflict': {
                     const now = await actions.reread(current);
-                    if (!now) return leave();
+                    if (now === 'missing') return leave();
+                    if (now === 'unavailable') {
+                        // Still the creator's world, as far as anyone knows: kept, and the way to see it as it is now said.
+                        note.textContent = COPY.renameConflictUnread;
+                        return editing(false);
+                    }
                     show(now);
                     note.textContent = COPY.renameConflict;
                     return editing(false);

@@ -39,7 +39,7 @@ function fakeApi(routes) {
             return () => release();
         },
         async send(req) {
-            sent.push({ method: req.method, path: req.path, body: req.body, key: req.idempotencyKey });
+            sent.push({ method: req.method, path: req.path, body: req.body, key: req.idempotencyKey, as: req.caller?.uid ?? null });
             const route = `${req.method} ${req.path.replace(/\?.*$/, '')}`;
             if (held.has(route)) {
                 const gate = held.get(route);
@@ -55,14 +55,24 @@ function fakeApi(routes) {
     };
 }
 
+/**
+ * The session's caller for the account as it is now (its `caller()`): the uid signed in (an anonymous caller has one too,
+ * and keeps it when it links Google), holding while this epoch does. A test that signs another account in sets `uid`.
+ */
+const callerOf = account => {
+    if (account.uid === null) return null;
+    const { epoch } = account;
+    return { uid: account.uid, still: () => account.epoch === epoch };
+};
+
 /** The controller over a fake gateway and account; `onWait` runs at each retry's or poll's pause (a switch, say). */
 function harness(routes, accountKind = 'active', onWait = () => {}) {
     const api = fakeApi(routes);
-    const account = { epoch: 1, kind: accountKind };
+    const account = { epoch: 1, kind: accountKind, uid: 'uid-1' };
     const states = [];
     let n = 0;
     const saves = createSaveController({
-        api, account: () => ({ ...account }), newKey: () => `key-0000-0000-000${++n}`, wait: async () => { onWait(account); },
+        api, account: () => ({ ...account, caller: callerOf(account) }), newKey: () => `key-0000-0000-000${++n}`, wait: async () => { onWait(account); },
         changed: s => states.push(s),
     });
     return { api, account, states, saves };
@@ -77,7 +87,14 @@ async function sentAtLeast(h, n) {
     assert.ok(h.api.sent.length >= n, `${n} request(s) sent`);
 }
 
-const installed = (stage, extra = {}) => ({ stage, source: 'live', snapshot: SNAPSHOT, design: DESIGN, view: null, title: 'The castle', improves: null, ...extra });
+/**
+ * An improvement's own candidate: a revision rewrites the world, so its id(C) is new (W3.6: the same id(C) improving a
+ * world is that world shown again, which is not saved twice). The rest of the castle's snapshot, as sealed.
+ */
+const improvedAt = stage => Object.freeze({ ...SNAPSHOT, id: String(stage).padStart(64, 'e') });
+const installed = (stage, extra = {}) => ({
+    stage, source: 'live', snapshot: extra.improves != null ? improvedAt(stage) : SNAPSHOT, design: DESIGN, view: null, title: 'The castle', improves: null, ...extra,
+});
 
 test('PL-FE10 a Live world installed while signed in is saved once, as the canonical text it was on the stage', async () => {
     const h = harness({ 'POST /v1/worlds': [world(0)] });
@@ -211,6 +228,66 @@ test('PL-FE4 a conflict keeps the world and its text; "Save as a new world" post
     assert.equal(h.saves.state().status, 'saved');
 });
 
+test('PL-FE4 a world changed after a refused or conflicted save is another request: a fresh key, never the old key with a new body', async () => {
+    const h = harness({
+        'POST /v1/worlds': [new ForgeError('bad-request', 400, 'not the schema'), world(0)],
+        [`POST /v1/worlds/${WORLD}/revisions`]: [new ForgeError('conflict', 409, 'moved'), world(1)],
+    });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    assert.equal(h.saves.state().status, 'failed');
+    // Improved after the refusal: nothing was committed, so its world is still to be made, under a key of its own.
+    h.saves.installed(installed(2, { improves: 1 }));
+    await h.saves.settled();
+    assert.equal(h.saves.state().status, 'saved');
+    // Improved again: a revision the platform refuses as stale; then improved once more.
+    h.saves.installed(installed(3, { improves: 2 }));
+    await h.saves.settled();
+    assert.equal(h.saves.state().status, 'conflict');
+    h.saves.installed(installed(4, { improves: 3 }));
+    await h.saves.settled();
+    assert.equal(h.saves.state().status, 'saved');
+    const sent = h.api.sent.map(r => ({ path: r.path, key: r.key, sha: r.body.sha256 }));
+    assert.deepEqual(sent.map(r => r.path), ['/v1/worlds', '/v1/worlds', `/v1/worlds/${WORLD}/revisions`, `/v1/worlds/${WORLD}/revisions`]);
+    assert.equal(new Set(sent.map(r => r.key)).size, 4, 'each body its own key');
+    assert.equal(new Set(sent.map(r => r.sha)).size, 4, 'four different bodies');
+});
+
+test('W3-review high: an account the session gives no caller for saves nothing: not sent unbound', async () => {
+    const api = fakeApi({ 'POST /v1/worlds': [world(0)] });
+    const saves = createSaveController({
+        api, account: () => ({ epoch: 1, kind: 'active', caller: null }), newKey: () => 'key-0000-0000-0001', wait: async () => {}, changed: () => {},
+    });
+    saves.installed(installed(1));
+    await saves.settled();
+    assert.deepEqual([api.sent.length, saves.state().status], [0, 'not-saved']);
+});
+
+test('W3-review mid: a reopened world installed after its account changed binds nothing: not "Saved", no revision of it; Save makes it a world of the account now', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0)] });
+    h.account.epoch = 2;
+    // Read under epoch 1, installed under epoch 2 (the Run finished after the switch).
+    h.saves.installed(installed(1, { source: 'reopened', saved: { worldId: WORLD, revisionId: REV[1], rowVersion: 3, epoch: 1 } }));
+    await h.saves.settled();
+    assert.deepEqual([h.saves.state().status, h.saves.state().worldId, h.api.sent.length], ['not-saved', null, 0]);
+    // The creator's Save: a world of its own for the account signed in now, never a revision of the other account's.
+    await h.saves.retry();
+    assert.deepEqual(h.api.sent.map(r => r.path), ['/v1/worlds']);
+    assert.equal(h.saves.state().status, 'saved');
+});
+
+test('W3-review mid: a reopened world on the stage when the account changes is no longer said "Saved", and its improvement revises nothing of the other account', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0)] });
+    h.saves.installed(installed(1, { source: 'reopened', saved: { worldId: WORLD, revisionId: REV[1], rowVersion: 3, epoch: 1 } }));
+    assert.equal(h.saves.state().status, 'saved');
+    h.account.epoch = 2;
+    h.saves.accountChanged();
+    assert.deepEqual([h.saves.state().status, h.saves.state().worldId], ['not-saved', null]);
+    h.saves.installed(installed(2, { improves: 1 }));
+    await h.saves.settled();
+    assert.deepEqual(h.api.sent.map(r => r.path), ['/v1/worlds'], 'a new world of this account, not a revision of the other\'s');
+});
+
 // The review of 11-03, its high: the transport attaches whoever is signed in when it sends, so a request must never go
 // out after the account it was asked under has changed. Each case switches the account at a different moment.
 test('PL-FE10 a retry is never sent once another account has signed in', async () => {
@@ -309,4 +386,171 @@ test('PL-FE2 the world client holds each answer to its closed DTO; another shape
     assert.equal(await readRevision(api, WORLD, REV[0]), 'missing');
     assert.equal(await readRevision(api, '../../me', REV[0]), 'missing', 'an id that is not a ULID never reaches a path');
     assert.equal(api.sent.length, 3);
+});
+
+// ---- W3.6: the controller as the studio drives it (the creations platform companion §7) ---------------------------
+
+test('W3.6 the same world shown again (Show it past its envelope) is not saved again: its save stands, and its improvement still revises it', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [world(1)] });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    // The studio passes the install the controller knows the world by, and the world's own candidate.
+    h.saves.installed(installed(2, { improves: 1, snapshot: SNAPSHOT }));
+    await h.saves.settled();
+    assert.equal(h.api.sent.length, 1, 'one save: the same text is never sent as a revision of itself');
+    assert.deepEqual([h.saves.state().status, h.saves.state().stage, h.saves.state().revisionId], ['saved', 1, REV[0]]);
+    // An improvement after it is still that world's revision, on the head its save produced.
+    h.saves.installed(installed(3, { improves: 1 }));
+    await h.saves.settled();
+    assert.deepEqual(h.api.sent.map(r => r.path), ['/v1/worlds', `/v1/worlds/${WORLD}/revisions`]);
+    assert.equal(h.api.sent[1].body.baseRevisionId, REV[0]);
+});
+
+test('W3.6 cleared(): once another kind of world holds the stage nothing more is said of the save before, which still ends', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0)] });
+    const release = h.api.hold('POST /v1/worlds');
+    h.saves.installed(installed(1));
+    await sentAtLeast(h, 1);
+    const said = h.states.length;
+    h.saves.cleared();
+    assert.equal(h.saves.state(), null, 'nothing on the stage to say a save of');
+    release();
+    await h.saves.settled();
+    assert.equal(h.states.length, said, 'the world that left says nothing more');
+    assert.equal(h.api.sent.length, 1, 'its save still went: it was installed, so it is kept (F8)');
+    await h.saves.retry();
+    assert.equal(h.api.sent.length, 1, '"Try again" acts on the world on the stage alone');
+});
+
+test('W3.6 a full storage: never sent again by itself; "Try again", once the creator has made room, sends it again', async () => {
+    const h = harness({ 'POST /v1/worlds': [new ForgeError('storage-full', 403, 'Your saved worlds are full.'), world(0)] });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    assert.deepEqual([h.saves.state().status, h.api.sent.length], ['storage-full', 1]);
+    await h.saves.retry();
+    assert.deepEqual([h.saves.state().status, h.api.sent.length], ['saved', 2]);
+    assert.notEqual(h.api.sent[1].key, h.api.sent[0].key, 'a definite refusal is settled: the next try is a new request');
+});
+
+test('W3.6 the account\'s word twice (its session\'s change, then its read) saves a world waiting for it once', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0), world(0)] }, 'anonymous');
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    assert.deepEqual([h.saves.state().status, h.api.sent.length], ['sign-in', 0]);
+    h.account.epoch = 2;
+    h.account.kind = 'active';
+    h.saves.accountChanged();
+    h.saves.accountChanged();
+    await h.saves.settled();
+    assert.deepEqual([h.saves.state().status, h.api.sent.length], ['saved', 1], 'one world, not a world and its copy');
+});
+
+// The second review of W3, its high: a world waiting for an account was saved into whichever account signed in next, by
+// itself. A world's owner is the caller its Run was pressed as (or the one signed in at its install); only the owner's
+// account saves it by itself, and the creator's press of Save makes it the caller's then.
+test('W3-review2 high: a world waiting for its owner\'s account is not saved into another account that signs in; Save there is the press', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0)] }, 'unknown');
+    // A's account has not been read (or A signed out): the world waits.
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    assert.equal(h.api.sent.length, 0);
+    // B signs in, and B's account is read: nothing goes out by itself.
+    Object.assign(h.account, { epoch: 2, uid: 'uid-B', kind: 'unknown' });
+    h.saves.accountChanged();
+    h.account.kind = 'active';
+    h.saves.accountChanged();
+    await h.saves.settled();
+    assert.deepEqual([h.api.sent.length, h.saves.state().status], [0, 'not-saved']);
+    // B's creator presses Save: now it is B's, and saved as B.
+    await h.saves.retry();
+    assert.deepEqual(h.api.sent.map(r => [r.path, r.as]), [['/v1/worlds', 'uid-B']]);
+    assert.equal(h.saves.state().status, 'saved');
+});
+
+test('W3-review2 high: its owner\'s account saves it once read (late), and the anonymous creator who links Google keeps it (P1)', async () => {
+    const late = harness({ 'POST /v1/worlds': [world(0)] }, 'unknown');
+    late.saves.installed(installed(1));
+    await late.saves.settled();
+    late.account.kind = 'active';
+    late.saves.accountChanged();
+    await late.saves.settled();
+    assert.deepEqual(late.api.sent.map(r => r.as), ['uid-1'], 'the same caller, its account read: saved');
+
+    const linked = harness({ 'POST /v1/worlds': [world(0)] }, 'anonymous');
+    linked.saves.installed(installed(1));
+    await linked.saves.settled();
+    assert.equal(linked.saves.state().status, 'sign-in');
+    // The link: the same uid, a new epoch (the provider changed), then the account read.
+    Object.assign(linked.account, { epoch: 2, kind: 'unknown' });
+    linked.saves.accountChanged();
+    linked.account.kind = 'active';
+    linked.saves.accountChanged();
+    await linked.saves.settled();
+    assert.deepEqual([linked.api.sent.map(r => r.as), linked.saves.state().status], [['uid-1'], 'saved']);
+});
+
+test('W3-review2 high: a Run pressed as A that installs once B has signed in is not saved for B by itself', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0)] });
+    Object.assign(h.account, { epoch: 2, uid: 'uid-B' });
+    h.saves.installed(installed(1, { ranAs: 'uid-1' }));
+    await h.saves.settled();
+    assert.deepEqual([h.api.sent.length, h.saves.state().status], [0, 'not-saved']);
+    // Pressed as B, after B signed in: B's world, saved as B (F8's account at the install).
+    const b = harness({ 'POST /v1/worlds': [world(0)] });
+    Object.assign(b.account, { epoch: 2, uid: 'uid-B' });
+    b.saves.installed(installed(1, { ranAs: 'uid-B' }));
+    await b.saves.settled();
+    assert.deepEqual(b.api.sent.map(r => r.as), ['uid-B']);
+});
+
+test('W3-review2 high: an improvement waiting for its account, its creation another account\'s, is not copied into the next account', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0), world(0)] });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    h.account.kind = 'unknown';
+    h.saves.installed(installed(2, { improves: 1 }));
+    await h.saves.settled();
+    Object.assign(h.account, { epoch: 2, kind: 'unknown', uid: null });
+    h.saves.accountChanged();
+    Object.assign(h.account, { epoch: 3, kind: 'active', uid: 'uid-B' });
+    h.saves.accountChanged();
+    await h.saves.settled();
+    assert.deepEqual(h.api.sent.map(r => [r.path, r.as]), [['/v1/worlds', 'uid-1']], 'A\'s world, once, as A; nothing for B');
+});
+
+test('W3-review high: every request of a save goes out bound to the caller it was asked as: the save, its retry and its polls', async () => {
+    const h = harness({
+        'POST /v1/worlds': [new ForgeError('unavailable', 0, 'no answer'), { status: 202, body: { operationId: OP, state: 'PENDING' } }],
+        [`GET /v1/me/operations/${OP}`]: [{ status: 200, body: { operationId: OP, state: 'DONE', status: 201, result: world(0) } }],
+    });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    assert.equal(h.saves.state().status, 'saved');
+    assert.deepEqual(h.api.sent.map(r => [r.method, r.as]), [['POST', 'uid-1'], ['POST', 'uid-1'], ['GET', 'uid-1']]);
+});
+
+test('W3-review2 high: the wait stays its owner\'s: after another account came and went, the owner\'s own account saves it', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0)] }, 'unknown');
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    Object.assign(h.account, { epoch: 2, uid: 'uid-B', kind: 'active' });
+    h.saves.accountChanged();
+    await h.saves.settled();
+    assert.equal(h.api.sent.length, 0, 'not B\'s');
+    Object.assign(h.account, { epoch: 3, uid: 'uid-1', kind: 'active' });
+    h.saves.accountChanged();
+    await h.saves.settled();
+    assert.deepEqual([h.api.sent.map(r => r.as), h.saves.state().status], [['uid-1'], 'saved'], 'A is back: A\'s world, saved as A');
+});
+
+test('W3-review2 high: an anonymous creator\'s "Sign in to keep this world" is not left on screen once another account is signed in', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0)] }, 'anonymous');
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    assert.equal(h.saves.state().status, 'sign-in');
+    // A collision's choice, or another tab: signed in as someone else, whose account is read.
+    Object.assign(h.account, { epoch: 2, uid: 'uid-B', kind: 'active' });
+    h.saves.accountChanged();
+    await h.saves.settled();
+    assert.deepEqual([h.api.sent.length, h.saves.state().status], [0, 'not-saved'], 'Save is offered now, not a sign-in');
 });

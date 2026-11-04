@@ -4,7 +4,7 @@
 // before it is put in a path. Which world is whose is the server's to say (F4): another account's is the same 404 as
 // none. Every call has a deadline, past which it is unavailable and a save may be sent again with the same key.
 
-import { ForgeError, type ErrorCode } from '../forge-client/errors';
+import { ForgeError, StaleCaller, type ErrorCode } from '../forge-client/errors';
 import type { Api } from '../forge-client/http';
 import { LINE_SHAPE } from './lines';
 
@@ -75,7 +75,9 @@ export type SaveAnswer =
     /** Refused for what it is (400, 413, 403, 404): sending it again changes nothing. */
     | { readonly kind: 'refused'; readonly code: ErrorCode; readonly message: string }
     /** No answer, a 503, a 429 or the deadline: the same request may be sent again with the same key. */
-    | { readonly kind: 'unavailable'; readonly status: number };
+    | { readonly kind: 'unavailable'; readonly status: number }
+    /** Its caller is no longer the one signed in (http.ts's `Caller`): not sent, so nothing to answer (W3's review). */
+    | { readonly kind: 'stale' };
 
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -155,6 +157,7 @@ const body = async (res: Response): Promise<unknown> => res.json().catch(() => n
 
 function saveFailure(error: unknown, signal?: AbortSignal): SaveAnswer {
     rethrowCancel(error, signal);
+    if (error instanceof StaleCaller) return { kind: 'stale' };
     if (!(error instanceof ForgeError)) return { kind: 'unavailable', status: 0 };
     switch (error.code) {
         case 'conflict': return { kind: 'conflict' };

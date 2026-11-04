@@ -9,14 +9,16 @@
 // Starters, the archive's replays and reopened worlds are not saved again; h1 worlds never reach here (Q123). Every try
 // of one request goes with one Idempotency-Key, so an answer lost to the network costs no second world; a request with
 // no answer stays the creation's until it is resolved under that key, so an improvement never makes a second world.
-// Each save belongs to the account epoch it was asked under, checked before every send, retry and poll: nothing goes
-// out under an account signed in meanwhile, and an answer that arrives after a change is dropped (F4). Nothing here
-// touches the stage: a failure says so and leaves the world where it is (F2).
+// Each save belongs to the account epoch it was asked under, checked before every send, retry and poll, and its requests
+// are bound to that epoch's caller (http.ts's `Caller`), so the transport itself refuses to send one under anyone else,
+// its own retry after a 401 included (W3's review, its high): nothing goes out under an account signed in meanwhile, and
+// an answer that arrives after a change is dropped (F4). Nothing here touches the stage: a failure says so and leaves
+// the world where it is (F2).
 
 import { canonicalJson, sha256Hex } from '../contract/adapters/canonical';
 import type { SolutionDesign } from '../contract/agent';
 import type { DeepReadonly } from '../contract/engine/frozen';
-import type { Api } from '../forge-client/http';
+import { boundTo, type Api, type Caller } from '../forge-client/http';
 import type { SealedCandidate } from '../loop/snapshot';
 import type { CameraView } from '../runtime/camera-path';
 import { worldArtifact } from './artifact';
@@ -38,14 +40,25 @@ export interface InstalledWorld {
     readonly title: string;
     /** The install number of the world this one improved ("Improve it"), or null. */
     readonly improves: number | null;
-    /** A reopened world's saved head, so its improvement is that world's revision. */
-    readonly saved?: { readonly worldId: string; readonly revisionId: string; readonly rowVersion: number };
+    /**
+     * The caller its Run was pressed as (the creator's Show it, the GPU go): its owner, whose account alone saves it by
+     * itself; null when no one was signed in then. Absent: the caller signed in at its install (the second review of W3).
+     */
+    readonly ranAs?: string | null;
+    /**
+     * A reopened world's saved head, so its improvement is that world's revision; and the account epoch it was read under.
+     * Installed under another (the account changed while it opened), it binds nothing: it is a world on the stage, not
+     * this account's (F4; W3's review, its mid). No epoch: the one signed in now.
+     */
+    readonly saved?: { readonly worldId: string; readonly revisionId: string; readonly rowVersion: number; readonly epoch?: number };
 }
 
-/** Who is signed in, as the session says it now: its epoch (E_auth) and whether its account can save. */
+/** Who is signed in, as the session says it now: its epoch (E_auth), whether its account can save, and its caller. */
 export interface AccountFacts {
     readonly epoch: number;
     readonly kind: 'anonymous' | 'active' | 'inactive' | 'unknown';
+    /** The caller this epoch's requests may go out as (the session's `caller()`); a save is sent only bound to it. */
+    readonly caller: Caller | null;
 }
 
 export interface SavePorts {
@@ -77,9 +90,20 @@ export interface SaveState {
 }
 
 export interface SaveController {
-    /** A world was installed on the stage (R = installed). */
+    /**
+     * A world was installed on the stage (R = installed). The same world shown again as it was (the same candidate, as
+     * Show it does past its envelope) is not saved again: its save stands (W3.6).
+     */
     installed(world: InstalledWorld): void;
-    /** "Try again", or "Save" after a refusal: the same key for the same request. */
+    /**
+     * The stage now holds a world this controller does not save (h1's, the backdrop, nothing): nothing is said of the
+     * one before any more, whose save, under way, still ends as it ends (it was installed, so it is kept: F8).
+     */
+    cleared(): void;
+    /**
+     * The creator's "Try again", or "Save" after a refusal: the same key for the same request. Also after a full storage,
+     * once the creator has made room (never by itself: PL-FE10).
+     */
     retry(): Promise<void>;
     /** After a conflict: the world on the stage as a new world, under a fresh key. */
     saveAsNew(): Promise<void>;
@@ -133,8 +157,16 @@ interface Binding {
     detail: string;
     /** A later install improved this one before its save ran: the later one stands for it. */
     superseded: boolean;
-    /** Its save stopped for want of an account (anonymous, or not known yet): one that signs in saves it. */
+    /**
+     * Its save stopped for want of an account (anonymous, or not known yet): its owner's account saves it once active
+     * (an anonymous creator who links Google keeps the uid, P1; an account whose read answers late), and no other.
+     */
     waitingForAccount: boolean;
+    /**
+     * Whose world this is (the second review of W3, its high): the caller its Run was pressed as, or the one signed in at
+     * its install. Nothing is saved by itself for anyone else; the creator's press of Save makes it the caller's then.
+     */
+    owner: string | null;
 }
 
 /** What one request came to, or `stale`: the account changed, so nothing more was sent and nothing is applied. */
@@ -163,23 +195,27 @@ export function createSaveController(ports: SavePorts): SaveController {
         return chain;
     };
 
-    const send = (r: Unresolved): Promise<SaveAnswer> => {
+    const send = (api: Api, r: Unresolved): Promise<SaveAnswer> => {
         const request = { key: r.key, text: r.text, sha256: r.sha256 };
-        return r.base ? reviseWorld(ports.api, r.base, request) : createWorld(ports.api, r.title, request);
+        return r.base ? reviseWorld(api, r.base, request) : createWorld(api, r.title, request);
     };
 
     /**
      * `r` sent, retried once when unanswered, and followed to its answer when under way; the account checked before
-     * every send, retry and poll (the review's high: a retry must never go out under an account signed in meanwhile,
-     * since the transport attaches whoever is signed in when it sends), and once more when the answer arrives (F4).
+     * every send, retry and poll (the 11-03 review's high: a retry must never go out under an account signed in
+     * meanwhile), and once more when the answer arrives (F4). Every request goes out bound to `caller`, so the transport
+     * checks it again once the credentials are in hand, its own retry after a 401 included (W3's review, its high).
      */
-    const dispatch = async (r: Unresolved, live: () => boolean): Promise<Outcome> => {
+    const dispatch = async (r: Unresolved, live: () => boolean, caller: Caller): Promise<Outcome> => {
         if (!live()) return 'stale';
-        let answer = await send(r);
+        const api = boundTo(ports.api, { uid: caller.uid, still: () => live() && caller.still() });
+        let answer = await send(api, r);
+        if (answer.kind === 'stale') return 'stale';
         if (answer.kind === 'unavailable') {
             await ports.wait(RETRY_MS);
             if (!live()) return 'stale';
-            answer = await send(r);
+            answer = await send(api, r);
+            if (answer.kind === 'stale') return 'stale';
         }
         if (answer.kind === 'pending') {
             const operationId = answer.operationId;
@@ -187,7 +223,7 @@ export function createSaveController(ports: SavePorts): SaveController {
             for (let i = 0; i < POLLS; i++) {
                 await ports.wait(POLL_MS);
                 if (!live()) return 'stale';
-                const op = await readOperation(ports.api, operationId);
+                const op = await readOperation(api, operationId);
                 if (!op || op.state === 'PENDING') continue;
                 const world = parseWorldView(op.result);
                 answer = op.state === 'DONE' && op.status === 201 && world ? { kind: 'saved', world }
@@ -217,6 +253,7 @@ export function createSaveController(ports: SavePorts): SaveController {
             case 'storage-full': return ['storage-full', ''];
             case 'refused': return ['failed', `${answer.code}: ${answer.message}`];
             case 'pending': return ['failed', 'still under way'];
+            case 'stale': return ['not-saved', 'another account signed in before it was sent'];
             default: return [answer.status === 0 ? 'offline' : 'failed', `no answer to keep (status ${answer.status})`];
         }
     };
@@ -233,13 +270,18 @@ export function createSaveController(ports: SavePorts): SaveController {
         }
         b.waitingForAccount = false;
         if (account.kind !== 'active') return set(b, 'not-saved', `the account is ${account.kind}`);
+        // The caller this epoch was read as: every request of this save goes out as it, or not at all.
+        const caller = account.caller;
+        if (!caller) return set(b, 'not-saved', 'no signed-in caller to save as');
+        // Another account's world is not saved for this one by itself: Save is the creator's press (§7, F4).
+        if (caller.uid !== b.owner) return set(b, 'not-saved', 'another account signed in');
         const l = b.lineage;
         if (l.epoch !== null && l.epoch !== epoch) return set(b, 'not-saved', 'saved under another account');
         set(b, 'saving');
         // The creation's last request may have committed: resolved first, so an improvement never makes a second world.
         const before = l.unresolved;
         if (before && before.stage !== b.world.stage) {
-            const resolved = await dispatch(before, live);
+            const resolved = await dispatch(before, live, caller);
             if (resolved === 'stale') return set(b, 'not-saved', 'another account signed in while it was saved');
             settle(l, before, resolved);
             if (l.unresolved) {
@@ -261,7 +303,7 @@ export function createSaveController(ports: SavePorts): SaveController {
         // Bound to this account from its first request; unknown until answered.
         l.epoch = epoch;
         l.unresolved = r;
-        const outcome = await dispatch(r, live);
+        const outcome = await dispatch(r, live, caller);
         if (outcome === 'stale') return set(b, 'not-saved', 'another account signed in while it was saved');
         settle(l, r, outcome);
         const [status, detail] = statusOf(outcome);
@@ -272,9 +314,20 @@ export function createSaveController(ports: SavePorts): SaveController {
         installed(world) {
             if (disposed) return;
             const before = current;
+            // The same world again (Show it past its envelope): the same text, so the same save, which stands as it is.
+            if (before && world.improves !== null && before.world.stage === world.improves && before.world.snapshot.id === world.snapshot.id
+                && before.world.source === world.source) {
+                ports.changed(view(before));
+                return;
+            }
             let lineage: Lineage;
+            // A reopened world read under another epoch than this one is not this account's world: it binds nothing.
+            let foreignOpen = false;
             if (world.source === 'reopened' && world.saved) {
-                lineage = { ...world.saved, epoch: ports.account().epoch, unresolved: null };
+                const now = ports.account().epoch;
+                const { worldId, revisionId, rowVersion, epoch = now } = world.saved;
+                foreignOpen = epoch !== now;
+                lineage = foreignOpen ? fresh() : { worldId, revisionId, rowVersion, epoch: now, unresolved: null };
             } else if (world.improves !== null && before && before.world.stage === world.improves) {
                 // The improved world continues its creation: the same lineage, so it saves on the head its save produced.
                 lineage = before.lineage;
@@ -282,10 +335,13 @@ export function createSaveController(ports: SavePorts): SaveController {
             } else {
                 lineage = fresh();
             }
-            const b: Binding = { world, lineage, status: 'idle', detail: '', superseded: false, waitingForAccount: false };
+            // Its owner: the caller its Run was pressed as, else the one signed in now (the second review of W3).
+            const owner = world.ranAs !== undefined ? world.ranAs : ports.account().caller?.uid ?? null;
+            const b: Binding = { world, lineage, status: 'idle', detail: '', superseded: false, waitingForAccount: false, owner };
             current = b;
             if (world.source === 'reopened') {
-                set(b, lineage.worldId ? 'saved' : 'idle');
+                if (foreignOpen) set(b, 'not-saved', 'opened under another account');
+                else set(b, lineage.worldId ? 'saved' : 'idle');
                 return;
             }
             if (world.source !== 'live') {
@@ -296,21 +352,30 @@ export function createSaveController(ports: SavePorts): SaveController {
             const epoch = ports.account().epoch;
             void enqueue(() => save(b, epoch));
         },
+        cleared() {
+            current = null;
+        },
         retry() {
             const b = current;
-            if (!b || b.world.source !== 'live' || !['failed', 'offline', 'sign-in', 'not-saved'].includes(b.status)) return Promise.resolve();
+            // A reopened world whose binding an account change dropped is saved as the creator's press asks, as a new
+            // world of the account signed in now (the companion §7: after a switch, saving it is the creator's press).
+            const savable = b !== null && (b.world.source === 'live' || (b.world.source === 'reopened' && b.lineage.worldId === null));
+            if (!b || !savable || !['failed', 'offline', 'sign-in', 'not-saved', 'storage-full'].includes(b.status)) return Promise.resolve();
             b.superseded = false;
-            const epoch = ports.account().epoch;
-            if (b.lineage.epoch !== null && b.lineage.epoch !== epoch) b.lineage = fresh();
-            return enqueue(() => save(b, epoch));
+            const account = ports.account();
+            if (b.lineage.epoch !== null && b.lineage.epoch !== account.epoch) b.lineage = fresh();
+            // The creator's press: the world is now the caller's who pressed, and saved for that account alone.
+            b.owner = account.caller?.uid ?? null;
+            return enqueue(() => save(b, account.epoch));
         },
         saveAsNew() {
             const b = current;
             if (!b || b.status !== 'conflict') return Promise.resolve();
-            // A conflict is known not to have committed: the world is saved as a creation of its own.
+            // A conflict is known not to have committed: the world is saved as a creation of its own, by the press.
             b.lineage = fresh();
-            const epoch = ports.account().epoch;
-            return enqueue(() => save(b, epoch, true));
+            const account = ports.account();
+            b.owner = account.caller?.uid ?? null;
+            return enqueue(() => save(b, account.epoch, true));
         },
         accountChanged() {
             const b = current;
@@ -319,11 +384,20 @@ export function createSaveController(ports: SavePorts): SaveController {
             // A creation another account's requests began is never continued, nor its unknown request resolved, here.
             const foreign = b.lineage.epoch !== null && b.lineage.epoch !== account.epoch;
             if (foreign) b.lineage = fresh();
-            if (b.waitingForAccount && account.kind === 'active') {
-                // The anonymous creator signed in (the companion's P1): the world on the stage is kept now.
+            const mine = account.caller !== null && account.caller.uid === b.owner;
+            if (b.waitingForAccount && account.kind === 'active' && mine) {
+                // Its owner's account is active: the anonymous creator who linked Google (the companion's P1, the same
+                // uid), or an account whose read answered late. Once: a second word of the same account (its session's
+                // change, then its account read) must not send it twice.
+                b.waitingForAccount = false;
                 void enqueue(() => save(b, account.epoch));
-            } else if (foreign && b.world.source === 'live') {
-                // Saved under another account: not continued, nor copied, by itself. Save is the creator's press.
+            } else if (b.waitingForAccount && account.kind === 'active') {
+                // Another account (the second review of W3, its high): it does not take a world waiting for its owner
+                // by itself. The wait stays the owner's; Save is this account's creator's press.
+                set(b, 'not-saved', 'another account signed in');
+            } else if (foreign && (b.world.source === 'live' || b.world.source === 'reopened')) {
+                // Saved under another account: not continued, nor copied, by itself. Save is the creator's press. A
+                // reopened world too: it is no longer this account's saved world, so "Saved" is not said of it (F4).
                 set(b, 'not-saved', 'another account signed in');
             }
         },
