@@ -1,6 +1,7 @@
 {
   "name": "wexy-public-html",
   "private": true,
+  "license": "SEE LICENSE IN ../../license.md",
   "type": "module",
   "main": "index.mjs",
   "engines": { "node": "22" },

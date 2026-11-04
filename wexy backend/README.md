@@ -70,7 +70,10 @@ operator-run secret manager:
 
 ```sh
 infisical run --env=dev -- docker compose -f compose.dev.yaml -f compose.platform.yaml -f compose.tunnel.yaml up -d
-WEXY_IMAGE_TAG=0.0.5 infisical run --env=prod -- docker compose -f compose.prod.yaml -f compose.tunnel.yaml up -d
+# Replace the version below with the complete three-image release verified on dev.
+WEXY_IMAGE_TAG=0.0.5 infisical run --env=prod -- docker compose -f compose.prod.yaml -f compose.platform.yaml -f compose.tunnel.yaml pull
+WEXY_IMAGE_TAG=0.0.5 infisical run --env=prod -- docker compose -f compose.prod.yaml -f compose.platform.yaml -f compose.tunnel.yaml up -d --wait
+WEXY_SMOKE_ORIGIN=https://wexy.ai bash deploy.sh smoke https://api.wexy.ai
 ```
 
 Without the platform file the accounts' routes answer 503 and nothing else changes; without the tunnel file
@@ -84,4 +87,6 @@ metrics answer on separate ports (8401, 8411, 8431) that the tunnel does not rou
 
 Gateway protection, authentication and money-control patterns derive from the
 author's FlareLink backend; source headers record origins. The Maven wrapper is
-Apache's. Project licence designation: MIT.
+Apache's. Original Wexy material in this revision is source-available for evaluation under
+`../license.md`, not MIT/open-source. Prior grants and third-party licenses remain unaffected.
+See the root README for complete no-key/mock/live setup, PowerShell commands and safety guidance.

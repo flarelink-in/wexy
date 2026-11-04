@@ -5,14 +5,14 @@
   "description": "Wexy's browser half: worlds planned and written by Meta's models, checked and run live on the viewer's graphics card, filmed and shared as links.",
   "type": "module",
   "author": "Vikas Kumar Singh",
-  "license": "MIT",
+  "license": "SEE LICENSE IN ../license.md",
   "engines": {
     "node": ">=24.12.0"
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build && node scripts/prepare-hosting.mjs prod",
-    "build:dev": "tsc --noEmit && vite build --outDir dist-dev && node scripts/prepare-hosting.mjs dev",
+    "build": "tsc --noEmit && vite build --mode prod && node scripts/prepare-hosting.mjs prod",
+    "build:dev": "tsc --noEmit && vite build --mode development --outDir dist-dev && node scripts/prepare-hosting.mjs dev",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "node --import ./test/register.mjs --test \"test/**/*.test.mjs\"",

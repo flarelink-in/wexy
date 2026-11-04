@@ -1,9 +1,10 @@
 ﻿# Wexy frontend
 
 Worlds, not videos. Wexy's browser studio runs 3D worlds on the viewer's GPU and
-captures films in wide, vertical or square formats. Model clients, a host function
-contract and a verification loop are being integrated with the backend; the full
-live browser path remains under development.
+captures films in wide, vertical or square formats. Model clients, checked GPU function
+contracts and verification connect the studio to the backend. The engine-aware creator
+is opt-in through `?create=agent`; its checked build still requires device admission and
+the separate **Show it** step. See the root README for the complete evaluation guide.
 
 ## Setup
 
@@ -145,4 +146,6 @@ Embedded host rules are runtime resources and are included with the application.
 Framework-free TypeScript and Vite; null-graph for WebGPU; mediabunny for MP4 capture;
 Firebase Auth and App Check. The studio and engine originated in the author's
 pre-existing playground. NullGraph is the author's separately published WebGPU
-engine. Project licence designation: MIT.
+engine. Original Wexy material in this revision is source-available for evaluation under
+`../license.md`, not MIT/open-source. Prior license grants and third-party licenses are
+unaffected. See the root README for the full local evaluation and live-generation setup.
