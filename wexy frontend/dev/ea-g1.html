@@ -5,8 +5,9 @@
     <title>Wexy EA-G1</title>
     <style>
         body { margin: 0; background: #0b0b0c; color: #c8c8c8; font: 12px/1.5 ui-monospace, monospace; }
-        /* A little over every envelope the stage computes at the viewport's live cap (2.3 MP, whatever the aspect), so the
-           pixels a run covers are pixels it rendered; the runner's --small asks for 1280×720, which covers that alone. */
+        /* Over the viewport's live cap (2.3 MP), which holds the canvas to a little under it: so each run is recorded at
+           the envelope the stage computes at that cap (ea-g1.ts, coveredPixels), every canvas the cap allows under it. The
+           runner's --small asks for 1280×720, under the cap, which covers that alone. */
         canvas { display: block; width: 2048px; height: 1152px; }
         body.small canvas { width: 1280px; height: 720px; }
         pre { position: fixed; top: 0; left: 0; margin: 8px; max-height: 45vh; max-width: 90vw; overflow: auto; background: #0b0b0ccc; }

@@ -13,6 +13,12 @@ data:{"n":2,"purpose":"repair"}
 event:usage
 data:{"n":2,"generationId":"gen-2","in":30000,"out":2000,"reasoning":800,"cached":null,"costMicroUsd":46000}
 
+event:call
+data:{"n":3,"purpose":"repair"}
+
+event:usage
+data:{"n":3,"generationId":"gen-3","in":30000,"out":2000,"reasoning":800,"cached":null,"costMicroUsd":46000}
+
 event:error
-data:{"code":"upstream","message":"the model's answer missed the action schema after a repair: it is not a JSON object"}
+data:{"code":"upstream","message":"the model's answer missed the action schema after a repair: it is not a JSON object (Unrecognized token 'Blocks': was expecting (JSON String, Number, Array, Object or token 'null', 'true' or 'false'))"}
 

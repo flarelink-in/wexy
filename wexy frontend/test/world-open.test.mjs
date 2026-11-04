@@ -209,6 +209,12 @@ test('W3-review the studio binds what it saves and opens to the account: its cal
     assert.match(method('private async runCandidate('), /const r = await stage\.run\(snapshot, compiled, signal\);/);
 });
 
+test('2026-11-04 Developer view\'s probe line names each kind\'s cap, not one budget of 250 ms', () => {
+    const main = readFileSync(join(ROOT, 'src/shell/studio/main.ts'), 'utf8');
+    assert.match(main, /parts\.push\(`caps: init \$\{p\.caps\.init\}, step \$\{p\.caps\.step\}, frame \$\{p\.caps\.frame\}, first frame \$\{p\.caps\.firstFrame\} ms`\);/);
+    assert.doesNotMatch(main, /budgetMs \?\? 250/);
+});
+
 test('account-guards review: Show it first says why when the stage is held, and Try again reads an account not read yet before it saves', () => {
     const main = readFileSync(join(ROOT, 'src/shell/studio/main.ts'), 'utf8');
     // L3: the confirmation's Show it first is the creator's Show it; when it cannot start, it is said, not lost.

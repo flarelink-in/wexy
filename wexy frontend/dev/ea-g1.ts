@@ -114,12 +114,20 @@ async function run(options: { lose?: boolean } = {}) {
     const present = { turn: () => 1, device: () => generation };
     const size = () => ({ width: vp.canvas.width, height: vp.canvas.height });
     const envelope = envelopeOf(size(), MAX_LIVE_PIXELS);
+    /**
+     * The pixels a run covers (2026-11-04). The canvas's, unless the live cap holds it: since EA9.3's review the viewport
+     * caps even its first canvas (liveSize), so a box over 2.3 MP draws a canvas a little under every envelope the stage
+     * computes at that cap (2022×1137 against 2023×1138 here), where on 11-02 it drew 2048×1152, a little over. Then the
+     * envelope this run was admitted and probed at, which every canvas the cap allows is under.
+     */
+    const box = vp.canvas.clientWidth * vp.canvas.clientHeight * Math.min(window.devicePixelRatio || 1, 1.5) ** 2;
+    const coveredPixels = box > MAX_LIVE_PIXELS ? envelope.width * envelope.height : size().width * size().height;
     const engine = vp.engine as unknown as { passes: unknown[]; computeStages: unknown[]; batches: unknown[] };
     const count = () => ({ passes: engine.passes.length, stages: engine.computeStages.length, batches: engine.batches.length });
     const baseline = count();
     log(`adapter: ${vp.gpuLabel} · ${JSON.stringify(identity)}`);
     log(`environment: ${'key' in environment ? environment.key : `unknown (${environment.unknown})`}`);
-    log(`canvas ${size().width}×${size().height}; the envelope ${envelope.width}×${envelope.height}`);
+    log(`canvas ${size().width}×${size().height}; the envelope ${envelope.width}×${envelope.height}; coverage recorded at ${coveredPixels} pixels`);
 
     /** One Run as the studio's: a stage pinned to this candidate alone, its go pressed, everything recorded. */
     const stageFor = (snap: Snapshot, headless: (w: number, h: number) => Promise<HeadlessPort> = (w, h) => createHeadlessPort(device, w, h),
@@ -226,8 +234,8 @@ async function run(options: { lose?: boolean } = {}) {
                     record.underPredicted.push(`first frame: ${round(p.firstFrameMs)} predicted, ${round(a.firstFrameMs)} ran`);
                 }
             }
-            // What it covers is what it rendered: the canvas's pixels, which the runner makes a little over every envelope.
-            record.demands = (() => { const d = demandsOf(snap.x, size().width * size().height); return typeof d === 'string' ? null : d; })();
+            // What it covers: the canvas it rendered, or the envelope the live cap holds that canvas to (`coveredPixels`).
+            record.demands = (() => { const d = demandsOf(snap.x, coveredPixels); return typeof d === 'string' ? null : d; })();
             // The old head goes after the switch, as the studio's does; this one goes too unless it is kept.
             record.retireError = retire(head.runtime, head.held);
             head.runtime = r.runtime;

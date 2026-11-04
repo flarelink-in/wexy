@@ -346,7 +346,7 @@ test('EA-S13 only a 401 before the stream is retried, once, with a fresh App Che
 });
 
 test('EA-S14 the deadline is absolute: heartbeats through a silence never extend it, and it ends the turn as a timeout', { timeout: 5_000 }, async () => {
-    assert.equal(AGENT_DEADLINE_MS, 315_000, 'the server\'s 300 s, a call in flight included, and 15 s for the last event');
+    assert.equal(AGENT_DEADLINE_MS, 615_000, 'the server\'s 600 s (2026-11-04), a call in flight included, and 15 s for the last event');
     const hand = events(wire('handed-off.sse'));
     let timer = 0;
     const state = { cancelled: false };

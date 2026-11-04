@@ -2,7 +2,7 @@
 // live candidates and their ×4 and ×16 variants run through the stage as the studio's Run runs them, with the gate pinned
 // to each candidate in turn (the EA-G1 bootstrap), then ten replacements and a cancel, then the coverage worlds of 11-02
 // (and, with --lose, a device loss). Chrome runs with its WebGPU developer features, so the adapter reports its model and
-// the environment has a key (eligibility.ts, ea5-env.v2). No model is called and nothing is spent. Results:
+// the environment has a key (eligibility.ts, ea5-env.v3). No model is called and nothing is spent. Results:
 // dev/out/ea-g1/<time>/<gpu>.json, and the eligibility entries it wrote, <gpu>.eligibility.json, for the developer to
 // review before they ship. Exit 0 when every live world installs at scale 1 with no uncaptured error, no prediction under
 // what ran, the engine back at its baseline after each world and the ten replacements, and the cancel leaving nothing; 1

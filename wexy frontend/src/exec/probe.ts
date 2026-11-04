@@ -1,5 +1,6 @@
 // The fraction probe and the sanity look (EA5.3; executor-design.md §9, steps 1, 2 and 4). Nothing generated runs at
-// full size until the probe has predicted every submission of the world under h1's 250 ms cap (I3; Q90).
+// full size until the probe has predicted every submission of the world under its kind's cap (I3; Q90, revised
+// 2026-11-04: init and the first frame 1,000 ms, a frame 500 ms, a fixed step h1's 250 ms).
 //
 // The variants (step 1). A host projection of C, never C itself: W's work counts divided by 8 and by 4 (a storage
 // buffer's elements, a stage's invocations, a batch's instances; each rounded up, at least 1), resolved again under the
@@ -14,9 +15,9 @@
 // submission (a first run, a warm-up, a timed batch, a resize) runs inside an error checkpoint and is then fenced; one
 // that raises a validation or memory error voids its timing and the probe (the EA5.3 review, H1). After every await the
 // probe checks it is still wanted (a cancel, a newer turn, another device generation) and stops submitting if not (M1).
-// Each phase's first operation is timed alone and fenced; if that single 1/8 operation is near the cap, nothing repeats it.
-// Only then the bounded untimed warm-up and the timed runs, a step's and a frame's in batches; each warm-up and batch is
-// sized to the work, so none holds much more than the cap (batchRuns). Init and a step are pure work, scaled from the two
+// Each phase's first operation is timed alone and fenced; if that single 1/8 operation is near its cap, nothing repeats
+// it. Only then the bounded untimed warm-up and the timed runs, a step's and a frame's in batches; each warm-up and batch
+// is sized to the work, so none holds much more than a quiet window's 250 ms (batchRuns). Init and a step are pure work, scaled from the two
 // fractions by a two-point fit floored by direct scaling (eight times the 1/8, four times the 1/4); a frame is part work, part
 // pixels (the post chain, a fullscreen pass), so it is fitted in both, as h1's probe does: direct work scaling would
 // multiply the pixel-bound part by four to eight and refuse slow but safe worlds (Q90). Every prediction carries the
@@ -73,8 +74,17 @@ export const WORLD_PROBE = {
     timerGrainMs: 0.1,
     timerFloorMs: 1.0,
     margin: 1.25,
-    /** The one time-based refusal (Q90): no predicted submission over this. */
-    maxSubmissionMs: 250,
+    /**
+     * The time-based refusals (Q90, revised 2026-11-04; the user: "even a complicated idea, with low frame rates shouldn't
+     * be rejected"): no predicted submission of a kind over its cap. What they guard against is a reset: Windows resets a
+     * GPU that one submission keeps busy for about 2 s, and the page must be reloaded. Init and the first frame run once,
+     * so they may hold more of that time. A frame repeats, and the live view lowers its pixels when it is slow (to a
+     * quarter). A fixed step runs up to four times a frame when the clock catches up (the viewport's), so it keeps h1's
+     * 250 ms. Each cap, the margin taken off, stays at least 2.5 times under the reset.
+     */
+    caps: { init: 1000, step: 250, frame: 500, firstFrame: 1000 },
+    /** A timed batch holds about this much work at most (`batchRuns`): the Head's quiet window, never a refusal. */
+    batchMs: 250,
     /** The steady frame's target and its "below 10 fps" line: warnings, never refusals (Q90). */
     steadyTargetMs: 33,
     steadySlowMs: 100,
@@ -188,25 +198,30 @@ export function median(values: readonly number[]): number {
  * least one and at most `most`. EA-G1 calibrated 24 frames a batch on light frames, which fill a few tens of milliseconds;
  * its over-budget world drew 106 ms a frame, so the same 24 kept the AMD iGPU busy 2.5 s a batch, about 15 s before the
  * probe refused it, and in the studio each batch is a quiet window the Head holds through. So no batch holds much more
- * than one submission may (Q90's 250 ms); every live world's frame still fits 24.
+ * than `batchMs` (Q90's first 250 ms, kept when the caps rose); every live world's frame still fits 24.
  */
 export function batchRuns(ms: number, runs: number, most: number): number {
     const pace = ms / runs;
-    return pace > 0 ? Math.max(1, Math.min(most, Math.floor(WORLD_PROBE.maxSubmissionMs / pace))) : most;
+    return pace > 0 ? Math.max(1, Math.min(most, Math.floor(WORLD_PROBE.batchMs / pace))) : most;
 }
 
 /**
  * A pure-work phase (init, a fixed step) at full size from its 1/8 and 1/4 timings: within the floor band, floor scaling;
  * above it, the two-point fit floored by direct scaling, with the margin; non-finite, negative, or falling as the work
- * doubles, inconclusive (EA-X15). The band is the device's own (`floorMs`): at least the timer's, and twice an empty
- * submission's fence latency where that is more (EA-G1 found 2.7 ms on the AMD iGPU, where tiny work timed as latency).
+ * doubles by more than noise, inconclusive (EA-X15). The band is the device's own (`floorMs`): at least the timer's, and
+ * twice an empty submission's fence latency where that is more (EA-G1 found 2.7 ms on the AMD iGPU, where tiny work timed
+ * as latency). A fall within noise (2026-11-04), as a frame's (predictFrame): two grains, half the floor a fence may add,
+ * and a tenth. EA-G1 on the GTX 1650 refused clean coverage worlds on init's 1/4 at 2.70 ms under its 1/8's 2.95 ms, and
+ * 2.75 under 3.45, each above a 1 ms floor; such a pair has no slope, so direct scaling judges it, which bounds any work
+ * that grows at most linearly. A fall past noise stays inconclusive.
  */
 export function predictPair(m8: number, m4: number, floorMs: number = WORLD_PROBE.timerFloorMs): Prediction {
     const { timerGrainMs, margin } = WORLD_PROBE;
     if (!finiteNonNegative(m8, m4)) return { inconclusive: `timings ${m8} and ${m4} ms are not finite and non-negative` };
     if (m8 <= floorMs && m4 <= floorMs) return { ms: Math.max(m8 * 8, m4 * 4, timerGrainMs * 8) * margin, rule: 'floor' };
-    if (m4 < m8) return { inconclusive: `1/4 measured ${m4.toFixed(3)} ms, below 1/8's ${m8.toFixed(3)} ms, above the floor of ${floorMs.toFixed(3)} ms` };
-    const slope = (m4 - m8) / (1 / 4 - 1 / 8);
+    const noise = 2 * timerGrainMs + floorMs / 2 + 0.1 * m8;
+    if (m4 < m8 - noise) return { inconclusive: `1/4 measured ${m4.toFixed(3)} ms, below 1/8's ${m8.toFixed(3)} ms, above the floor of ${floorMs.toFixed(3)} ms` };
+    const slope = Math.max(0, (m4 - m8) / (1 / 4 - 1 / 8));
     const fixed = Math.max(0, m8 - slope / 8);
     return { ms: Math.max(fixed + slope, m8 * 8, m4 * 4) * margin, rule: 'fit' };
 }
@@ -346,7 +361,7 @@ export interface WorldProbe {
     /** A frame at full work and the target's pixels: its compute, its draws and its post chain. */
     drawMsPerFrame: number;
     initMs: number;
-    /** The worst predicted submission: what the cap judges. */
+    /** The worst predicted submission, of any kind (each is judged by its own kind's cap, `caps`). */
     maxSubmissionMs: number;
     /** The first full-size frame, cold: its pipelines' first use and its targets' first touch on top of a frame. */
     firstFrameMs: number;
@@ -358,7 +373,8 @@ export interface WorldProbe {
     peakBytes: number;
     viewport: Target;
     profile: string;
-    budgetMs: number;
+    /** The caps it judged by: init, a fixed step, a frame and the first frame (WORLD_PROBE.caps). */
+    caps: Readonly<{ init: number; step: number; frame: number; firstFrame: number }>;
     phases: { init: PhaseProbe; step: PhaseProbe; frame: PhaseProbe };
     projection: { fraction: number; changed: string[] }[];
     warnings: string[];
@@ -387,10 +403,10 @@ const hasGpuWork = (x: Graph, phase: 'fixedStep') => x.schedule[phase].some(id =
  * and every variant released whatever happens. Over the cap, or inconclusive, it refuses with the numbers.
  */
 export async function probeCandidate(snapshot: Snapshot, deps: ProbeDeps): Promise<ProbeOutcome> {
-    const { margin, maxSubmissionMs, warm, runs, retries, small, large } = WORLD_PROBE;
+    const { margin, caps, warm, runs, retries, small, large } = WORLD_PROBE;
     const pixels = deps.target.width * deps.target.height;
     const contaminated = deps.shared && !deps.quiet;
-    const partial: Partial<WorldProbe> = { viewport: { ...deps.target }, profile: WORLD_PROBE.profile, budgetMs: maxSubmissionMs, contaminated };
+    const partial: Partial<WorldProbe> = { viewport: { ...deps.target }, profile: WORLD_PROBE.profile, caps, contaminated };
     const refuse = (reason: string): ProbeOutcome => ({ ok: false, reason, probe: partial });
     /** Neither cancelled nor stale (another turn, another device generation): checked after every await (the EA5.3 review, M1). */
     const fresh = () => {
@@ -452,11 +468,11 @@ export async function probeCandidate(snapshot: Snapshot, deps: ProbeDeps): Promi
                 release?.();
             }
         };
-        /** A first run alone: refused, unrepeated, when this variant alone is predicted near the cap. */
-        const firstRun = async (b: Built, work: () => void, what: string): Promise<number | string> => {
+        /** A first run alone: refused, unrepeated, when this variant alone is predicted near its kind's `cap`. */
+        const firstRun = async (b: Built, work: () => void, what: string, cap: number): Promise<number | string> => {
             const ms = await checked(b, what, work);
             const scale = b.fraction === 8 ? 1 : 2;
-            if (ms * scale * margin > maxSubmissionMs) return `EA_PROBE ${what}: its 1/${b.fraction} variant alone took ${ms.toFixed(1)} ms, near the ${maxSubmissionMs} ms cap; nothing repeated it`;
+            if (ms * scale * margin > cap) return `EA_PROBE ${what}: its 1/${b.fraction} variant alone took ${ms.toFixed(1)} ms, near the ${cap} ms cap; nothing repeated it`;
             return ms;
         };
         // The device's floor (EA-G1, 11-01): the fence latency of a real but trivial submission (a 4-byte clear on the
@@ -472,16 +488,16 @@ export async function probeCandidate(snapshot: Snapshot, deps: ProbeDeps): Promi
         }
         const floorMs = Math.max(WORLD_PROBE.timerFloorMs, 2 * median(latencies));
         partial.floorMs = floorMs;
-        const judged = (what: string, p: Prediction): { ms: number; rule: 'fit' | 'floor' } | string => {
+        const judged = (what: string, p: Prediction, cap: number): { ms: number; rule: 'fit' | 'floor' } | string => {
             if ('inconclusive' in p) return unverified(`${what}: ${p.inconclusive}`);
-            if (p.ms > maxSubmissionMs) return `EA_PROBE ${what}: ${p.ms.toFixed(1)} ms predicted, over the ${maxSubmissionMs} ms cap`;
+            if (p.ms > cap) return `EA_PROBE ${what}: ${p.ms.toFixed(1)} ms predicted, over the ${cap} ms cap`;
             return p;
         };
 
         // Init: once each alone, then rewound and run again, timed.
         const initFirst: number[] = [];
         for (const b of built) {
-            const t = await firstRun(b, () => b.variant.world.runInit(), 'init');
+            const t = await firstRun(b, () => b.variant.world.runInit(), 'init', caps.init);
             if (typeof t === 'string') return refuse(t);
             initFirst.push(t);
         }
@@ -506,7 +522,7 @@ export async function probeCandidate(snapshot: Snapshot, deps: ProbeDeps): Promi
             init = predictPair(initMeasured[0], initMeasured[1], floorMs);
             if (!('inconclusive' in init)) break;
         }
-        const initJudged = judged('init', init);
+        const initJudged = judged('init', init, caps.init);
         partial.phases = { init: { first: initFirst, measured: initMeasured, ms: 'ms' in init ? init.ms : NaN, rule: 'rule' in init ? init.rule : 'fit' } } as WorldProbe['phases'];
         if (typeof initJudged === 'string') return refuse(initJudged);
         partial.initMs = initJudged.ms;
@@ -518,7 +534,7 @@ export async function probeCandidate(snapshot: Snapshot, deps: ProbeDeps): Promi
         } else {
             const stepFirst: number[] = [];
             for (const b of built) {
-                const t = await firstRun(b, () => b.variant.world.runtime.step(), 'one fixed step');
+                const t = await firstRun(b, () => b.variant.world.runtime.step(), 'one fixed step', caps.step);
                 if (typeof t === 'string') return refuse(t);
                 stepFirst.push(t);
             }
@@ -543,7 +559,7 @@ export async function probeCandidate(snapshot: Snapshot, deps: ProbeDeps): Promi
                 p = predictPair(stepMeasured[0], stepMeasured[1], floorMs);
                 if (!('inconclusive' in p)) break;
             }
-            const j = judged('one fixed step', p);
+            const j = judged('one fixed step', p, caps.step);
             step = { first: stepFirst, measured: stepMeasured, runs: stepRuns, ms: 'ms' in p ? p.ms : NaN, rule: 'rule' in p ? p.rule : 'fit' };
             partial.phases.step = step;
             if (typeof j === 'string') return refuse(j);
@@ -563,14 +579,14 @@ export async function probeCandidate(snapshot: Snapshot, deps: ProbeDeps): Promi
         };
         const frameFirst: number[] = [];
         for (const b of built) {
-            const t = await firstRun(b, () => frame(b), 'one frame');
+            const t = await firstRun(b, () => frame(b), 'one frame', caps.frame);
             if (typeof t === 'string') return refuse(t);
             frameFirst.push(t);
         }
         const frameMedian = async (b: Built, first: number): Promise<FrameTimings> => {
             const frames = (n: number) => () => { for (let i = 0; i < n; i++) frame(b); };
             /**
-             * Sized to the frame (batchRuns, 11-02): an untimed warm-up of as many of its two frames as fit in the cap at
+             * Sized to the frame (batchRuns, 11-02): an untimed warm-up of as many of its two frames as fit in a batch at
              * the pace of the single frame timed before it, then the batch's frames from the warm-up's own pace.
              */
             const warmed = async (pace: number) => {
@@ -588,8 +604,8 @@ export async function probeCandidate(snapshot: Snapshot, deps: ProbeDeps): Promi
             const touched = await checked(b, 'one frame', () => { size(b, large); frame(b); });
             // The first run at the larger frame (the EA5.4 review's over-budget run). Each frame there is a submission of
             // its own, so one near the cap on its own is never repeated: no warm-up and no batch at that frame.
-            if (touched * margin > maxSubmissionMs) {
-                throw new Refusal(`EA_PROBE one frame: its 1/${b.fraction} variant alone took ${touched.toFixed(1)} ms at ${large.width}×${large.height}, near the ${maxSubmissionMs} ms cap; nothing repeated it`);
+            if (touched * margin > caps.frame) {
+                throw new Refusal(`EA_PROBE one frame: its 1/${b.fraction} variant alone took ${touched.toFixed(1)} ms at ${large.width}×${large.height}, near the ${caps.frame} ms cap; nothing repeated it`);
             }
             const largeRuns = await warmed(touched);
             const largeMs = await batched(largeRuns);
@@ -603,17 +619,18 @@ export async function probeCandidate(snapshot: Snapshot, deps: ProbeDeps): Promi
             fp = predictFrame(frames[0], frames[1], pixels, floorMs);
             if (!('inconclusive' in fp)) break;
         }
-        const fj = judged('one frame', fp);
+        const fj = judged('one frame', fp, caps.frame);
         partial.phases.frame = {
             first: frameFirst, measured: frames.flatMap(f => [f.small, f.large]), runs: frames.flatMap(f => [f.runs?.small ?? NaN, f.runs?.large ?? NaN]),
             touched: frames.flatMap(f => [f.touchedSmall ?? NaN, f.touched ?? NaN]), ms: 'ms' in fp ? fp.ms : NaN, rule: 'rule' in fp ? fp.rule : 'fit',
         };
         if (typeof fj === 'string') return refuse(fj);
         partial.drawMsPerFrame = fj.ms;
-        // The first full-size frame runs cold, and is a submission like any other: the cap judges it too (the EA5.4 review).
+        // The first full-size frame runs cold, and is a submission like any other: a cap judges it too (the EA5.4 review),
+        // its own, since it runs once.
         const firstFrameMs = predictFirstFrame(fj.ms, frameFirst, frames[0], frames[1], pixels);
         partial.firstFrameMs = firstFrameMs;
-        if (firstFrameMs > maxSubmissionMs) return refuse(`EA_PROBE the first frame: ${firstFrameMs.toFixed(1)} ms predicted, over the ${maxSubmissionMs} ms cap`);
+        if (firstFrameMs > caps.firstFrame) return refuse(`EA_PROBE the first frame: ${firstFrameMs.toFixed(1)} ms predicted, over the ${caps.firstFrame} ms cap`);
 
         const steady = step.ms + fj.ms;
         const warnings: string[] = [];
@@ -624,7 +641,7 @@ export async function probeCandidate(snapshot: Snapshot, deps: ProbeDeps): Promi
         const probe: WorldProbe = {
             computeMsPerFrame: step.ms, drawMsPerFrame: fj.ms, initMs: initJudged.ms,
             firstFrameMs, maxSubmissionMs: Math.max(initJudged.ms, step.ms, fj.ms, firstFrameMs), steadyFrameMs: steady, catchUpMs: WORLD_PROBE.catchUpSteps * step.ms + fj.ms,
-            peakBytes: 0, viewport: { ...deps.target }, profile: WORLD_PROBE.profile, budgetMs: maxSubmissionMs, floorMs,
+            peakBytes: 0, viewport: { ...deps.target }, profile: WORLD_PROBE.profile, caps, floorMs,
             phases: partial.phases as WorldProbe['phases'], projection: partial.projection, warnings, contaminated,
         };
         return { ok: true, probe };
