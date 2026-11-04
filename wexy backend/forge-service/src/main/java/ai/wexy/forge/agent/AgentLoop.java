@@ -5,6 +5,7 @@ import ai.wexy.forge.schemas.JsonSchemas;
 import ai.wexy.forge.templates.Prompt;
 import ai.wexy.forge.templates.PromptBuilder;
 import ai.wexy.forge.upstream.ChatMessage;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -16,6 +17,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
@@ -180,8 +182,12 @@ public final class AgentLoop {
                 }
                 messages.add(ChatMessage.assistant(answer.text()));
 
-                JsonNode action = parse(answer.text());
-                List<String> problems = action == null || !action.isObject() ? List.of("it is not a JSON object")
+                Parsed parsed = parse(answer.text());
+                JsonNode action = parsed.node();
+                // Why it is not an object, in the parser's own words, or that it was cut at the cap: the schema miss of 10-31
+                // and 11-04 left no trace of its cause, so the repair, the turn's end and the log now carry it.
+                List<String> problems = action == null
+                        ? List.of("length".equals(answer.finishReason()) ? "it was cut off at the output cap" : parsed.why())
                         : schemas.validate(JsonSchemas.AGENT_ACTION, action);
                 if (problems.isEmpty()) {
                     problems = payload(action);
@@ -467,11 +473,47 @@ public final class AgentLoop {
         return v.isIntegralNumber() ? v.asInt() : null;
     }
 
-    private JsonNode parse(String text) {
-        try {
-            return json.readTree(text);
-        } catch (IOException e) {
-            return null;
+    /** An answer read as one JSON object, or why it is not one (`node` null). */
+    private record Parsed(JsonNode node, String why) {
+    }
+
+    /**
+     * The answer as one JSON object, or why it is not one: empty, another kind of JSON, or the parser's own words, bounded
+     * (an unescaped character in a string, prose before the object, an object cut short), never the answer's text. An
+     * object inside a code fence is that object, as PaperProbe reads it (the design's proposal after the 11-03 live round):
+     * the schema still judges it.
+     */
+    private Parsed parse(String text) {
+        String body = text == null ? "" : text.strip();
+        if (body.startsWith("```")) {
+            int line = body.indexOf('\n');
+            body = line < 0 ? "" : body.substring(line + 1).strip();
+            if (body.endsWith("```")) {
+                body = body.substring(0, body.length() - 3);
+            }
         }
+        if (body.isBlank()) {
+            return new Parsed(null, "it is empty");
+        }
+        try {
+            JsonNode node = json.readTree(body);
+            if (node == null || node.isMissingNode()) {
+                return new Parsed(null, "it is empty");
+            }
+            if (!node.isObject()) {
+                return new Parsed(null, "it is a JSON " + node.getNodeType().name().toLowerCase(Locale.ROOT) + ", not an object");
+            }
+            return new Parsed(node, null);
+        } catch (JsonProcessingException e) {
+            return new Parsed(null, "it is not a JSON object (" + bounded(e.getOriginalMessage()) + ")");
+        } catch (IOException e) {
+            return new Parsed(null, "it is not a JSON object");
+        }
+    }
+
+    /** At most 160 characters of `text` on one line. */
+    private static String bounded(String text) {
+        String line = text == null ? "" : text.replaceAll("\\s+", " ").strip();
+        return line.length() <= 160 ? line : line.substring(0, 159) + "…";
     }
 }
