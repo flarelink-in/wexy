@@ -40,7 +40,7 @@ public class ClientNetworkKeyTest {
         ClientNetworkKey key = key(KEY, 0, "");
 
         String a = of(key, "203.0.113.42");
-        assertThat(a).matches("[0-9a-f]{64}");
+        assertThat(a).as("its family named, for forge's own limit (Q98)").matches("v4\\.[0-9a-f]{64}");
         assertThat(of(key, "203.0.113.42")).as("stable").isEqualTo(a);
         assertThat(of(key, "203.0.113.43")).as("the next address is another network").isNotEqualTo(a);
         assertThat(a).doesNotContain("203").doesNotContain("cb00712a");
@@ -53,7 +53,7 @@ public class ClientNetworkKeyTest {
         ClientNetworkKey key = key(KEY, 0, "");
 
         String home = of(key, "2001:db8:abcd:12::1");
-        assertThat(home).matches("[0-9a-f]{64}");
+        assertThat(home).matches("v6\\.[0-9a-f]{64}");
         assertThat(of(key, "2001:db8:abcd:12:ffff:ffff:ffff:fffe")).as("the same /64").isEqualTo(home);
         assertThat(of(key, "2001:0db8:abcd:0012:0000:0000:0000:0007")).as("written out in full").isEqualTo(home);
         assertThat(of(key, "2001:db8:abcd:13::1")).as("the next /64").isNotEqualTo(home);

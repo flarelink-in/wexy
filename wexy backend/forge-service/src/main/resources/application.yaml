@@ -112,7 +112,10 @@ wexy:
   # visual rounds among them), so a candidate's own revisions never spend a new prompt.
   allowance:
     anonymous-per-account: 1
-    anonymous-per-network: 1
+    # Q98, revised (the user, 2026-11-04: "u can follow recommendation for q98"): a shared IPv4 address (a carrier's
+    # CGNAT, an office, a campus) gets three anonymous worlds a day, an IPv6 /64 (one home, one phone) one.
+    anonymous-per-ipv4: 3
+    anonymous-per-ipv6: 1
     early-access-per-day: 1
     admin-per-day: 20
     day-starts-at-hour-utc: 0

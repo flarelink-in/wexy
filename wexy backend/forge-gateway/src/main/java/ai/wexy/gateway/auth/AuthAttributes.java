@@ -12,6 +12,9 @@ public final class AuthAttributes {
     /** True for a Firebase anonymous user. */
     public static final String ANONYMOUS = "wexy.auth.anonymous";
 
+    /** The verified caller itself ({@link VerifiedCaller}), for the account's standing check (AccountStanding). */
+    public static final String CALLER = "wexy.auth.caller";
+
     private AuthAttributes() {
     }
 }

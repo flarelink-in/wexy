@@ -190,6 +190,7 @@ public class AuthorizationFilter {
             // Lets the post-authentication limiter key on a verified identity.
             exchange.getAttributes().put(AuthAttributes.UID, caller.uid());
             exchange.getAttributes().put(AuthAttributes.ANONYMOUS, caller.anonymous());
+            exchange.getAttributes().put(AuthAttributes.CALLER, caller);
             authorisedMeter.increment();
 
             // The network key comes from the address the gateway resolved, never from a header the client chose (W1).

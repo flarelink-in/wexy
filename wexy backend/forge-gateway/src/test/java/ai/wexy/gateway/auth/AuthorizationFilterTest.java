@@ -113,6 +113,10 @@ class AuthorizationFilterTest {
         // The post-authentication limiter keys on these, never on anything the client sent.
         assertThat((String) forwarded.get().getAttribute(AuthAttributes.UID)).isEqualTo("anon-uid");
         assertThat((Boolean) forwarded.get().getAttribute(AuthAttributes.ANONYMOUS)).isTrue();
+        // And the account's standing check reads the verified caller itself (2026-11-04).
+        assertThat((VerifiedCaller) forwarded.get().getAttribute(AuthAttributes.CALLER)).isEqualTo(new VerifiedCaller("anon-uid", "anonymous"));
+        send(authorization.anonymousAllowed(), "Bearer h.google.s");
+        assertThat((VerifiedCaller) forwarded.get().getAttribute(AuthAttributes.CALLER)).isEqualTo(new VerifiedCaller("user-uid", "google.com"));
     }
 
     /**
@@ -122,7 +126,7 @@ class AuthorizationFilterTest {
     @Test
     void theTokenCarriesTheCallersNetworkKeyAndNoHeaderCanSetIt() throws Exception {
         String expected = networkKey.of(request(null));
-        assertThat(expected).matches("[0-9a-f]{64}");
+        assertThat(expected).matches("v4\\.[0-9a-f]{64}");
 
         send(authorization.anonymousAllowed(), "Bearer h.anonymous.s");
         assertThat(forwardedClaims().getStringClaim(InternalToken.CLAIM_IPK)).isEqualTo(expected);

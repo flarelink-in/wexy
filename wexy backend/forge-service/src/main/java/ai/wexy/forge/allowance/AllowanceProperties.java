@@ -10,7 +10,10 @@ import java.time.Duration;
  * must deny, never unlock: I6).
  *
  * @param anonymousPerAccount prompts an anonymous account is granted, ever (1)
- * @param anonymousPerNetwork anonymous prompts one network (an IPv4 address, an IPv6 /64) is granted a day (1; Q98)
+ * @param anonymousPerIpv4    anonymous prompts one IPv4 address is granted a day (3; Q98 as revised 2026-11-04: an IPv4
+ *                            address is often shared, a carrier's CGNAT, an office, a campus)
+ * @param anonymousPerIpv6    anonymous prompts one IPv6 /64 is granted a day (1; Q98: a /64 is one home or one phone).
+ *                            A network key that names no family (a gateway from before) is counted by this one
  * @param earlyAccessPerDay   prompts a signed-in caller is granted a day (1)
  * @param adminPerDay         prompts an allow-listed admin is granted a day (20)
  * @param dayStartsAtHourUtc  the hour, in UTC, a day's allowance starts (0)
@@ -31,7 +34,7 @@ import java.time.Duration;
  *                            turn was granted for (6: two attempts of the candidate's Q_C, 3 reviews each; EA6.4)
  */
 @ConfigurationProperties(prefix = "wexy.allowance")
-public record AllowanceProperties(Integer anonymousPerAccount, Integer anonymousPerNetwork, Integer earlyAccessPerDay,
+public record AllowanceProperties(Integer anonymousPerAccount, Integer anonymousPerIpv4, Integer anonymousPerIpv6, Integer earlyAccessPerDay,
                                   Integer adminPerDay, Integer dayStartsAtHourUtc, Duration promptLife, Integer directorTurns,
                                   Integer revisions, Integer moduleCalls, Integer authorCalls, Integer repairCalls,
                                   Integer replans, Duration accountMark, String uidHmacHex, Boolean uidKeyRequired,
@@ -40,7 +43,8 @@ public record AllowanceProperties(Integer anonymousPerAccount, Integer anonymous
     /** The same values, checked: every one set and in range, or startup stops. */
     public AllowanceProperties validated() {
         count("anonymous-per-account", anonymousPerAccount);
-        count("anonymous-per-network", anonymousPerNetwork);
+        count("anonymous-per-ipv4", anonymousPerIpv4);
+        count("anonymous-per-ipv6", anonymousPerIpv6);
         count("early-access-per-day", earlyAccessPerDay);
         count("admin-per-day", adminPerDay);
         count("director-turns", directorTurns);

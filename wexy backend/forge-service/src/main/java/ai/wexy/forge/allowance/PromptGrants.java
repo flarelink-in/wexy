@@ -193,6 +193,14 @@ public class PromptGrants {
         }
     }
 
+    /**
+     * An anonymous network's day by its family (Q98, revised 2026-11-04): the gateway's key says {@code v4.} or
+     * {@code v6.}; one that says neither (a gateway from before) is held to the stricter IPv6 limit.
+     */
+    private int perNetwork(String ipk) {
+        return ipk.startsWith("v4.") ? properties.anonymousPerIpv4() : properties.anonymousPerIpv6();
+    }
+
     /** The counters a caller's role takes, with their limits and lifetimes; null for an anonymous caller with no network. */
     private Counters counters(Caller caller) {
         Role role = Role.of(caller);
@@ -205,7 +213,7 @@ public class PromptGrants {
         return switch (role) {
             case ANONYMOUS -> caller.ipk() == null ? null : new Counters(role, owner,
                     List.of(PREFIX + "anon:" + owner, PREFIX + "net:" + day + ":" + caller.ipk()),
-                    List.of((long) properties.anonymousPerAccount(), (long) properties.anonymousPerNetwork()),
+                    List.of((long) properties.anonymousPerAccount(), (long) perNetwork(caller.ipk())),
                     List.of(mark, DAY_COUNTER_SECONDS), List.of("account", "network"));
             case EARLY_ACCESS -> new Counters(role, owner, List.of(PREFIX + "early:" + day + ":" + owner),
                     List.of((long) properties.earlyAccessPerDay()), List.of(DAY_COUNTER_SECONDS), List.of("day"));
@@ -228,7 +236,7 @@ public class PromptGrants {
     private ForgeException refusal(Role role, String spentBy) {
         if (role == Role.ANONYMOUS) {
             return new ForgeException(ErrorCode.ACCOUNT_REQUIRED, "network".equals(spentBy)
-                    ? "This network has made its free world today. Sign in with Google for early access: one world a day."
+                    ? "This network has made today's free worlds. Sign in with Google for early access: one world a day."
                     : "You've made your free world. Sign in with Google for early access: one world a day.");
         }
         // Whole seconds rounded up: a client that waits this long is never early, and a reset time shown from it is never
