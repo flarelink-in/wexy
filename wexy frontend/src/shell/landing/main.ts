@@ -7,8 +7,9 @@ import '@fontsource-variable/geist-mono';
 import '../../styles/base.css';
 import '../../styles/landing.css';
 
-import { ARCHETYPES, archetypeSpec } from '../../forge-client/archetypes';
+import { archetypeSpec } from '../../forge-client/archetypes';
 import { kerrBlackHole } from '../../forge-client/archetypes/kerr-black-hole';
+import { magneticStar } from '../../forge-client/archetypes/magnetic-star';
 import { cameraPath, firstView } from '../../runtime/camera-path';
 import { SceneRuntime } from '../../runtime/scene-runtime';
 import { Viewport } from '../../runtime/viewport';
@@ -31,7 +32,12 @@ onScroll();
 
 const input = document.getElementById('hero-prompt') as HTMLInputElement;
 const form = document.getElementById('prompt-bar') as HTMLFormElement;
-const prompts = ARCHETYPES.map(a => a.examplePrompt);
+// Match the three featured cards; the shrine is parked until its rendering is fixed.
+const prompts = [
+    kerrBlackHole.examplePrompt,
+    magneticStar.examplePrompt,
+    'A dark thunderstorm cloud that churns and turns in place while lightning flickers inside it',
+];
 let current = prompts[0];
 let typing = true;
 

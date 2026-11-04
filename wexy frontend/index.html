@@ -20,7 +20,9 @@
                 <a href="#showcase">Showcase</a>
                 <a href="#share">Made to share</a>
                 <a href="#models">Meta AI</a>
+                <a href="https://github.com/flarelink-in/wexy">GitHub</a>
             </nav>
+            <a class="nav-creations btn btn-quiet" href="/creations">Creations</a>
             <a class="btn btn-primary btn-sm-nav" href="./studio.html">Open Studio <span data-icon="arrow"></span></a>
         </div>
     </header>
@@ -36,7 +38,7 @@
             <div class="wrap hero-content">
                 <p class="eyebrow"><span class="eyebrow-dot"></span>Meta Global AI Developer Hackathon 2026 · Indie track</p>
                 <h1 id="hero-title">Describe a world.<br>Fly through it.<br><span class="grad">Share the film.</span></h1>
-                <p class="lede">Type one sentence and Wexy builds a living 3D world in your browser. Drag to look around, slide to change the spin or the glow, then save it as a video for YouTube, Reels or TikTok. It renders on your own computer; your idea is sent to Meta's models.</p>
+                <p class="lede">Turn an idea into a living 3D world. Explore it in your browser, then make it a film.</p>
 
                 <form class="prompt-bar" id="prompt-bar" action="./studio.html" method="get">
                     <span class="prompt-glyph" data-icon="spark"></span>
@@ -47,8 +49,8 @@
                 </form>
                 <p class="hero-ideas"><span>Or try</span>
                     <a class="chip" href="./studio.html?scene=kerr-black-hole">Black hole</a>
-                    <a class="chip" href="./studio.html?scene=celestial-torii">Sakura shrine</a>
                     <a class="chip" href="./studio.html?scene=magnetic-star">Magnetar</a>
+                    <a class="chip" href="./studio.html?scene=storm">Storm</a>
                 </p>
             </div>
             <p class="hero-live wrap" id="hero-live" hidden><span class="rec"></span><span id="hero-live-text">Running live on your computer · this is not a video</span></p>
@@ -65,7 +67,7 @@
                         <h3>Describe it</h3>
                         <p>Type an idea, or pick one. Meta's models plan the scene and write how it moves and how it looks, and your browser checks that code on your device before it runs.</p>
                         <div class="mini mini-plan" aria-hidden="true">
-                            <div class="bubble">“A sakura shrine at twilight, with spirit dragons”</div>
+                            <div class="bubble">“A magnetar wrapped in a molten plasma disk”</div>
                             <ol>
                                 <li class="done"><span data-icon="check"></span>Planning the scene</li>
                                 <li class="done"><span data-icon="check"></span>Building the world</li>
@@ -120,19 +122,19 @@
                         </div>
                     </article>
                     <article class="shot">
-                        <a href="./studio.html?scene=celestial-torii" aria-label="Open the sakura shrine in the studio">
-                            <img src="/showcase/celestial-torii.webp" alt="An anime-style vermilion torii gate on a stone island under a sakura tree at twilight, with glowing spirit streams and a comet" loading="lazy" width="1280" height="720">
+                        <a href="./studio.html?scene=storm" aria-label="Open the storm in the studio">
+                            <img src="/showcase/storm.webp" alt="A dark, churning thunderstorm cloud against a black sky" loading="lazy" width="1920" height="1080">
                         </a>
                         <div class="shot-body">
-                            <div class="shot-tags"><span class="tag tag-spark">Anime</span><span class="tag tag-gate">Painted sky · 65,000 petals and spirits</span></div>
-                            <h3>Sakura shrine</h3>
-                            <p>“An anime shrine at twilight: a vermilion water torii under a sakura tree, spirit dragons and a split comet overhead.”</p>
-                            <a class="shot-link" href="./studio.html?scene=celestial-torii">Open in the studio <span data-icon="arrow"></span></a>
+                            <div class="shot-tags"><span class="tag tag-spark">Weather</span><span class="tag tag-gpu">Churning clouds · lightning</span></div>
+                            <h3>Storm</h3>
+                            <p>“A dark thunderstorm cloud that churns and turns in place while lightning flickers inside it.”</p>
+                            <a class="shot-link" href="./studio.html?scene=storm">Open in the studio <span data-icon="arrow"></span></a>
                         </div>
                     </article>
                     <article class="shot">
                         <a href="./studio.html?scene=magnetic-star" aria-label="Open the magnetar in the studio">
-                            <img src="/showcase/magnetic-star.webp" alt="A bright star inside an orange plasma disk, wrapped in looping blue magnetic field lines" loading="lazy" width="1280" height="720">
+                            <img src="/showcase/magnetic-star.webp" alt="A bright star inside an orange plasma disk, wrapped in looping blue magnetic field lines" loading="lazy" width="1920" height="1080">
                         </a>
                         <div class="shot-body">
                             <div class="shot-tags"><span class="tag tag-spark">Space</span><span class="tag tag-gpu">1 million glowing particles</span></div>
@@ -229,6 +231,27 @@
                 </div>
                 <p class="note">In this preview, the studio's worlds are playground examples written by hand; live creation with Meta's models is being connected. The 3D worlds, the controls and the video export are real, and they run on your computer.</p>
                 <p class="note note-dev">For developers: Wexy runs on <a href="https://github.com/Vikas593-cloud/NullGraph">NullGraph</a>, an open-source WebGPU engine.</p>
+            </div>
+        </section>
+
+        <section class="section" id="future" aria-labelledby="future-title">
+            <div class="wrap">
+                <p class="kicker">Looking ahead</p>
+                <h2 id="future-title">From worlds to living systems.</h2>
+                <p class="section-lede">Possible next chapters for Wexy, inspired by NullGraph. These are directions to explore, not features available today or a release schedule.</p>
+                <ol class="future-timeline">
+                    <li><h3>Richer worlds</h3><p>Atmospheres, changing daylight, fog and layered lighting to give each world a stronger sense of place.</p></li>
+                    <li><h3>Worlds with inhabitants</h3><p>GPU-simulated populations with distinct behaviours, reacting to one another inside the worlds you describe.</p></li>
+                    <li><h3>Behaviours that evolve</h3><p>Explore policy evaluation and co-evolution: populations adapting through experiments, with earlier behaviours available for comparison.</p></li>
+                    <li><h3>Return to any moment</h3><p>Recorded simulations, checkpoints and replay to revisit a world, find another camera angle and export a new film.</p></li>
+                </ol>
+                <aside class="technical-links" aria-labelledby="technical-title">
+                    <div><h3 id="technical-title">Under the hood</h3><p>A closer look at the project and the technology behind it.</p></div>
+                    <div class="technical-actions">
+                        <a class="btn btn-quiet" href="https://youtu.be/ZXJ62_oP4Gk?si=tGEfrJRq8euCkaNv">Watch the technical demo <span data-icon="arrow"></span></a>
+                        <a href="https://github.com/flarelink-in/wexy">Explore Wexy on GitHub</a>
+                    </div>
+                </aside>
             </div>
         </section>
 
