@@ -16,6 +16,9 @@ package ai.wexy.common;
  *
  * W2 (2026-11-03) brings {@code conflict} (409) forward from W3: a write based on a version that has moved on
  * ({@code expectedVersion}), or a name another account holds (a handle). The studio reads again and says which.
+ *
+ * W3 (2026-11-03 evening) adds {@code storage-full} (403): the account's saved worlds or bytes at their cap. It never
+ * carries {@code Retry-After}: deleting a world frees space, and waiting does not.
  */
 public enum ErrorCode {
 
@@ -24,6 +27,7 @@ public enum ErrorCode {
     APPCHECK("appcheck", 403),
     ACCOUNT_REQUIRED("account-required", 403),
     FORBIDDEN("forbidden", 403),
+    STORAGE_FULL("storage-full", 403),
     NOT_FOUND("not-found", 404),
     CONFLICT("conflict", 409),
     TOO_LARGE("too-large", 413),

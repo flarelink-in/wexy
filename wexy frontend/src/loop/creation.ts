@@ -23,6 +23,7 @@
 //               its account is still the one signed in (I9): a late answer changes nothing and opens no dialog
 
 import type { CompiledBody } from '../contract/adapters/bodies';
+import type { SolutionDesign } from '../contract/agent';
 import type { DeepReadonly } from '../contract/engine/frozen';
 import { cutCodePoints } from '../contract/text';
 import type { AgentTurnRequest } from '../forge-client/agent-client';
@@ -57,9 +58,18 @@ export interface RunSummary {
     numbers: string;
 }
 
-/** What the studio is told of a creation's world as it installs it: its title, from the idea (§8.6). */
+/**
+ * What the studio is told of a creation's world as it installs it: its title, from the idea (§8.6); and, for its save
+ * (W3.6; the creations platform companion §7, F8), the design S its turn wrote, and whether this go shows a version of
+ * the creation's own world already on the stage (the review's "Improve it", or Show it again past its envelope), whose
+ * save is then that world's revision, never a second world.
+ */
 export interface RunAbout {
     readonly title: string;
+    /** S, from the creation's hand-off; null when it has none. */
+    readonly design: DeepReadonly<SolutionDesign> | null;
+    /** This creation's world is the one on the stage now: the go shows a new version of it, or the same one again. */
+    readonly revises: boolean;
 }
 
 /** The studio's stage as the controller reaches it (EA5.3, Q89, Q115): why it cannot run now, and the go. */
@@ -710,8 +720,10 @@ export function createCreationController(deps: CreationDeps): CreationController
         c.runSince = clock();
         publish(c);
         let summary: RunSummary;
+        // Read before the go: once it installs, `installed` is this creation whatever it was.
+        const about: RunAbout = { title: c.title, design: c.handOff?.design ?? null, revises: installed === c };
         try {
-            summary = await stage.go(snapshot, compiled, { title: c.title });
+            summary = await stage.go(snapshot, compiled, about);
         } catch (e) {
             summary = { status: 'failed', reason: `internal: ${message(e)}`, numbers: '' };
         }

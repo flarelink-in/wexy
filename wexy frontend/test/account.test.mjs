@@ -315,6 +315,22 @@ test('W2 a Google sign-in sets the account up once (POST /v1/me), and until a ha
     assert.equal(account.lineClaim.hidden, false, 'and its twin under the idea box, for phones');
 });
 
+test('W3.6 the account as a save needs it: unknown until an ACTIVE account is read, inactive when the platform says so; "Sign in to keep this world" is the header\'s own sign-in', async () => {
+    const { api, account } = await accountControl({ uid: 'u1', provider: 'anonymous' }, { 'POST /v1/me': dto() });
+    const heard = [];
+    account.onAccount = () => heard.push(account.saveKind);
+    assert.equal(account.saveKind, 'unknown', 'anonymous: no account to save to');
+    account.signInToSave();
+    await settle();
+    assert.deepEqual(api.platform(), ['POST /v1/me'], 'the same sign-in and set-up as the header\'s Sign in');
+    assert.equal(account.saveKind, 'active');
+    assert.ok(heard.includes('active'), 'the studio\'s save hears the account once it is read');
+    const suspended = await accountControl({ uid: 'u2', provider: 'google' }, { 'GET /v1/me': dto({ status: 'SUSPENDED' }) }, { hint: memoryHint(true) });
+    await suspended.account.restore();
+    await settle();
+    assert.equal(suspended.account.saveKind, 'inactive', 'an account the platform does not let save');
+});
+
 test('W2 a claimed handle reads @handle in the header and on the phone line, and no claim is offered', async () => {
     const { account } = await accountControl({ uid: 'u1', provider: 'anonymous' }, { 'POST /v1/me': dto({ handle: 'nova', rowVersion: 1 }) });
     button(account.el, COPY.account.signIn).click();

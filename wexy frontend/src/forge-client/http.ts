@@ -4,8 +4,19 @@
 // can name a gateway path only, never a URL: no other host can receive them.
 
 import type { PublicConfig } from './config';
-import { errorFromResponse, ForgeError } from './errors';
+import { errorFromResponse, ForgeError, StaleCaller } from './errors';
 import type { Identity } from './identity';
+
+/**
+ * Who a request may go out as (W3's review, its high; the creations platform companion F4): the uid its account epoch
+ * was signed in as, and whether that epoch still holds. A request bound to one is sent only under that uid's own ID
+ * token (the identity never signs anyone in for it), and `still()` is asked once its credentials are in hand, just
+ * before each fetch, the retry after a 401 included. Otherwise it is not sent: {@link StaleCaller}.
+ */
+export interface Caller {
+    readonly uid: string;
+    still(): boolean;
+}
 
 /**
  * The routes where the gateway spends the App Check token, so each request needs a limited-use token of its
@@ -31,6 +42,12 @@ export function needsSingleUseAppCheck(method: string, path: string): boolean {
     return SINGLE_USE_PATTERNS.some(route => route.method === verb && route.path.test(pathname));
 }
 
+/**
+ * An `Idempotency-Key` (W3; the creations platform designs §10): 16 to 64 letters, digits and hyphens, such as a
+ * `crypto.randomUUID()`. The platform answers a retry with the same key and body as it answered the first.
+ */
+export const IDEMPOTENCY_KEY = /^[A-Za-z0-9-]{16,64}$/;
+
 export interface ApiRequest {
     /** PATCH and DELETE since W2: the platform's profile and world edits and deletions. */
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -38,6 +55,8 @@ export interface ApiRequest {
     path: string;
     /** Sent as JSON. */
     body?: unknown;
+    /** Sent as `Idempotency-Key` (W3): a world's saves and its deletion. The same key on every try of one request. */
+    idempotencyKey?: string;
     /**
      * Whether the route signs the caller in. The forge and publishing routes do, and they are also the ones that
      * check App Check; the public reads do neither, so they get no tokens at all (backend §11).
@@ -45,11 +64,21 @@ export interface ApiRequest {
     auth: boolean;
     accept?: 'application/json' | 'text/event-stream';
     signal?: AbortSignal;
+    /** The caller it may go out as, and no other ({@link Caller}): a world's saves, reads and edits (W3). */
+    caller?: Caller;
 }
 
 export interface Api {
-    /** The response when its status is 2xx; a ForgeError otherwise. A cancel rejects with the AbortError itself. */
+    /**
+     * The response when its status is 2xx; a ForgeError otherwise. A cancel rejects with the AbortError itself; a request
+     * whose caller no longer holds rejects with {@link StaleCaller}, unsent.
+     */
     send(req: ApiRequest): Promise<Response>;
+}
+
+/** `api` with every request bound to `caller`: sent as that caller or not at all. */
+export function boundTo(api: Api, caller: Caller): Api {
+    return { send: req => api.send({ ...req, caller }) };
 }
 
 export function createApi(config: PublicConfig, identity: Identity, fetchImpl: typeof fetch = (input, init) => fetch(input, init)): Api {
@@ -58,19 +87,33 @@ export function createApi(config: PublicConfig, identity: Identity, fetchImpl: t
             req.signal?.throwIfAborted();
             const url = gatewayUrl(config.apiOrigin, req.path);
             const body = req.body === undefined ? undefined : JSON.stringify(req.body);
+            if (req.idempotencyKey !== undefined && !IDEMPOTENCY_KEY.test(req.idempotencyKey)) {
+                throw new Error(`api: "${String(req.idempotencyKey).slice(0, 80)}" is not an idempotency key (16 to 64 of A-Z, a-z, 0-9 and -).`);
+            }
 
+            const caller = req.caller;
             const attempt = async (refreshIdentity: boolean): Promise<Response> => {
                 req.signal?.throwIfAborted();
                 const headers = new Headers({ Accept: req.accept ?? 'application/json' });
                 if (body !== undefined) headers.set('Content-Type', 'application/json');
+                // The same key on the second try after a 401: one request, tried twice, is still one save.
+                if (req.idempotencyKey !== undefined) headers.set('Idempotency-Key', req.idempotencyKey);
                 if (req.auth) {
-                    const authorization = await untilAborted(identity.authorization(refreshIdentity), req.signal);
+                    const singleUse = needsSingleUseAppCheck(req.method, url);
+                    // A bound request takes its App Check token first, so its ID token, the caller's own, is the last
+                    // thing awaited before the fetch (W3's review).
+                    const appCheck = caller ? await untilAborted(identity.appCheck(singleUse), req.signal) : null;
+                    req.signal?.throwIfAborted();
+                    const authorization = await untilAborted(identity.authorization(refreshIdentity, caller?.uid), req.signal);
                     req.signal?.throwIfAborted();
                     if (authorization) headers.set('Authorization', authorization);
-                    const appCheck = await untilAborted(identity.appCheck(needsSingleUseAppCheck(req.method, url)), req.signal);
+                    else if (caller) throw new StaleCaller(`api: no ID token for the caller ${caller.uid.slice(0, 8)}…; ${req.method} ${req.path} not sent.`);
+                    const check = caller ? appCheck : await untilAborted(identity.appCheck(singleUse), req.signal);
                     req.signal?.throwIfAborted();
-                    if (appCheck) headers.set('X-Firebase-AppCheck', appCheck);
+                    if (check) headers.set('X-Firebase-AppCheck', check);
                 }
+                // The caller's epoch, asked last, with nothing awaited between it and the fetch.
+                if (caller && !caller.still()) throw new StaleCaller(`api: the account changed; ${req.method} ${req.path} not sent.`);
                 try {
                     // Bearer tokens, not cookies: credentials stay home, and nothing here may be cached.
                     return await fetchImpl(url, { method: req.method, headers, body, signal: req.signal, credentials: 'omit', cache: 'no-store', redirect: 'error' });

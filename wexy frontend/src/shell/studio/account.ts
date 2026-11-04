@@ -153,6 +153,25 @@ export class AccountControl {
         return this.working;
     }
 
+    /**
+     * The signed-in creator's account as a save needs it (W3.6; the companion §7 step 3): `active` once read and ACTIVE,
+     * `inactive` when read and not, `unknown` while not read (being set up after a sign-in, or unreachable), and for
+     * anyone not signed in with Google.
+     */
+    get saveKind(): 'active' | 'inactive' | 'unknown' {
+        const account = this.session.current.kind === 'google' ? this.account : null;
+        if (!account) return 'unknown';
+        return account.status === 'ACTIVE' ? 'active' : 'inactive';
+    }
+
+    /** Called whenever the account shown changes (read, set up, dropped): the studio's save hears it (W3.6). */
+    onAccount: (() => void) | null = null;
+
+    /** "Sign in to keep this world" (W3.6): the header's own Sign in, so its dialogs and its waits are the same. */
+    signInToSave(): void {
+        void this.signIn();
+    }
+
     dispose(): void {
         this.off();
         this.dialog.el.remove();
@@ -399,6 +418,7 @@ export class AccountControl {
         }
         if (!account) this.handleDialog.close();
         this.renderLine();
+        this.onAccount?.();
     }
 
     /** The phone's line: the chip's words, after the @handle once there is one. */

@@ -57,6 +57,41 @@
 			<groupId>com.nimbusds</groupId>
 			<artifactId>nimbus-jose-jwt</artifactId>
 		</dependency>
+		<!--
+			W3.1: a saved world's schema (world/wexy-world.v1.json, the studio's own text), checked as forge checks the
+			agent's action: draft 2020-12, the parent's managed version (Q27).
+		-->
+		<dependency>
+			<groupId>com.networknt</groupId>
+			<artifactId>json-schema-validator</artifactId>
+		</dependency>
+		<!--
+			W3.1: the private bucket on B2 through the S3 client (B2ObjectStore). The URL-connection HTTP client alone: a few
+			blocking calls on the storage scheduler need neither Netty's client nor Apache's, nor their memory.
+		-->
+		<dependency>
+			<groupId>software.amazon.awssdk</groupId>
+			<artifactId>s3</artifactId>
+			<exclusions>
+				<exclusion>
+					<groupId>software.amazon.awssdk</groupId>
+					<artifactId>netty-nio-client</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>software.amazon.awssdk</groupId>
+					<artifactId>apache-client</artifactId>
+				</exclusion>
+				<!-- Since 2.3x the S3 module also brings Apache HttpClient 5's client (runtime scope). -->
+				<exclusion>
+					<groupId>software.amazon.awssdk</groupId>
+					<artifactId>apache5-client</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<dependency>
+			<groupId>software.amazon.awssdk</groupId>
+			<artifactId>url-connection-client</artifactId>
+		</dependency>
 
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

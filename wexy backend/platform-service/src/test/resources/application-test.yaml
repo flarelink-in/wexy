@@ -5,3 +5,6 @@ wexy:
     jwks-uri: http://127.0.0.1:1/.well-known/jwks.json
   account:
     hmac-hex: 7465737474657374746573747465737474657374746573747465737474657374
+  # The tests call the cleanup worker's tick themselves.
+  worlds:
+    cleanup-enabled: false

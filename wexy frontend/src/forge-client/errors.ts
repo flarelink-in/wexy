@@ -4,11 +4,14 @@
 // creations platform designs, §10): `content-refused`, an idea content safety refused before any model call, and
 // `quota`, early access's world of the day already made, with Retry-After to the reset. A spent anonymous allowance
 // is the existing `account-required`. W2 (2026-11-03) brings `conflict` (409) forward from W3: a profile write based on
-// a version that has moved on, or a handle another account holds; the studio reads again and says which.
+// a version that has moved on, or a handle another account holds; the studio reads again and says which. W3 (2026-11-03
+// evening) brings `storage-full` (403): the account's saved worlds or bytes at their cap, never with a wait, because
+// deleting a world frees space and waiting does not.
 
 export type ErrorCode =
-    | 'bad-request' | 'auth' | 'appcheck' | 'account-required' | 'forbidden' | 'not-found' | 'conflict' | 'too-large'
-    | 'content-refused' | 'rate' | 'quota' | 'internal' | 'upstream' | 'budget' | 'paused' | 'unavailable' | 'timeout';
+    | 'bad-request' | 'auth' | 'appcheck' | 'account-required' | 'forbidden' | 'storage-full' | 'not-found' | 'conflict'
+    | 'too-large' | 'content-refused' | 'rate' | 'quota' | 'internal' | 'upstream' | 'budget' | 'paused' | 'unavailable'
+    | 'timeout';
 
 /** The HTTP status each code travels with. Several share one, because the studio answers them differently. */
 export const ERROR_STATUS: Readonly<Record<ErrorCode, number>> = {
@@ -17,6 +20,7 @@ export const ERROR_STATUS: Readonly<Record<ErrorCode, number>> = {
     'appcheck': 403,
     'account-required': 403,
     'forbidden': 403,
+    'storage-full': 403,
     'not-found': 404,
     'conflict': 409,
     'too-large': 413,
@@ -68,6 +72,18 @@ export class ForgeError extends Error {
         this.code = code;
         this.status = status;
         this.retryAfterSeconds = retryAfterSeconds;
+    }
+}
+
+/**
+ * A request bound to a caller (http.ts's `Caller`) who is no longer the one signed in, or whose account epoch has moved:
+ * it was not sent (W3's review, its high: a save's retry went out under the account signed in meanwhile). Never a
+ * ForgeError: the backend said nothing, so there is no code of its to give.
+ */
+export class StaleCaller extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'StaleCaller';
     }
 }
 

@@ -9,6 +9,7 @@
 // learns its kind, so a reload can show a returning creator's account at once. It holds no identity; a fresh or
 // anonymous visitor has none, so for them a page view still loads no Firebase (W1's rule).
 
+import type { Caller } from '../forge-client/http';
 import type { AccountPort, Collision, LinkOutcome, SignedIn } from '../forge-client/identity';
 
 /** Where the hint lives: `1`, or nothing. */
@@ -82,6 +83,16 @@ export class AccountSession {
     /** Whether this browser held a Google session when last seen (W2): worth reading who is signed in on a page load. */
     get hinted(): boolean {
         return this.hint.read();
+    }
+
+    /**
+     * The caller this epoch's requests may go out as (W3's review; http.ts's `Caller`): the uid it was read as, and
+     * whether the epoch still holds. Null before anyone is known to be signed in.
+     */
+    caller(): Caller | null {
+        if (!this.established || this.uid === null) return null;
+        const { epoch } = this.state;
+        return { uid: this.uid, still: () => !this.disposed && this.state.epoch === epoch };
     }
 
     /** Calls `listener` on every change of account or provider; returns the unsubscribe. */

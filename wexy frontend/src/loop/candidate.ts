@@ -453,8 +453,10 @@ function sentenceFor(code: ErrorCode): string {
         case 'upstream': return COPY.candidate.stream;
         case 'bad-request':
         case 'not-found':
-        // W2's conflict is the platform's (a profile at another version, a handle taken): a forge route never answers it.
+        // W2's conflict and W3's storage-full are the platform's (a version moved on, a handle taken, a full storage): a
+        // forge route never answers them.
         case 'conflict':
+        case 'storage-full':
         case 'too-large':
         case 'internal': return COPY.candidate.refused;
     }

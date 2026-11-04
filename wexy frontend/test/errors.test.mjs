@@ -4,14 +4,15 @@ import { test } from 'node:test';
 import { codeForStatus, ERROR_STATUS, errorFromResponse, ForgeError, isErrorCode } from '../src/forge-client/errors.ts';
 
 // ai.wexy.common.ErrorCode, 2026-10-27, with W1's content-refused and quota (2026-11-02, the creations platform designs
-// §10) and W2's conflict (2026-11-03): change both on the same day (design guidelines §1).
+// §10), W2's conflict (2026-11-03) and W3's storage-full (2026-11-03 evening): change both on the same day (design
+// guidelines §1).
 const BACKEND = {
-    'bad-request': 400, 'auth': 401, 'appcheck': 403, 'account-required': 403, 'forbidden': 403, 'not-found': 404,
+    'bad-request': 400, 'auth': 401, 'appcheck': 403, 'account-required': 403, 'forbidden': 403, 'storage-full': 403, 'not-found': 404,
     'conflict': 409, 'too-large': 413, 'content-refused': 422, 'rate': 429, 'quota': 429, 'internal': 500, 'upstream': 502,
     'budget': 503, 'paused': 503, 'unavailable': 503, 'timeout': 504,
 };
 
-test('U1 the seventeen codes and their statuses are the backend\'s, exactly', () => {
+test('U1 the eighteen codes and their statuses are the backend\'s, exactly', () => {
     assert.deepEqual({ ...ERROR_STATUS }, BACKEND);
 });
 
@@ -54,6 +55,9 @@ test('U6 Retry-After counts only on rate and quota, only as whole seconds; absen
     const refused = await errorFromResponse(response(422, { code: 'content-refused', message: 'm' }, { 'Retry-After': '60' }));
     assert.deepEqual([refused.code, refused.retryAfterSeconds], ['content-refused', null]);
     assert.equal((await errorFromResponse(response(403, { code: 'account-required', message: 'm' }, { 'Retry-After': '60' }))).retryAfterSeconds, null);
+    // W3: a full storage is met by deleting a world, so it never carries a countdown, whatever a header says.
+    const full = await errorFromResponse(response(403, { code: 'storage-full', message: 'm' }, { 'Retry-After': '60' }));
+    assert.deepEqual([full.code, full.status, full.retryAfterSeconds], ['storage-full', 403, null]);
 });
 
 test('U7 a message is capped, so a misbehaving server cannot flood the log', async () => {

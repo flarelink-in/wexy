@@ -68,6 +68,13 @@ services:
       SPRING_DATASOURCE_PASSWORD: ${MARIADB_PASSWORD:?missing from Infisical}
       # Platform's own subject key (never forge's WEXY_UID_HMAC_KEY): required, never rotated on deploy.
       WEXY_ACCOUNT_HMAC_KEY: ${WEXY_ACCOUNT_HMAC_KEY:?missing from Infisical}
+      # W3: the private bucket for saved worlds: all five values its own (B2_PRIVATE_*), never the public assets bucket's
+      # B2_* (§8). Platform's key for that bucket alone.
+      B2_PRIVATE_ENDPOINT: ${B2_PRIVATE_ENDPOINT:?missing from Infisical}
+      B2_PRIVATE_REGION: ${B2_PRIVATE_REGION:?missing from Infisical}
+      B2_PRIVATE_BUCKET_NAME: ${B2_PRIVATE_BUCKET_NAME:?missing from Infisical}
+      B2_PRIVATE_ACCESS_KEY: ${B2_PRIVATE_ACCESS_KEY:?missing from Infisical}
+      B2_PRIVATE_SECRET_KEY: ${B2_PRIVATE_SECRET_KEY:?missing from Infisical}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8431/actuator/health"]
       interval: 15s

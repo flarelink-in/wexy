@@ -218,7 +218,7 @@ test('EA9-U7 the studio\'s wiring: H is the one world field, set only by put and
     assert.match(backdrop, /bytes: pixels => world\?\.deviceBytesAt\(pixels\) \?\? null,/, 'the backdrop counted at the size asked');
     // ... no step after a switch makes an installed Run a failure, and H is set before any of them.
     const run = main.slice(main.indexOf('private async runCandidate('), main.indexOf('// ------------------------------------------------------------------ the world on the stage'));
-    assert.match(run, /const r = await stage\.run\(snapshot, compiled\);\n\s+if \(r\.status === 'installed'\) \{\n(?:\s+\/\/[^\n]*\n)*\s+const notes = this\.installAgent\(/, 'nothing between the commit and H');
+    assert.match(run, /const r = await stage\.run\(snapshot, compiled, signal\);\n\s+if \(r\.status === 'installed'\) \{\n(?:\s+\/\/[^\n]*\n)*\s+const notes = this\.installAgent\(/, 'nothing between the commit and H');
     assert.match(run, /this\.afterSwitch\('the controls that offer a Run', \(\) => this\.refreshRun\(\)\)/);
     assert.match(run, /this\.afterSwitch\('the Run\\'s numbers', \(\) => \{ said = \[runNumbers\(r\.report\)/);
     assert.match(run, /this\.afterSwitch\('the Run\\'s line', \(\) => step\.ok\(/);

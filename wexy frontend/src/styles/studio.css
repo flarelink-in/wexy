@@ -52,6 +52,20 @@
 .acct-short, .account-line, .account-line-claim { display: none; }
 .account-line { margin: 8px 2px 0; font: 500 12px/1.4 var(--mono); color: var(--text-2); overflow-wrap: anywhere; }
 .account-line-claim { margin: 6px 2px 0; }
+/* The world on the stage's save (W3.6): a word beside the title, its dot beside the word (status colour is never alone,
+   guidelines §5), and its one action, ink only. The line under the idea box stands in for it where the header has no
+   title (≤1020 px, below). */
+.save-status { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--text-2); }
+.save-status .save-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); flex: none; }
+.save-status[data-tone='ok'] .save-dot { background: var(--ok); }
+.save-status[data-tone='warn'] .save-dot { background: var(--warn); }
+.save-status[data-tone='busy'] .save-dot { background: var(--text-2); animation: save-pulse 1.2s ease-in-out infinite; }
+.save-status .save-text { white-space: nowrap; }
+.save-status .save-link { color: var(--text-2); text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; }
+.save-status .save-link:hover { color: var(--text); }
+.save-line { display: none; }
+@keyframes save-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .save-status[data-tone='busy'] .save-dot { animation: none; } }
 
 /* The account's dialogs: a refusal's sign-in, the day's reset, a link collision. */
 .account-dialog {
@@ -346,6 +360,10 @@
 .is-building .empty-examples, .is-building .empty-lede { display: none; }
 .empty-card p { font-size: 13.5px; color: var(--text-2); line-height: 1.6; }
 .empty-examples { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 6px; }
+/* A saved world being opened (W3.6): where it stands and its Show it, above the card's own offer of a new idea. */
+.empty-open { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.empty-card .empty-open-text { font-size: 14px; color: var(--text); line-height: 1.5; overflow-wrap: anywhere; }
+.empty-open-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 /* The live backdrop behind the empty card (backdrop.ts): a shade, darkest behind the words, keeps them readable over a
    moving world. A gradient, not a blur: blurring a canvas that changes every frame re-composites it every frame. */
 .empty.has-backdrop {
@@ -693,6 +711,9 @@
     .tab-panels { min-height: 0; }
     #panel-spec, #panel-wgsl { min-height: 520px; }
     .doc { display: none; }
+    /* The header has no title here, so the save's word sits under the idea box (W3.6). */
+    .save-line:not([hidden]) { display: flex; flex-wrap: wrap; margin: 8px 2px 0; }
+    .save-line .save-text { white-space: normal; }
     .gpu-pill { max-width: 160px; }
     /* Developer view's panels in one column (11-02 night, EA-VR11): a column sized by its content takes the widest line
        that cannot wrap, so a panel's subtitle or id that never wraps made a 320 px page 353 to 371 px wide. They wrap. */

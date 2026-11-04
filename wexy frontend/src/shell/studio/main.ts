@@ -52,8 +52,10 @@ import { CodeView, type CodeMark } from './code-view';
 import { DirectorPanel } from './director';
 import { canShareFile, ExportDialog, shareFile } from './export-dialog';
 import { formatById, FORMATS, frameSize, type FormatId } from './formats';
-import { selectCreationPath, type CreationPathSelection } from './creation-path';
+import { selectCreationPath, worldLink, type CreationPathSelection } from './creation-path';
 import { Journey, type StageId } from './journey';
+import { CREATIONS, SaveView } from './save-view';
+import { SavedOpening } from './saved-opening';
 import { stageTaken, type StageHolders } from './stage-holds';
 import { Timeline } from './timeline';
 import { TracePanel, type TraceStep } from './trace';
@@ -100,6 +102,16 @@ type StageWorld = import('../../loop/review').StageWorld;
 type CreationControllerT = import('../../loop/creation').CreationController;
 type CreationViewT = import('./creation-view').CreationView;
 type RunAbout = import('../../loop/creation').RunAbout;
+// The creator's saved worlds (W3.6), loaded only on the agent path too: saving on install, and opening one by its id.
+type SaveControllerT = import('../../platform/save-controller').SaveController;
+type AccountFactsT = import('../../platform/save-controller').AccountFacts;
+type OpenedWorldT = import('../../platform/open-saved').OpenedWorld;
+/**
+ * What a Run shows (W3.6): a creation's world (its title, S, whether it revises the one on the stage, and the caller its
+ * Show it was pressed as, its owner: the second review of W3), a saved world reopened (with the account epoch it was read
+ * under: W3's review), or a saved attempt replayed.
+ */
+type RunOrigin = { readonly kind: 'creation'; readonly about: RunAbout; readonly ranAs: string | null } | { readonly kind: 'reopened'; readonly world: OpenedWorldT; readonly epoch: number } | { readonly kind: 'replay' };
 /**
  * An agent world on the stage (EA5.3): its runtime, its candidate, the device verdicts it was admitted on, and its
  * install's number, to which each film of it is bound (EA5.5); and what its Run found (its boxes, the probe's report),
@@ -236,6 +248,16 @@ class Studio {
     private backdropHold: (() => void) | null = null;
     /** The header's account control (W1): the allowance chip and Sign in; null without a live backend or a way to sign in. */
     private accountControl: AccountControl | null = null;
+    /** The agent path's saves (W3.6): the creator's world saved once it is on the stage; null without a backend or an account. */
+    private saves: SaveControllerT | null = null;
+    /** Its status beside the world's title, and under the idea box where the header has none. */
+    private saveView: SaveView | null = null;
+    /** A saved world being opened by its id (W3.6), until a Run installs it or another world takes the stage. */
+    private opening: SavedOpening | null = null;
+    /** The empty stage's card's part for it. */
+    private readonly openBlock = h('div', { class: 'empty-open', hidden: true });
+    /** What that part shows: built again when it changes, its Show it's state read on every look. */
+    private openShown = '';
 
     // Components and the elements they live in.
     private readonly trace = new TracePanel();
@@ -398,6 +420,8 @@ class Studio {
             // A loader calls no model: one of h1's hand-written examples by name, never a live h1 Create for a name this
             // build does not know (§9). An autorun is a Create, which still stops at "Show it" (I5); it waits for the stage.
             if (path.loader?.kind === 'scene' && starter) await this.forge('mock');
+            // A saved world by its id (W3.6): read, sealed and compiled here, then Show it on the stage's card, the go.
+            else if (path.loader?.kind === 'world') void this.openFromUrl(path.loader.name, api);
             else if (path.autorun) void Promise.all([this.stageReady, this.creationReady]).then(() => this.creationView?.create());
         } else if (!path.invalid && (params.has('autorun') || params.has('scene') || params.has('capture'))) {
             // A starter named in the URL is a playground example, whatever client this build has.
@@ -434,9 +458,14 @@ class Studio {
             this.creation = createCreationController({
                 turnSession: onChange => createAgentSession(client, onChange),
                 candidateSession: onChange => createCandidateSession({ modules, revise, compiler: () => this.deviceCompiler }, onChange),
-                stage: { blocked: () => this.runBlocked(), go: (snapshot, compiled, about) => this.runCandidate(snapshot, compiled, about) },
+                stage: {
+                    blocked: () => this.runBlocked(),
+                    go: (snapshot, compiled, about) => this.runCandidate(snapshot, compiled, about ? { kind: 'creation', about, ranAs: this.callerUid() } : { kind: 'replay' }),
+                },
                 account: session && control ? creationAccount(session, control) : undefined,
             });
+            // W3.6: each world of the creator's saved once it is on the stage, for an account that can keep it.
+            if (session && control) await this.mountSaves(api, session, control);
             // Its paid work holds the account (Sign in and Sign out wait), and the empty stage says a world is being made.
             this.creation.subscribe(() => {
                 this.accountControl?.setBusy(this.busy || !!this.creation?.busy);
@@ -504,7 +533,7 @@ class Studio {
         const { ReplayPanel } = await import('./replay-view');
         const replay = new ReplayPanel({
             compiler: () => this.deviceCompiler,
-            run: { blocked: () => this.runBlocked(), go: (snapshot, compiled) => this.runCandidate(snapshot, compiled) },
+            run: { blocked: () => this.runBlocked(), go: (snapshot, compiled) => this.runCandidate(snapshot, compiled, { kind: 'replay' }) },
         });
         this.replayPanel = replay;
         replay.el.classList.add('dev-only');
@@ -690,23 +719,27 @@ class Studio {
         this.renderCreate();
         this.candidatePanel?.refresh();
         this.replayPanel?.refresh();
+        // A saved world waiting for its Show it reads the stage the same way (W3.6).
+        this.renderOpening();
     }
 
     /**
-     * The GPU go for this candidate, and its Run on the stage (Q89): the creation's "Show it" (`about` names its world) or a
-     * saved attempt's Run (none). An install sets the agent world's state.
+     * The GPU go for this candidate, and its Run on the stage (Q89): the creation's "Show it" (its `about` names its world),
+     * a saved world's Show it (W3.6), or a saved attempt's Run. An install sets the agent world's state.
      */
-    private async runCandidate(snapshot: Sealed, compiled: readonly DeepReadonly<CompiledBody>[], about?: RunAbout): Promise<RunSummary> {
+    private async runCandidate(snapshot: Sealed, compiled: readonly DeepReadonly<CompiledBody>[], origin: RunOrigin, signal?: AbortSignal): Promise<RunSummary> {
         const stage = this.stage;
         if (!stage) return { status: 'refused', reason: 'no stage here', numbers: '' };
         stage.press(snapshot);
         const step = this.trace.add('Run on this GPU', 'gate');
-        const r = await stage.run(snapshot, compiled);
+        // A creation's Show it names its world and is Live; a saved world reopened is its creation's, and like a saved
+        // attempt it was made earlier, so it is From the archive ("made by Meta's models earlier and replayed here").
+        const title = origin.kind === 'creation' ? origin.about.title : origin.kind === 'reopened' ? origin.world.title : null;
+        const r = await stage.run(snapshot, compiled, signal);
         if (r.status === 'installed') {
             // The stage's commit has switched the viewport: H is set first, before anything that could throw, or a throw
-            // would leave the world drawn owned by nobody and the old one counted (EA9.3's reviews). A creation's Show it
-            // names its world; a saved attempt's Run does not, and its world is From the archive.
-            const notes = this.installAgent(r.runtime, r.held, snapshot, compiled, r.report, about?.title ?? null, about ? 'live' : 'archive');
+            // would leave the world drawn owned by nobody and the old one counted (EA9.3's reviews).
+            const notes = this.installAgent(r.runtime, r.held, snapshot, compiled, r.report, title, origin.kind === 'creation' ? 'live' : 'archive');
             // The world is on the stage from here: no step after the switch makes this Run a failure, so the controller
             // learns the world the stage shows.
             let said = notes.join(' · ');
@@ -715,8 +748,17 @@ class Studio {
             this.afterSwitch('the controls that offer a Run', () => this.refreshRun());
             this.afterSwitch('the Run\'s numbers', () => { said = [runNumbers(r.report), ...notes].filter(Boolean).join(' · '); });
             this.afterSwitch('the Run\'s line', () => step.ok(said, `id(C) ${snapshot.id.slice(0, 12)}…`));
-            // A saved attempt replayed is no creation's: the one that was on the stage lets its session go (I8).
-            if (!about) this.afterSwitch('the replaced creation', () => this.creation?.replaced());
+            // A saved attempt replayed, or a saved world reopened, is no creation's: the one that was on the stage lets its
+            // session go (I8).
+            if (origin.kind !== 'creation') this.afterSwitch('the replaced creation', () => this.creation?.replaced());
+            // A reopened world's own camera, once it is framed (the companion §8 step 4: the view applies after).
+            if (origin.kind === 'reopened' && origin.world.view) {
+                const v = origin.world.view;
+                this.afterSwitch('its saved view', () => this.viewport?.setView(keyframeToView({ t: 0, target: [...v.target], distance: v.distance, azimuth: v.azimuth, polar: v.polar, fov: v.fov })));
+            }
+            // Its save (W3.6, F8): a creation's world kept once it is here, the camera as it is now; a reopened one is its
+            // saved head; a replay's is nobody's.
+            this.afterSwitch('its save', () => this.saveInstalled(snapshot, origin));
             // Its review (EA6): captured now, as it is, from the framed view and the side.
             this.afterSwitch('its review', () => this.reviews?.installed(this.stageWorld()));
             return { status: 'installed', reason: null, numbers: said };
@@ -772,6 +814,13 @@ class Studio {
         }
         // Developer view's record of each change of world, and what the stage's ledger holds after it (EA9-E2 reads both).
         console.info(`Wexy: on the stage: ${this.worldName()}${this.ledgerLine()}`);
+        if (this.world === next) {
+            // W3.6: only an agent world has a save to say (its own install says it, saveInstalled); for any other, the line
+            // goes. A world reaching the stage ends a saved world's opening: the creator chose another (it reopens from
+            // the history), or it is the one opened.
+            if (next.kind !== 'agent') this.afterSwitch('the save line', () => { this.saves?.cleared(); this.saveView?.render(null); });
+            if (next.kind === 'agent' || next.kind === 'legacy') this.afterSwitch('the opening', () => this.endOpening());
+        }
     }
 
     /**
@@ -876,6 +925,185 @@ class Studio {
         this.hud.count.textContent = this.devView ? `${snapshot.x.nodes.length} nodes · ${snapshot.interfaces.length} modules` : '';
         this.swapBtn.disabled = this.busy || !this.draftSpec;
         return framing?.notes ?? [];
+    }
+
+    // ------------------------------------------------------------------ saved worlds (W3.6)
+
+    /**
+     * The saves (W3.6; the creations platform companion §7, F8): the controller over the platform's world calls, told who
+     * is signed in (E_auth, and whether that account can keep a world), and its status beside the world's title. The
+     * account's word reaches it whenever its epoch or its standing changes, once each: a sign-in moves the epoch, then the
+     * account's read makes it active, and a world waiting for an account is saved then.
+     */
+    private async mountSaves(api: Api, session: AccountSession, control: AccountControl): Promise<void> {
+        const { createSaveController } = await import('../../platform/save-controller');
+        const view = new SaveView({
+            retry: () => void this.saves?.retry(),
+            saveAsNew: () => void this.saves?.saveAsNew(),
+            openSaved: worldId => this.openSavedOne(worldId),
+            signIn: () => control.signInToSave(),
+        });
+        $('#scene-title').after(view.el);
+        control.lineClaim.after(view.line);
+        const facts = (): AccountFactsT => {
+            const s = session.current;
+            return {
+                epoch: s.epoch, kind: s.kind === 'anonymous' ? 'anonymous' : s.kind === 'google' ? control.saveKind : 'unknown',
+                // The caller this epoch's saves go out as, and no other (W3's review).
+                caller: session.caller(),
+            };
+        };
+        this.saves = createSaveController({
+            api, account: facts, newKey: () => crypto.randomUUID(), wait: ms => new Promise(resolve => setTimeout(resolve, ms)),
+            // Only the world on the stage's save is said: the controller speaks of its current one alone (cleared()).
+            changed: state => { if (this.agentWorld) view.render(state); },
+        });
+        this.saveView = view;
+        let heard = `${facts().epoch}|${facts().kind}`;
+        const moved = () => {
+            const f = facts();
+            const now = `${f.epoch}|${f.kind}`;
+            if (now === heard) return;
+            heard = now;
+            this.saves?.accountChanged();
+        };
+        session.subscribe(moved);
+        control.onAccount = moved;
+    }
+
+    /** The caller signed in now, as the session knows it (its uid), or null: who a creation's Show it was pressed as. */
+    private callerUid(): string | null {
+        return this.accountSession?.caller()?.uid ?? null;
+    }
+
+    /** H's save, as its Run installed it (F8): a creation's world from now, a reopened one as saved, a replay's none. */
+    private saveInstalled(snapshot: Sealed, origin: RunOrigin): void {
+        const saves = this.saves, w = this.agentWorld;
+        if (!saves || !w) return;
+        if (origin.kind === 'creation') {
+            const { about } = origin;
+            saves.installed({
+                stage: w.epoch, source: 'live', snapshot, design: about.design, view: this.viewport?.currentView() ?? null,
+                title: about.title.trim() || 'Untitled world',
+                // A version of the creation's world on the stage continues its save, under the install the controller
+                // knows that world by (the same world shown again keeps its first install's there).
+                improves: about.revises ? saves.state()?.stage ?? null : null,
+                // Whose world it is: the caller its Show it was pressed as (the second review of W3).
+                ranAs: origin.ranAs,
+            });
+        } else if (origin.kind === 'reopened') {
+            const o = origin.world;
+            saves.installed({
+                // Its camera as it shows now, its saved view applied: kept should the creator save it again (the review).
+                stage: w.epoch, source: 'reopened', snapshot, design: o.design, view: this.viewport?.currentView() ?? null, title: o.title, improves: null,
+                // The epoch it was read under: installed under another, it binds nothing (W3's review, its mid).
+                saved: { worldId: o.worldId, revisionId: o.revisionId, rowVersion: o.rowVersion, epoch: origin.epoch },
+            });
+        } else {
+            saves.installed({ stage: w.epoch, source: 'archive', snapshot, design: null, view: null, title: '', improves: null });
+        }
+    }
+
+    /**
+     * A saved world opened by its id (`?world=<id>`; W3.6, the companion §8): saved-opening.ts reads who is signed in,
+     * then the world (open-saved.ts, as that epoch's caller alone), compiles it by L3 on this device, and offers it on the
+     * empty stage's card, whose Show it is the GPU go. Only the world routes are called for it, never a model (F5). The
+     * world on the stage stays until the Run installs this one; any account change after the read ends the opening, so a
+     * world read for one account is never installed for another (F4; W3's review, its mid).
+     */
+    private async openFromUrl(worldId: string, api: Api | null): Promise<void> {
+        const session = this.accountSession && this.accountControl ? this.accountSession : null;
+        const opening: SavedOpening = new SavedOpening(worldId, {
+            api, session,
+            open: async (bound, id) => (await import('../../platform/open-saved')).openSaved(bound, id),
+            // L3 on this device: the stage's device compiler, once the stage exists.
+            compile: async world => {
+                const { compileSaved } = await import('../../loop/replay');
+                await this.stageReady;
+                const compiler = this.deviceCompiler;
+                if (!compiler) return { problem: 'no device compiler here' };
+                try {
+                    const compiled = await compileSaved(world.snapshot, compiler);
+                    const refused = compiled.filter(c => !c.ok).map(c => c.module);
+                    return refused.length ? { problem: `L3 refused ${refused.join(', ')} on this device` } : { compiled };
+                } catch (e) {
+                    return { problem: `L3 could not run: ${(e as Error)?.message ?? e}` };
+                }
+            },
+            blocked: () => this.runBlocked() !== null,
+            run: async (ready, epoch, signal) => {
+                const summary = await this.runCandidate(ready.world.snapshot, ready.compiled, { kind: 'reopened', world: ready.world, epoch }, signal);
+                return summary.status === 'installed' ? 'installed' : summary.status === 'stopped' ? 'stopped' : 'refused';
+            },
+            changed: () => { if (this.opening === opening) this.renderOpening(); },
+            record: (ok, text) => {
+                const step = this.trace.add('A saved world', 'gate');
+                if (ok) step.ok(text);
+                else {
+                    console.warn(`Wexy: the saved world ${worldId} did not open: ${text}`);
+                    step.error(text);
+                }
+            },
+        });
+        this.opening?.end();
+        this.opening = opening;
+        this.renderOpening();
+        await opening.start();
+    }
+
+    /** The creator's Show it for the saved world opened: the GPU go, then the stage's Run, as for any world (Q115). */
+    private async showOpened(): Promise<void> {
+        await this.opening?.show();
+    }
+
+    /** The empty stage's card's part for a saved world being opened: where it stands, and Show it once it is ready. */
+    private renderOpening(): void {
+        const o = this.opening?.view() ?? null;
+        const block = this.openBlock;
+        const key = o ? `${o.worldId}|${o.sentence}|${o.offer}|${o.ready}` : '';
+        if (key !== this.openShown) {
+            this.openShown = key;
+            block.hidden = !o;
+            block.replaceChildren();
+            if (o) {
+                block.append(h('p', { class: 'empty-open-text', role: 'status' }, o.sentence));
+                const actions = h('div', { class: 'empty-open-actions' });
+                if (o.ready) {
+                    const show = h('button', { type: 'button', class: 'btn empty-open-show' }, COPY.open.show);
+                    // A double click is one press (gotchas: a button whose action turns as it is pressed).
+                    show.addEventListener('click', e => { if (e.detail <= 1) void this.showOpened(); });
+                    actions.append(show);
+                }
+                if (o.offer === 'sign-in') {
+                    const signIn = h('button', { type: 'button', class: 'btn' }, COPY.account.signIn);
+                    signIn.addEventListener('click', () => this.accountControl?.signInToSave());
+                    actions.append(signIn);
+                }
+                if (o.offer === 'your-worlds') actions.append(h('a', { class: 'btn btn-quiet', href: CREATIONS }, COPY.save.yourWorlds));
+                if (actions.children.length) block.append(actions);
+            }
+        }
+        // Show it waits, as every Run does, for every other holder of the stage (stage-holds.ts).
+        const show = block.querySelector<HTMLButtonElement>('.empty-open-show');
+        if (show) {
+            const blocked = this.runBlocked();
+            show.disabled = blocked !== null;
+            show.title = blocked ?? COPY.open.show;
+        }
+    }
+
+    /** A world reached the stage: a saved world's opening is over, whichever world it was (W3.6). */
+    private endOpening(): void {
+        if (!this.opening) return;
+        this.opening.end();
+        this.opening = null;
+        this.renderOpening();
+    }
+
+    /** "Open the saved one" after a conflict (the companion §7): the saved head, once the creator confirms this world goes. */
+    private openSavedOne(worldId: string): void {
+        if (!window.confirm(COPY.save.openSavedConfirm)) return;
+        location.assign(worldLink(worldId));
     }
 
     /**
@@ -998,6 +1226,8 @@ class Studio {
         // Where the idea and the steps are depends on the layout: beside the stage, or below it once the panels stack.
         this.empty.replaceChildren(h('div', { class: 'empty-card' },
             h('span', { class: 'empty-logo', html: logo(64) }),
+            // A saved world being opened says where it stands first, then the card offers a new idea as ever (W3.6).
+            this.openBlock,
             h('h3', null, 'Describe a world'),
             h('p', { class: 'empty-building', role: 'status', html: 'Follow the steps <span class="at-wide">on the left</span><span class="at-narrow">below</span>' }),
             h('p', { class: 'empty-lede', html: '<span class="at-wide">Type an idea on the left, or tap one below.</span><span class="at-narrow">Tap an idea below, or scroll down to type your own.</span> It turns into a living 3D world you can fly around, and then into a video.' }),
