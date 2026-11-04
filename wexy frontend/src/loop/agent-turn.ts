@@ -70,6 +70,11 @@ export interface AgentTurnState {
      */
     httpStatus: number | null;
     retryAfterSeconds: number | null;
+    /**
+     * That refusal's code is its HTTP status's alone (ForgeError.bare: an edge's or a proxy's page, no envelope), so a
+     * 403 there is no word on the account (the independent review of account-guards). False otherwise.
+     */
+    bare: boolean;
     /** What the calls reported so far, in micro-USD: their costs, or their reservations when no usage came. */
     costMicroUsd: number;
     /** Calls that ended the turn without any usage: their cost is unknown, never zero. */
@@ -87,7 +92,7 @@ export function elapsedMs(state: AgentTurnState, now: number): number {
 function initial(seq: number, request: AgentTurnRequest, now: number): AgentTurnState {
     return {
         seq, request, phase: 'running', meta: null, calls: [], findings: [], design: null, program: null, question: null,
-        reason: null, code: null, httpStatus: null, retryAfterSeconds: null, costMicroUsd: 0, unreported: 0, startedMs: now, endedMs: null,
+        reason: null, code: null, httpStatus: null, retryAfterSeconds: null, bare: false, costMicroUsd: 0, unreported: 0, startedMs: now, endedMs: null,
     };
 }
 
@@ -126,7 +131,7 @@ function failed(state: AgentTurnState, error: unknown, now: number): AgentTurnSt
     if (error instanceof ForgeError) {
         // Where it came from: an envelope before any stream (its status), the stream itself (200), or no answer at all.
         const where = error.status === 0 ? 'no answer' : error.status === 200 ? 'in the stream' : `HTTP ${error.status}`;
-        return { ...end, phase: 'failed', code: error.code, reason: `${where}: ${error.message}`, httpStatus: error.status, retryAfterSeconds: error.retryAfterSeconds };
+        return { ...end, phase: 'failed', code: error.code, reason: `${where}: ${error.message}`, httpStatus: error.status, retryAfterSeconds: error.retryAfterSeconds, bare: error.bare };
     }
     return { ...end, phase: 'failed', code: 'internal', reason: (error as Error)?.message ?? String(error) };
 }

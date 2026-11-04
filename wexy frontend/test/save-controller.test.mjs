@@ -174,13 +174,20 @@ test('PL-FE10 an answer for an account no longer signed in is dropped, and anoth
     release();
     await h.saves.settled();
     assert.deepEqual([h.saves.state().status, h.saves.state().worldId], ['not-saved', null]);
-    // Saved under epoch 2, then a switch to epoch 3: nothing is sent; Save is the creator's.
+    // Its owner, under the new epoch, presses Try again: the same request, under its key, answered as the first was.
     await h.saves.retry();
     assert.equal(h.saves.state().status, 'saved');
-    h.account.epoch = 3;
+    assert.equal(new Set(h.api.sent.map(r => r.key)).size, 1, 'one request, one key');
+    // Another account signs in: nothing is sent, and the world is its owner's, saved there (Q129).
+    Object.assign(h.account, { epoch: 3, uid: 'uid-B' });
     h.saves.accountChanged();
     await h.saves.settled();
-    assert.deepEqual([h.api.sent.length, h.saves.state().status, h.saves.state().worldId], [2, 'not-saved', null]);
+    assert.deepEqual([h.api.sent.length, h.saves.state().status, h.saves.state().worldId], [2, 'elsewhere', WORLD]);
+    // Its owner signs in again: "Saved", with nothing sent again (no copy of it).
+    Object.assign(h.account, { epoch: 4, uid: 'uid-1' });
+    h.saves.accountChanged();
+    await h.saves.settled();
+    assert.deepEqual([h.api.sent.length, h.saves.state().status], [2, 'saved']);
 });
 
 test('PL-FE4 an answer lost to the network is sent again with the same key; a 202 is followed to its answer', async () => {
@@ -260,32 +267,35 @@ test('W3-review high: an account the session gives no caller for saves nothing: 
     });
     saves.installed(installed(1));
     await saves.settled();
-    assert.deepEqual([api.sent.length, saves.state().status], [0, 'not-saved']);
+    assert.deepEqual([api.sent.length, saves.state().status], [0, 'elsewhere'], 'no caller made it: nobody\'s to save');
 });
 
-test('W3-review mid: a reopened world installed after its account changed binds nothing: not "Saved", no revision of it; Save makes it a world of the account now', async () => {
+test('W3-review mid: a reopened world installed once another account signed in stays its owner\'s: "Saved" to it, nothing sent here, by itself or by a press (Q129)', async () => {
     const h = harness({ 'POST /v1/worlds': [world(0)] });
-    h.account.epoch = 2;
-    // Read under epoch 1, installed under epoch 2 (the Run finished after the switch).
-    h.saves.installed(installed(1, { source: 'reopened', saved: { worldId: WORLD, revisionId: REV[1], rowVersion: 3, epoch: 1 } }));
+    // Read as A (uid-1); its Run finished after B signed in.
+    Object.assign(h.account, { epoch: 2, uid: 'uid-B' });
+    h.saves.installed(installed(1, { source: 'reopened', ranAs: 'uid-1', saved: { worldId: WORLD, revisionId: REV[1], rowVersion: 3 } }));
     await h.saves.settled();
-    assert.deepEqual([h.saves.state().status, h.saves.state().worldId, h.api.sent.length], ['not-saved', null, 0]);
-    // The creator's Save: a world of its own for the account signed in now, never a revision of the other account's.
+    assert.deepEqual([h.saves.state().status, h.saves.state().worldId, h.api.sent.length], ['elsewhere', WORLD, 0], 'saved to the account that made it');
     await h.saves.retry();
-    assert.deepEqual(h.api.sent.map(r => r.path), ['/v1/worlds']);
-    assert.equal(h.saves.state().status, 'saved');
+    assert.equal(h.api.sent.length, 0, 'no Save for another account');
+    // A signs in again: its saved world, said "Saved", nothing sent.
+    Object.assign(h.account, { epoch: 3, uid: 'uid-1' });
+    h.saves.accountChanged();
+    assert.deepEqual([h.saves.state().status, h.api.sent.length], ['saved', 0]);
 });
 
-test('W3-review mid: a reopened world on the stage when the account changes is no longer said "Saved", and its improvement revises nothing of the other account', async () => {
+test('W3-review mid: a reopened world on the stage when another account signs in is its owner\'s, and that account\'s improvement is its own new world', async () => {
     const h = harness({ 'POST /v1/worlds': [world(0)] });
-    h.saves.installed(installed(1, { source: 'reopened', saved: { worldId: WORLD, revisionId: REV[1], rowVersion: 3, epoch: 1 } }));
+    h.saves.installed(installed(1, { source: 'reopened', ranAs: 'uid-1', saved: { worldId: WORLD, revisionId: REV[1], rowVersion: 3 } }));
     assert.equal(h.saves.state().status, 'saved');
-    h.account.epoch = 2;
+    Object.assign(h.account, { epoch: 2, uid: 'uid-B' });
     h.saves.accountChanged();
-    assert.deepEqual([h.saves.state().status, h.saves.state().worldId], ['not-saved', null]);
-    h.saves.installed(installed(2, { improves: 1 }));
+    assert.deepEqual([h.saves.state().status, h.saves.state().worldId], ['elsewhere', WORLD]);
+    // B's "Improve it" round, B's spend: B's own world, never a revision of A's.
+    h.saves.installed(installed(2, { improves: 1, ranAs: 'uid-B' }));
     await h.saves.settled();
-    assert.deepEqual(h.api.sent.map(r => r.path), ['/v1/worlds'], 'a new world of this account, not a revision of the other\'s');
+    assert.deepEqual(h.api.sent.map(r => [r.path, r.as]), [['/v1/worlds', 'uid-B']]);
 });
 
 // The review of 11-03, its high: the transport attaches whoever is signed in when it sends, so a request must never go
@@ -323,15 +333,14 @@ test('PL-FE10 a save under way is not followed once another account has signed i
 });
 
 test('PL-FE10 a creation begun under another account is not continued, even before the switch is told', async () => {
-    const h = harness({ 'POST /v1/worlds': [world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [world(1)] });
+    const h = harness({ 'POST /v1/worlds': [world(0), world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [world(1)] });
     h.saves.installed(installed(1));
     await h.saves.settled();
-    // The session moved on, and the studio has not said so yet: the improvement's save is the second layer.
-    h.account.epoch = 2;
+    // Another account holds the session, and the studio has not said so yet: its improvement is its own world.
+    Object.assign(h.account, { epoch: 2, uid: 'uid-B' });
     h.saves.installed(installed(2, { improves: 1 }));
     await h.saves.settled();
-    assert.deepEqual(h.api.sent.map(r => r.path), ['/v1/worlds'], 'no revision of the first account\'s world under the second');
-    assert.equal(h.saves.state().status, 'not-saved');
+    assert.deepEqual(h.api.sent.map(r => [r.path, r.as]), [['/v1/worlds', 'uid-1'], ['/v1/worlds', 'uid-B']], 'no revision of the first account\'s world under the second');
 });
 
 // Its mid: a create with no answer may have committed. Its improvement resolves it first, the same body under the same
@@ -448,23 +457,23 @@ test('W3.6 the account\'s word twice (its session\'s change, then its read) save
 // The second review of W3, its high: a world waiting for an account was saved into whichever account signed in next, by
 // itself. A world's owner is the caller its Run was pressed as (or the one signed in at its install); only the owner's
 // account saves it by itself, and the creator's press of Save makes it the caller's then.
-test('W3-review2 high: a world waiting for its owner\'s account is not saved into another account that signs in; Save there is the press', async () => {
+test('W3-review2 high: a world waiting for its owner\'s account is not saved into another account that signs in, by itself or by a press (Q129)', async () => {
     const h = harness({ 'POST /v1/worlds': [world(0)] }, 'unknown');
     // A's account has not been read (or A signed out): the world waits.
     h.saves.installed(installed(1));
     await h.saves.settled();
     assert.equal(h.api.sent.length, 0);
-    // B signs in, and B's account is read: nothing goes out by itself.
+    // B signs in, and B's account is read: nothing goes out.
     Object.assign(h.account, { epoch: 2, uid: 'uid-B', kind: 'unknown' });
     h.saves.accountChanged();
     h.account.kind = 'active';
     h.saves.accountChanged();
     await h.saves.settled();
-    assert.deepEqual([h.api.sent.length, h.saves.state().status], [0, 'not-saved']);
-    // B's creator presses Save: now it is B's, and saved as B.
+    assert.deepEqual([h.api.sent.length, h.saves.state().status, h.saves.state().worldId], [0, 'elsewhere', null]);
+    // B's press does nothing: the world is never saved into an account that did not make it.
     await h.saves.retry();
-    assert.deepEqual(h.api.sent.map(r => [r.path, r.as]), [['/v1/worlds', 'uid-B']]);
-    assert.equal(h.saves.state().status, 'saved');
+    await h.saves.saveAsNew();
+    assert.equal(h.api.sent.length, 0);
 });
 
 test('W3-review2 high: its owner\'s account saves it once read (late), and the anonymous creator who links Google keeps it (P1)', async () => {
@@ -494,7 +503,7 @@ test('W3-review2 high: a Run pressed as A that installs once B has signed in is 
     Object.assign(h.account, { epoch: 2, uid: 'uid-B' });
     h.saves.installed(installed(1, { ranAs: 'uid-1' }));
     await h.saves.settled();
-    assert.deepEqual([h.api.sent.length, h.saves.state().status], [0, 'not-saved']);
+    assert.deepEqual([h.api.sent.length, h.saves.state().status], [0, 'elsewhere']);
     // Pressed as B, after B signed in: B's world, saved as B (F8's account at the install).
     const b = harness({ 'POST /v1/worlds': [world(0)] });
     Object.assign(b.account, { epoch: 2, uid: 'uid-B' });
@@ -552,5 +561,185 @@ test('W3-review2 high: an anonymous creator\'s "Sign in to keep this world" is n
     Object.assign(h.account, { epoch: 2, uid: 'uid-B', kind: 'active' });
     h.saves.accountChanged();
     await h.saves.settled();
-    assert.deepEqual([h.api.sent.length, h.saves.state().status], [0, 'not-saved'], 'Save is offered now, not a sign-in');
+    assert.deepEqual([h.api.sent.length, h.saves.state().status], [0, 'elsewhere'], 'neither a sign-in nor a Save: not this account\'s world');
+});
+
+test('Q129 a save the account change cut short goes on when its owner signs in again, under its own key; nothing as the other account', async () => {
+    const h = harness({ 'POST /v1/worlds': [new ForgeError('unavailable', 0, 'no answer'), world(0)] }, 'active', a => { Object.assign(a, { epoch: 2, uid: 'uid-B' }); });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    // The retry's pause: B signed in, so nothing more went out; the world is A's, waiting for A.
+    assert.deepEqual([h.api.sent.map(r => r.as), h.saves.state().status], [['uid-1'], 'elsewhere']);
+    h.saves.accountChanged();
+    await h.saves.settled();
+    assert.equal(h.api.sent.length, 1);
+    Object.assign(h.account, { epoch: 3, uid: 'uid-1' });
+    h.saves.accountChanged();
+    await h.saves.settled();
+    assert.deepEqual(h.api.sent.map(r => r.as), ['uid-1', 'uid-1']);
+    assert.equal(h.api.sent[0].key, h.api.sent[1].key, 'the same request, resolved under its key');
+    assert.equal(h.saves.state().status, 'saved');
+});
+
+test('Q129 a refusal comes back as it was when its owner returns: a full storage still waits for the creator\'s press', async () => {
+    const h = harness({ 'POST /v1/worlds': [new ForgeError('storage-full', 403, 'full'), world(0)] });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    assert.equal(h.saves.state().status, 'storage-full');
+    Object.assign(h.account, { epoch: 2, uid: 'uid-B' });
+    h.saves.accountChanged();
+    assert.equal(h.saves.state().status, 'elsewhere');
+    Object.assign(h.account, { epoch: 3, uid: 'uid-1' });
+    h.saves.accountChanged();
+    await h.saves.settled();
+    assert.deepEqual([h.saves.state().status, h.api.sent.length], ['storage-full', 1], 'not sent again by itself');
+    await h.saves.retry();
+    assert.deepEqual([h.saves.state().status, h.api.sent.length], ['saved', 2]);
+});
+
+// ---- The independent review of account-guards (2026-11-04) -----------------------------------------------------------
+
+test('account-guards review mid: another account\'s line names a saved world only when its owner saved this one, never an unsaved improvement\'s parent', async () => {
+    // Its revision refused: the improvement shares its parent's lineage, which is no proof it was saved.
+    const failed = harness({ 'POST /v1/worlds': [world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [new ForgeError('bad-request', 400, 'not the schema')] });
+    failed.saves.installed(installed(1));
+    await failed.saves.settled();
+    failed.saves.installed(installed(2, { improves: 1 }));
+    await failed.saves.settled();
+    assert.equal(failed.saves.state().status, 'failed');
+    Object.assign(failed.account, { epoch: 2, uid: 'uid-B' });
+    failed.saves.accountChanged();
+    assert.deepEqual([failed.saves.state().status, failed.saves.state().worldId, failed.saves.state().revisionId, failed.saves.state().rowVersion],
+        ['elsewhere', null, null, null]);
+
+    // Its revision in flight when B signed in: its answer is dropped, and it is not said saved; A's return sends it again
+    // under its own key, and only then is it saved.
+    const flight = harness({ 'POST /v1/worlds': [world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [world(1), world(1)] });
+    flight.saves.installed(installed(1));
+    await flight.saves.settled();
+    const release = flight.api.hold(`POST /v1/worlds/${WORLD}/revisions`);
+    flight.saves.installed(installed(2, { improves: 1 }));
+    await sentAtLeast(flight, 2);
+    Object.assign(flight.account, { epoch: 2, uid: 'uid-B' });
+    flight.saves.accountChanged();
+    release();
+    await flight.saves.settled();
+    assert.deepEqual([flight.saves.state().status, flight.saves.state().worldId], ['elsewhere', null]);
+    Object.assign(flight.account, { epoch: 3, uid: 'uid-1' });
+    flight.saves.accountChanged();
+    await flight.saves.settled();
+    assert.deepEqual([flight.saves.state().status, flight.saves.state().revisionId], ['saved', REV[1]]);
+    assert.equal(flight.api.sent[1].key, flight.api.sent[2].key, 'the same request, resolved under its key');
+
+    // A Run pressed as A whose improvement installs once B is signed in: A's, not saved, so not said saved.
+    const late = harness({ 'POST /v1/worlds': [world(0)] });
+    late.saves.installed(installed(1));
+    await late.saves.settled();
+    Object.assign(late.account, { epoch: 2, uid: 'uid-B' });
+    late.saves.accountChanged();
+    assert.deepEqual([late.saves.state().status, late.saves.state().worldId], ['elsewhere', WORLD], 'its parent, saved, says so');
+    late.saves.installed(installed(2, { improves: 1, ranAs: 'uid-1' }));
+    await late.saves.settled();
+    assert.deepEqual([late.saves.state().status, late.saves.state().worldId, late.api.sent.length], ['elsewhere', null, 1]);
+});
+
+test('account-guards review: A, then B, then A again, each change heard twice (the session\'s word, then the account\'s): A\'s world saved once, as A, never said idle between', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0), world(0)] }, 'unknown');
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    assert.equal(h.saves.state().status, 'not-saved');
+    Object.assign(h.account, { epoch: 2, uid: 'uid-B', kind: 'unknown' });
+    h.saves.accountChanged();
+    h.account.kind = 'active';
+    h.saves.accountChanged();
+    assert.equal(h.saves.state().status, 'elsewhere');
+    // A again, its account read at once: both words before the save has run.
+    Object.assign(h.account, { epoch: 3, uid: 'uid-1', kind: 'active' });
+    const from = h.states.length;
+    h.saves.accountChanged();
+    h.saves.accountChanged();
+    await h.saves.settled();
+    assert.deepEqual([h.api.sent.map(r => r.as), h.saves.state().status], [['uid-1'], 'saved']);
+    assert.ok(!h.states.slice(from).some(s => s.status === 'idle' || s.status === 'elsewhere'), h.states.slice(from).map(s => s.status).join(' '));
+
+    // A again with its account to be read: "Not saved" while it is, then saved once it is read.
+    const r = harness({ 'POST /v1/worlds': [world(0)] }, 'unknown');
+    r.saves.installed(installed(1));
+    await r.saves.settled();
+    Object.assign(r.account, { epoch: 2, uid: 'uid-B', kind: 'active' });
+    r.saves.accountChanged();
+    Object.assign(r.account, { epoch: 3, uid: 'uid-1', kind: 'unknown' });
+    r.saves.accountChanged();
+    assert.equal(r.saves.state().status, 'not-saved');
+    r.account.kind = 'active';
+    r.saves.accountChanged();
+    r.saves.accountChanged();
+    await r.saves.settled();
+    assert.deepEqual([r.api.sent.map(q => q.as), r.saves.state().status], [['uid-1'], 'saved']);
+
+    // A saved world: B's two words keep what it was (the review's mutation, `away` always overwritten, had passed every
+    // test), so it says "Saved to the account that made it", and A finds it "Saved", nothing sent again.
+    const s = harness({ 'POST /v1/worlds': [world(0)] });
+    s.saves.installed(installed(1));
+    await s.saves.settled();
+    Object.assign(s.account, { epoch: 2, uid: 'uid-B', kind: 'unknown' });
+    s.saves.accountChanged();
+    s.account.kind = 'active';
+    s.saves.accountChanged();
+    assert.deepEqual([s.saves.state().status, s.saves.state().worldId], ['elsewhere', WORLD]);
+    Object.assign(s.account, { epoch: 3, uid: 'uid-1', kind: 'unknown' });
+    s.saves.accountChanged();
+    s.account.kind = 'active';
+    s.saves.accountChanged();
+    await s.saves.settled();
+    assert.deepEqual([s.saves.state().status, s.saves.state().worldId, s.api.sent.length], ['saved', WORLD, 1]);
+});
+
+test('account-guards review L4: an account read and barred says "Not saved" with nothing to press, read at once or late; its owner back and active again saves it', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0)] }, 'inactive');
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    assert.deepEqual([h.saves.state().status, h.api.sent.length], ['not-allowed', 0]);
+    await h.saves.retry();
+    assert.equal(h.api.sent.length, 0, 'a press sends nothing');
+
+    const late = harness({ 'POST /v1/worlds': [world(0)] }, 'unknown');
+    late.saves.installed(installed(1));
+    await late.saves.settled();
+    assert.equal(late.saves.state().status, 'not-saved');
+    late.account.kind = 'inactive';
+    late.saves.accountChanged();
+    await late.saves.settled();
+    assert.deepEqual([late.saves.state().status, late.api.sent.length], ['not-allowed', 0], 'read late, and barred: said so');
+    // Signed out, then in again with the account restored: its chance given back.
+    Object.assign(late.account, { epoch: 2, uid: null, kind: 'unknown' });
+    late.saves.accountChanged();
+    assert.equal(late.saves.state().status, 'elsewhere');
+    Object.assign(late.account, { epoch: 3, uid: 'uid-1', kind: 'active' });
+    late.saves.accountChanged();
+    await late.saves.settled();
+    assert.deepEqual([late.saves.state().status, late.api.sent.map(r => r.as)], ['saved', ['uid-1']]);
+    // Back and still barred: said so again.
+    const still = harness({ 'POST /v1/worlds': [world(0)] }, 'inactive');
+    still.saves.installed(installed(1));
+    await still.saves.settled();
+    Object.assign(still.account, { epoch: 2, uid: 'uid-B', kind: 'active' });
+    still.saves.accountChanged();
+    Object.assign(still.account, { epoch: 3, uid: 'uid-1', kind: 'inactive' });
+    still.saves.accountChanged();
+    await still.saves.settled();
+    assert.deepEqual([still.saves.state().status, still.api.sent.length], ['not-allowed', 0]);
+});
+
+test('account-guards review L4: the creator\'s Try again and the account\'s word queued together save the world once, never a revision of itself', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0), world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [world(1)] }, 'unknown');
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    assert.equal(h.saves.state().status, 'not-saved');
+    h.account.kind = 'active';
+    const press = h.saves.retry();
+    h.saves.accountChanged();
+    await press;
+    await h.saves.settled();
+    assert.deepEqual([h.api.sent.map(r => r.path), h.saves.state().status], [['/v1/worlds'], 'saved']);
 });

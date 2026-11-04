@@ -40,7 +40,7 @@ const { CREATIONS, SaveView, saveLine } = await import('../src/shell/studio/save
 
 const WORLD = '01JC3W5F6Q7R8S9T0V1W2X3Y4Z';
 const state = (status, extra = {}) => ({ stage: 1, status, worldId: WORLD, revisionId: null, rowVersion: null, detail: 'a developer\'s words', ...extra });
-const STATUSES = ['idle', 'sign-in', 'saving', 'saved', 'conflict', 'storage-full', 'too-large', 'not-saved', 'offline', 'failed'];
+const STATUSES = ['idle', 'sign-in', 'saving', 'saved', 'conflict', 'storage-full', 'too-large', 'not-saved', 'not-allowed', 'offline', 'failed', 'elsewhere'];
 
 test('W3.6 every save state in the creator\'s words, its one thing to do; nothing for a world with nothing to save', () => {
     assert.equal(saveLine(null), null);
@@ -53,10 +53,18 @@ test('W3.6 every save state in the creator\'s words, its one thing to do; nothin
         'conflict': ['warn', COPY.save.conflict, ['save-as-new', 'open-saved']],
         'storage-full': ['warn', COPY.save.full, ['your-worlds', 'retry']],
         'too-large': ['warn', COPY.save.tooLarge, []],
-        'not-saved': ['warn', COPY.save.notSaved, ['save']],
+        'not-saved': ['warn', COPY.save.notSaved, ['retry']],
+        // The account review's L4: an account read and barred has nothing to press that would change it.
+        'not-allowed': ['warn', COPY.save.notSaved, []],
         'offline': ['warn', COPY.save.offline, ['retry']],
         'failed': ['warn', COPY.save.notSaved, ['retry']],
+        // Q129: another account's world, saved to it: said so, nothing offered here.
+        'elsewhere': ['ok', COPY.save.savedElsewhere, []],
     });
+    // Another account's world that its owner has not saved: "Not saved", and still nothing offered (never saved here).
+    const unsaved = saveLine(state('elsewhere', { worldId: null }));
+    assert.deepEqual([unsaved.tone, unsaved.text, unsaved.actions, unsaved.why], ['warn', COPY.save.notSaved, [], COPY.save.elsewhereWhy]);
+    assert.ok(!Object.values(lines).some(l => l.actions.includes('save')), 'no Save that would put a world into another account');
     // A new world's conflict (its key used for another body) has no saved world: no "Open the saved one" for nothing.
     assert.deepEqual(saveLine(state('conflict', { worldId: null })).actions, ['save-as-new']);
     for (const [s, l] of Object.entries(lines)) {
@@ -97,9 +105,12 @@ test('W3.6 the view says it beside the title and under the idea box, each button
     view.render(state('sign-in'));
     buttons(view.el)[0].fire('click');
     view.render(state('not-saved'));
-    assert.equal(buttons(view.el)[0].textContent, COPY.save.save);
+    assert.equal(buttons(view.el)[0].textContent, COPY.save.tryAgain);
     buttons(view.el)[0].fire('click');
     assert.deepEqual(calls.slice(4), ['retry', 'sign-in', 'retry']);
+    // Q129: a world another account made has no button at all.
+    view.render(state('elsewhere'));
+    assert.equal(buttons(view.el).length, 0);
     view.render(null);
     assert.deepEqual([view.el.hidden, view.line.hidden, view.el.children.length], [true, true, 0]);
     assert.equal(markupWrites, 0, 'nothing here writes markup');

@@ -179,7 +179,7 @@ try {
     await create(a, STORM);
     await a.waitFor(`!!(${dialog})`, 15000, 'the limit dialog');
     const limited = await a.evaluate(dialog);
-    step('its next Create opens the limit dialog with Sign in with Google', limited?.title === "You've made your free world" && limited.actions.includes('Sign in with Google'), limited);
+    step('its next Create opens the limit dialog with Sign in with Google', limited?.title === 'The free world is made' && limited.actions.includes('Sign in with Google'), limited);
     step('the idea stays in its box and the world on the stage', (await a.evaluate(promptText)) === STORM && (await a.evaluate(worldTitle)) === firstWorld);
     await a.shot('02-limit-dialog');
 
@@ -222,7 +222,7 @@ try {
     await b.waitFor(`!!document.querySelector('.btn-forge') && !document.querySelector('.btn-forge').disabled`, 60000, 'the studio');
     await create(b, GALAXY);
     await b.waitFor(`!!(${dialog})`, 15000, 'the limit dialog');
-    step('a second browser on the same network is asked to sign in at its first Create', (await b.evaluate(dialog))?.title === "You've made your free world", await b.evaluate(dialog));
+    step('a second browser on the same network is asked to sign in at its first Create', (await b.evaluate(dialog))?.title === 'The free world is made', await b.evaluate(dialog));
     await b.shot('06-second-browser');
     await retire(b);
 

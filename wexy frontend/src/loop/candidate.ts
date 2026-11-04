@@ -434,8 +434,12 @@ export interface CandidateSession {
     modelReview(input: ModelReviewInput): Promise<ModelReviewed>;
 }
 
-/** The creator's sentence for a refusal or failure the backend reported. */
-function sentenceFor(code: ErrorCode): string {
+/**
+ * The creator's sentence for a refusal or failure the backend reported. `bare`: the code is the HTTP status's alone, no
+ * envelope of ours with it (an edge's or a proxy's page, ForgeError.bare), so a 403 is no word on the account (the
+ * account-guards review). Exported for the tests.
+ */
+export function sentenceFor(code: ErrorCode, bare = false): string {
     switch (code) {
         case 'budget':
         case 'paused': return COPY.failures.budget;
@@ -447,8 +451,8 @@ function sentenceFor(code: ErrorCode): string {
         case 'quota': return COPY.failures.quota;
         case 'content-refused': return COPY.failures.refused;
         case 'auth':
-        case 'appcheck':
-        case 'forbidden': return COPY.failures['sign-in'];
+        case 'appcheck': return COPY.failures['sign-in'];
+        case 'forbidden': return bare ? COPY.failures['sign-in'] : COPY.failures.suspended;
         case 'timeout': return COPY.failures['author-slow'];
         case 'upstream': return COPY.candidate.stream;
         case 'bad-request':
@@ -818,7 +822,7 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
             // Refused before any stream (an HTTP status), or broken once it ran (an error event, a cut, another contract).
             record.status = error instanceof ForgeError && error.status >= 400 ? 'refused' : 'broken';
             const code = error instanceof ForgeError ? error.code : 'internal';
-            a.halt({ scope: 'host', diagnostic: `revision: ${message(error)}; charge unknown`, sentence: sentenceFor(code), ...(error instanceof ForgeError ? { code } : {}) }, 'failed', now());
+            a.halt({ scope: 'host', diagnostic: `revision: ${message(error)}; charge unknown`, sentence: sentenceFor(code, error instanceof ForgeError && error.bare), ...(error instanceof ForgeError ? { code } : {}) }, 'failed', now());
             return 'stop';
         }
         a.revising = false;
@@ -1144,7 +1148,7 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
                     a.halt({ scope: 'host', diagnostic: error.message, sentence: COPY.candidate.stream }, 'failed', now());
                 } else if (error instanceof ForgeError) {
                     record.status = 'refused';
-                    a.halt({ scope: 'host', diagnostic: `${error.code}: ${error.message}`, sentence: sentenceFor(error.code), code: error.code }, 'failed', now());
+                    a.halt({ scope: 'host', diagnostic: `${error.code}: ${error.message}`, sentence: sentenceFor(error.code, error.bare), code: error.code }, 'failed', now());
                 } else {
                     record.status = 'broken';
                     a.halt({ scope: 'host', diagnostic: `module call ${jobId}: ${message(error)}`, sentence: COPY.candidate.refused }, 'failed', now());

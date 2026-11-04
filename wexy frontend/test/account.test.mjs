@@ -669,3 +669,81 @@ test('W2 review, mid: a bootstrap that never answers holds neither the sign-in n
     await settle();
     assert.equal(whoOf(account).textContent, '@nova', 'the deadline gave the set-up up, and the next Create read the account');
 });
+
+// Q129 (the user, 2026-11-04): a world written and waiting for Show it is the signed-in account's, and an account change
+// discards it, so Sign out, and a collision's sign-in to another account, ask first. Escape keeps both.
+test('Q129 Sign out asks first when a world waits for Show it: Show it first keeps the account, Sign out and discard signs out, Escape keeps both', async () => {
+    const { port, account, said } = await accountControl({ uid: 'u1', provider: 'google' }, { 'GET /v1/me': dto() }, { hint: memoryHint(true) });
+    let shows = 0;
+    let waiting = true;
+    account.unshownWorld = () => waiting;
+    account.showUnshown = () => { shows++; };
+    const signOut = () => button(account.el, COPY.account.signOut);
+    await account.restore();
+    await settle();
+
+    signOut().click();
+    await settle();
+    let dialog = openDialog();
+    assert.ok(dialog, 'it asks');
+    assert.equal(dialog.find(e => e.tagName === 'H2').textContent, COPY.account.unshownSignOutTitle);
+    assert.equal(dialog.find(e => e.tagName === 'P').textContent, COPY.account.unshownSignOutBody);
+    assert.deepEqual(dialog.buttons().map(b => b.textContent), [COPY.account.showFirst, COPY.account.unshownSignOutGo]);
+    button(dialog, COPY.account.showFirst).click();
+    await settle();
+    assert.deepEqual([shows, port.who?.uid ?? null, dialog.open], [1, 'u1', false], 'Show it first: shown, still signed in');
+
+    signOut().click();
+    await settle();
+    dialog = openDialog();
+    dialog.close();
+    await settle();
+    assert.equal(port.who?.uid, 'u1', 'Escape: still signed in, the world kept');
+
+    signOut().click();
+    await settle();
+    button(openDialog(), COPY.account.unshownSignOutGo).click();
+    await settle();
+    assert.equal(port.who, null, 'Sign out and discard: signed out');
+    // Said as it is (the account review's L1): the world was discarded, not kept.
+    assert.equal(said.at(-1), COPY.account.signedOutDiscarded);
+
+    // Nothing waiting: Sign out asks nothing.
+    const plain = await accountControl({ uid: 'u2', provider: 'google' }, { 'GET /v1/me': dto() }, { hint: memoryHint(true) });
+    plain.account.unshownWorld = () => false;
+    await plain.account.restore();
+    await settle();
+    button(plain.account.el, COPY.account.signOut).click();
+    await settle();
+    assert.equal(plain.port.who, null);
+    assert.equal(plain.said.at(-1), COPY.account.signedOut);
+    waiting = false;
+});
+
+test('Q129 a collision\'s "Sign in to that account" asks the same first when a world waits for Show it', async () => {
+    const { port, account } = await control();
+    let shows = 0;
+    account.unshownWorld = () => true;
+    account.showUnshown = () => { shows++; };
+    button(account.el, COPY.account.signIn).click();
+    await settle();
+    button(openDialog(), COPY.account.collisionGo).click();
+    await settle();
+    let dialog = openDialog();
+    assert.ok(dialog, 'it asks before signing in to another account');
+    assert.equal(dialog.find(e => e.tagName === 'P').textContent, COPY.account.unshownSignInBody);
+    assert.deepEqual(dialog.buttons().map(b => b.textContent), [COPY.account.showFirst, COPY.account.unshownSignInGo]);
+    button(dialog, COPY.account.showFirst).click();
+    await settle();
+    assert.deepEqual([shows, port.existingCalls], [1, 0], 'Show it first: no sign-in');
+
+    button(account.el, COPY.account.signIn).click();
+    await settle();
+    button(openDialog(), COPY.account.collisionGo).click();
+    await settle();
+    button(openDialog(), COPY.account.unshownSignInGo).click();
+    await settle();
+    assert.equal(port.existingCalls, 1, 'Sign in and discard: signed in to that account');
+    port.pending({ kind: 'signed-in' });
+    await settle();
+});

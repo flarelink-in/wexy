@@ -50,6 +50,9 @@ class ForgeRoutesTest {
     private AuthorizationFilter authorization;
 
     @Autowired
+    private ai.wexy.gateway.auth.AccountStanding standing;
+
+    @Autowired
     private GatewayShieldProperties shield;
 
     @Test
@@ -165,6 +168,26 @@ class ForgeRoutesTest {
             assertThat(filters).as(id).noneMatch(f -> f instanceof AuthorizationFilter.PolicyFilter);
             assertThat(buckets(filters)).as(id).containsExactly("public-read");
         }
+    }
+
+    /**
+     * A suspended or deleting account spends nothing (2026-11-04): every forge route that makes or reports a model call,
+     * and the allowance read (the independent review), asks the account's standing after the sign-in; the public reads
+     * and the review's terms do not, and nothing of the platform's does (its own routes check the account there).
+     */
+    @Test
+    void everyRouteThatSpendsAsksTheAccountsStanding() {
+        for (String id : List.of("forge-plan", "forge-author", "forge-repair", "forge-direct", "forge-outcomes", "agent-turn",
+                "agent-module", "agent-review", "forge-allowance")) {
+            assertThat(route(id).getFilters()).as(id).contains(standing.spending());
+        }
+        for (String id : List.of("agent-review-terms", "forge-mode", "archive-match", "stats", "admin",
+                "me-read", "me-bootstrap", "worlds-create")) {
+            assertThat(route(id).getFilters()).as(id).doesNotContain(standing.spending());
+        }
+        // After the sign-in, whose caller it reads, and before the per-user limiters, so a barred call spends no bucket.
+        assertThat(((org.springframework.core.Ordered) standing.spending()).getOrder())
+                .isGreaterThan(AuthorizationFilter.ORDER).isLessThan(ai.wexy.gateway.shield.RateLimits.POST_AUTH_ORDER);
     }
 
     /**

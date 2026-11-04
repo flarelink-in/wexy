@@ -46,13 +46,17 @@ public class ClientNetworkKey {
         this.key = parse(hex, required);
     }
 
-    /** The network key of the client that sent this request, or null when there is none to give. */
+    /**
+     * The network key of the client that sent this request, or null when there is none to give: its family, then the
+     * HMAC, as {@code v4.<64 hex>} or {@code v6.<64 hex>}. Forge counts each family by its own limit (Q98, 2026-11-04:
+     * an IPv4 address is often shared, a carrier's or an office's, where an IPv6 /64 is one home or one phone).
+     */
     public String of(ServerWebExchange exchange) {
         if (key == null) {
             return null;
         }
         byte[] network = network(resolver.resolve(exchange));
-        return network == null ? null : hmac(network);
+        return network == null ? null : (network[0] == 4 ? "v4." : "v6.") + hmac(network);
     }
 
     /** The key, checked: 32 bytes as 64 hex characters, or none at all where none is required. */

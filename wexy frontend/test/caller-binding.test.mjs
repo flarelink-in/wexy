@@ -73,7 +73,7 @@ test('W3-review high: the reproduction: account A\'s save answered 401 while B s
     saves.installed(installed());
     await saves.settled();
     assert.deepEqual(requests.map(r => r.authorization), ['Bearer account-1'], 'one request, as account-1; none as account-2');
-    assert.equal(saves.state().status, 'not-saved');
+    assert.equal(saves.state().status, 'elsewhere', 'account-1\'s world, on the stage, never account-2\'s (Q129)');
 });
 
 test('W3-review high: a bound request is sent only as its caller: App Check first, the ID token last, the epoch asked just before the fetch', async () => {
@@ -270,6 +270,6 @@ test('W3-review2 high: the studio\'s wiring, the real session and transport: A\'
     moved();
     await saves.settled();
     assert.deepEqual(sent.requests.map(r => r.authorization), [], 'nothing sent as B by itself');
-    assert.equal(saves.state().status, 'not-saved');
+    assert.equal(saves.state().status, 'elsewhere');
     session.dispose();
 });

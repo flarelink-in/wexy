@@ -65,13 +65,19 @@ export class ForgeError extends Error {
     readonly status: number;
     /** From `Retry-After` on a `rate` or a `quota`, in seconds; null otherwise, and when the header was absent. */
     readonly retryAfterSeconds: number | null;
+    /**
+     * The code is the status's alone: no envelope of ours came with it (an edge's or a proxy's page), so it is no service's
+     * word. A bare 403 is never read as the account's standing (2026-11-04).
+     */
+    readonly bare: boolean;
 
-    constructor(code: ErrorCode, status: number, message: string, retryAfterSeconds: number | null = null) {
+    constructor(code: ErrorCode, status: number, message: string, retryAfterSeconds: number | null = null, bare = false) {
         super(message);
         this.name = 'ForgeError';
         this.code = code;
         this.status = status;
         this.retryAfterSeconds = retryAfterSeconds;
+        this.bare = bare;
     }
 }
 
@@ -94,15 +100,19 @@ export class StaleCaller extends Error {
 export async function errorFromResponse(res: Response): Promise<ForgeError> {
     let code = codeForStatus(res.status);
     let message = `HTTP ${res.status}`;
+    let bare = true;
     const body: unknown = await res.json().catch(() => null);
     if (body && typeof body === 'object') {
         const { code: c, message: m } = body as { code?: unknown; message?: unknown };
-        if (isErrorCode(c)) code = c;
+        if (isErrorCode(c)) {
+            code = c;
+            bare = false;
+        }
         if (typeof m === 'string' && m) message = m.slice(0, 300);
     }
     // Absent is unknown, not zero; an HTTP-date form is not a number of seconds, so it is unknown too. Only a wait
     // that ends is kept: a rate bucket's, and the daily allowance's reset (W1). Nothing else gets a countdown.
     const header = res.headers.get('Retry-After')?.trim() ?? '';
     const retry = /^\d+$/.test(header) ? Number(header) : null;
-    return new ForgeError(code, res.status, message, code === 'rate' || code === 'quota' ? retry : null);
+    return new ForgeError(code, res.status, message, code === 'rate' || code === 'quota' ? retry : null, bare);
 }

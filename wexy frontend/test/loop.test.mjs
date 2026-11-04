@@ -155,10 +155,19 @@ test('L4 model-side failures end in a plain sentence, and nothing is authored af
         [new ForgeError('account-required', 403, 'spent'), 'allowance', COPY.failures.allowance],
         [new ForgeError('quota', 429, 'made'), 'quota', COPY.failures.quota],
         [new ForgeError('content-refused', 422, 'unsafe'), 'refused', COPY.failures.refused],
+        // 2026-11-04: a suspended or deleting account, refused by the gateway in its envelope, is said as the account's;
+        // a bare 403 (an edge's page, no envelope) is no word on the account.
+        [new ForgeError('forbidden', 403, 'This account can\'t make worlds right now.'), 'suspended', COPY.failures.suspended],
+        [new ForgeError('forbidden', 403, 'HTTP 403', null, true), 'sign-in', COPY.failures['sign-in']],
         [new ForgeError('timeout', 504, 'late'), 'plan', COPY.failures.plan],
         [new ForgeError('too-large', 413, 'bug'), 'internal', COPY.failures.internal],
         [new Error('boom'), 'internal', COPY.failures.internal],
     ];
+    // The free world's refusal is honest whoever made it (2026-11-04): this browser, or another on the same network,
+    // whose spend forge words as the network's; the studio's one sentence never says "you" of a neighbour's world.
+    assert.match(COPY.failures.allowance, /browser/);
+    assert.match(COPY.failures.allowance, /network/);
+    assert.doesNotMatch(`${COPY.failures.allowance} ${COPY.account.allowanceTitle}`, /you've made your free world/i);
     for (const [error, kind, sentence] of cases) {
         const client = fakeClient({ plan: [error, error] });
         const out = await run(client, fakeVerifier(ok())).promise;

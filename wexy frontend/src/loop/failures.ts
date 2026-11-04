@@ -30,7 +30,10 @@ export function classifyError(error: unknown, stage: FailureStage): { kind: Fail
                 return { kind: 'quota', sentence: reset === null ? COPY.failures.quota : COPY.quotaUntil(reset), detail };
             }
             case 'content-refused': return sentence('refused');
-            case 'auth': case 'appcheck': case 'forbidden': return sentence('sign-in');
+            case 'auth': case 'appcheck': return sentence('sign-in');
+            // A signed-in account the platform has suspended, or is deleting: the gateway refuses its model calls in its
+            // own envelope. A bare 403 (an edge's page, no envelope) is no word on the account: as a sign-in that failed.
+            case 'forbidden': return error.bare ? sentence('sign-in') : sentence('suspended');
             case 'timeout': return stage === 'plan' ? sentence('plan') : sentence('author-slow');
             case 'upstream':
                 // The backend judged the answer (empty, no function, declined) or Meta failed, twice: not slowness.

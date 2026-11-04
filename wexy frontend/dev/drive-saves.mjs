@@ -12,6 +12,7 @@
 //     (and no "Open the saved one" for a world never saved), which saves it under a new key;
 //   - W3-E6: a full storage: said once, never sent again by itself; "Try again" once room is made saves it;
 //   - W3-E7: at 390 px the save's line sits under the idea box, the header having no title, the page as wide as the screen;
+//   - W3-E8 (Q129): a world waiting for Show it, then Sign out: asked first; discarded, the world on the stage stays its owner's;
 //   - no console error, no unexpected route, every world call a signed-in caller's.
 // Screenshots and steps.json go to dev/out/drive-saves/<gpu>-<time>/. Exit 0 when every step passes; 1 otherwise; 2 when
 // Chrome or Vite cannot start. On the charger only, one GPU harness at a time.
@@ -356,12 +357,36 @@ try {
     step('W3-E7 at 390 px the save\'s word sits under the idea box (the header has no title), and the page is exactly as wide as the screen',
         !phone.save.header.shown && phone.save.line.shown && phone.save.line.text === 'Saved' && phone.width === 390, phone);
 
+    // W3-E8 (Q129, 2026-11-04): a world written and waiting for Show it, then Sign out: asked first; "Sign out and discard"
+    // discards it unshown, and the world on the stage stays, saved to the account that made it, never offered here.
+    await sleep(500);
+    await evaluate(`(() => { const p = document.querySelector('#prompt'); p.value = 'A castle at dawn. Mist over the moat.'; p.dispatchEvent(new Event('input')); })()`);
+    await evaluate(`document.querySelector('.btn-forge').click()`);
+    const readyD = await until(`document.querySelector('.btn-forge span')?.textContent === 'Show it' && !document.querySelector('.btn-forge').disabled`, 90_000);
+    const savesBefore = saves().length;
+    await evaluate(`[...document.querySelectorAll('.account button')].find(b => b.textContent === 'Sign out' && !b.hidden)?.click()`);
+    const askedD = await until(`document.querySelector('dialog.account-dialog[open] .acct-body')?.textContent === "Your new world hasn't been shown yet. Signing out discards it."`, 10_000);
+    const choices = await evaluate(`[...document.querySelectorAll('dialog.account-dialog[open] button')].map(b => b.textContent)`);
+    await shot('sign-out-asks');
+    await evaluate(`[...document.querySelectorAll('dialog.account-dialog[open] button')].find(b => b.textContent === 'Sign out and discard')?.click()`);
+    const goneD = await until(`document.querySelector('.btn-forge span')?.textContent !== 'Show it' && localStorage.getItem('wexy.devProvider') === null`, 20_000);
+    // Said as it is (the account review's L1): the new world was discarded, not "still here".
+    await until(`!document.querySelector('#toast').hidden && document.querySelector('#toast').textContent.startsWith('Signed out')`, 5_000);
+    const toastD = await evaluate(`document.querySelector('#toast').textContent`);
+    await sleep(800);
+    const e8 = { choices, toast: toastD, stage: await stage(), save: await saveLook(), forge: await evaluate(`document.querySelector('.btn-forge span')?.textContent ?? null`) };
+    await shot('discarded');
+    step('W3-E8 (Q129) a world waiting for Show it: Sign out asks first (Show it first, Sign out and discard); discarded, said so, it never shows; the world on the stage stays, saved to the account that made it, nothing offered',
+        readyD && askedD && choices.join() === 'Show it first,Sign out and discard' && goneD && e8.toast === 'Signed out. Your new world was discarded.'
+        && e8.stage.title === TITLE_C && e8.forge !== 'Show it'
+        && e8.save.header.text === 'Saved to the account that made it' && e8.save.header.buttons.length === 0 && saves().length === savesBefore, e8);
+
     const errors = consoleLines.filter(l => /^(error|exception)/.test(l));
     step('no console error', errors.length === 0, errors.slice(0, 5));
     const unexpected = calls.filter(c => c.unexpected || c.refused);
     const worldCalls = calls.filter(c => /\/v1\/(worlds|me\/)/.test(c.route));
     step('the stand-in was asked only for the agent routes, the allowance, the account and the world routes; every world call a signed-in caller\'s',
-        unexpected.length === 0 && worldCalls.length > 0 && worldCalls.every(c => c.who === 'google') && calls.filter(c => c.route === 'POST /v1/agent/turn').length === 3,
+        unexpected.length === 0 && worldCalls.length > 0 && worldCalls.every(c => c.who === 'google') && calls.filter(c => c.route === 'POST /v1/agent/turn').length === 4,
         { unexpected, routes: [...new Set(calls.map(c => c.route))] });
     writeFileSync(join(OUT, 'steps.json'), JSON.stringify({ gpu, gpuLabel, steps, calls, console: consoleLines }, null, 1));
     const passed = steps.filter(s => s.ok).length;

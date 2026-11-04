@@ -98,18 +98,23 @@ function backend(routes = {}, identity = IDENTITY) {
     return { requests, paths: () => requests.map(r => r.path), agent: createAgentClient(api), modules: createModuleClient(api) };
 }
 
-/** The account (W1, W2): its epoch moved on demand, a caller established, its dialog and its reads after an entry counted. */
+/**
+ * The account (W1, W2): its epoch moved on demand, a caller established, its dialog and its reads after an entry counted.
+ * `move()` is an account change, another uid signed in; `link()` an anonymous creator gaining Google, the same uid.
+ */
 function account() {
     const a = {
-        e: 0, changingNow: false, listeners: new Set(), entries: 0, limits: [], known: true, enters: 0,
+        e: 0, u: 'uid-0', changingNow: false, listeners: new Set(), entries: 0, limits: [], known: true, enters: 0,
         epoch: () => a.e,
+        uid: () => (a.known ? a.u : null),
         established: () => a.known,
         async enter() { a.enters++; a.known = true; },
         changing: () => a.changingNow,
         subscribe(listener) { a.listeners.add(listener); return () => a.listeners.delete(listener); },
         afterEntry() { a.entries++; },
         limit(kind, sentence) { a.limits.push({ kind, sentence }); },
-        move() { a.e++; for (const l of [...a.listeners]) l(); },
+        move() { a.e++; a.u = `uid-${a.e}`; for (const l of [...a.listeners]) l(); },
+        link() { a.e++; for (const l of [...a.listeners]) l(); },
     };
     return a;
 }
@@ -928,30 +933,62 @@ test('EA9-U20 a world written for Show it outlives a new idea that never starts:
     assert.equal(done.sessions[0].cancels, 1);
 });
 
-test('EA9-U21 an account change keeps a world written for its go, and its Run: showing spends nothing (Q127 (a))', async () => {
+test('EA9-U21 an account change discards a world written for its go and stops its Run; a link keeps it (Q127 (a) reversed, Q129)', async () => {
+    // Written and waiting for Show it: another account signs in, and the world goes. The stage is as it was.
     const r = rig({ answer: null });
     await r.controller.create(IDEA);
+    assert.equal(r.controller.unshown, true, 'a sign-out would ask first');
     const n = r.controller.n;
     r.acct.move();
-    assert.deepEqual([r.controller.state.phase, r.controller.n, r.controller.showBlocked()], ['ready', n, null], 'kept, κ unmoved, Show it offered');
-    const showing = r.controller.show();
-    r.acct.move();
-    assert.equal(r.controller.n, n, 'a Run under way goes on');
-    r.stage.gos[0].answer(INSTALLED);
-    assert.equal((await showing).status, 'installed');
-    assert.deepEqual([r.controller.state.phase, r.controller.installedSession], ['installed', null], 'on the stage, its paid actions gone with the old account');
-    assert.deepEqual([r.net.requests.length, r.acct.limits.length], [2, 0]);
+    assert.deepEqual([r.controller.state.phase, r.controller.state.sentence], ['stopped', COPY.creation.discarded]);
+    assert.ok(r.controller.n > n, 'κ moved');
+    assert.deepEqual([r.controller.unshown, r.controller.showBlocked() !== null], [false, true], 'nothing waits, nothing to show');
+    assert.equal(await r.controller.show(), null);
+    assert.deepEqual([r.stage.gos.length, r.stage.installs, r.sessions[0].cancels], [0, 0, 1], 'no go, no install, its session let go');
+    assert.deepEqual([r.net.requests.length, r.acct.limits.length], [2, 0], 'nothing more asked of the backend');
 
-    // A world kept for its go while a new idea's turn waits (Q126 (b)) comes back when the account changes under that turn.
+    // Its Run under way: stopped (κ moved, so the stage answers a stop and installs nothing), and the world goes with it.
+    const run = rig({ answer: null });
+    await run.controller.create(IDEA);
+    const showing = run.controller.show();
+    const k0 = run.controller.n;
+    run.acct.move();
+    assert.ok(run.controller.n > k0, 'κ moved under the Run');
+    run.stage.gos[0].answer(INSTALLED);
+    assert.equal((await showing).status, 'stopped');
+    assert.deepEqual([run.controller.state.phase, run.controller.state.sentence, run.stage.installs], ['stopped', COPY.creation.discarded, 0]);
+
+    // A link (an anonymous creator gaining Google: the same uid, a new epoch) is no account change: the world stays, shown.
+    const l = rig({ answer: null });
+    await l.controller.create(IDEA);
+    l.acct.link();
+    assert.deepEqual([l.controller.state.phase, l.controller.showBlocked(), l.controller.unshown], ['ready', null, true]);
+    const linked = l.controller.show();
+    l.stage.gos[0].answer(INSTALLED);
+    assert.equal((await linked).status, 'installed');
+    assert.equal(l.controller.state.phase, 'installed');
+
+    // A world kept for its go while a new idea's turn waits (Q126 (b)) goes too when another account signs in under that
+    // turn: it is never given back to the account signed in after.
     const k = rig({ routes: { turn: (body, at, init) => (at === 1 ? sse(HANDED_OFF) : unanswered(init)) } });
     await k.controller.create(IDEA);
     const creating = k.controller.create({ ...IDEA, prompt: 'a lighthouse on a cliff in a storm' });
     await waitFor(() => k.net.requests.length === 3, 'the new idea\'s turn asked');
     k.acct.move();
-    assert.deepEqual([k.controller.state.phase, k.controller.state.idea.prompt], ['ready', IDEA.prompt], 'given back at the change itself');
     const back = await creating;
-    assert.deepEqual([back.phase, back.idea.prompt, back.sentence], ['ready', IDEA.prompt, COPY.creation.kept(COPY.creation.accountChanged)]);
-    assert.equal(k.sessions[0].cancels, 0);
+    assert.notEqual(back.phase, 'ready', 'not given back');
+    assert.equal(back.idea.prompt, 'a lighthouse on a cliff in a storm');
+    assert.deepEqual([k.sessions[0].cancels, k.controller.unshown], [1, false], 'the kept world let go');
+
+    // A link under that turn gives the kept world back, as Q126 (b) does: it is still that creator's.
+    const kl = rig({ routes: { turn: (body, at, init) => (at === 1 ? sse(HANDED_OFF) : unanswered(init)) } });
+    await kl.controller.create(IDEA);
+    const linking = kl.controller.create({ ...IDEA, prompt: 'a lighthouse on a cliff in a storm' });
+    await waitFor(() => kl.net.requests.length === 3, 'the new idea\'s turn asked');
+    kl.acct.link();
+    const given = await linking;
+    assert.deepEqual([given.phase, given.idea.prompt, given.sentence], ['ready', IDEA.prompt, COPY.creation.kept(COPY.creation.accountChanged)]);
+    assert.equal(kl.sessions[0].cancels, 0);
 });
 
 test('EA9-U9 G4: a Run that did not install says why in one sentence chosen by its code: unclear says try again or a different idea, too heavy a simpler idea; no code in any', async () => {
@@ -1157,4 +1194,152 @@ test('EA9-U16 the creation path from the URL: one path, legacy wins, a loader su
     const mounting = methodOf(main, 'private async mountCreation(');
     const marked = mounting.indexOf('this.markCreationReady();');
     assert.ok(marked > mounting.indexOf('this.creationView = new CreationView(') && marked < mounting.indexOf('await this.mountAgent('), 'once its controls exist, before the panels');
+});
+
+// ---- The independent review of account-guards (2026-11-04) -----------------------------------------------------------
+
+test('account-guards review high: a bare 403 at the turn (an edge\'s page, no envelope) is said as a sign-in; the gateway\'s own forbidden as the account\'s', async () => {
+    const page = () => new Response('<html><body>403 Forbidden</body></html>', { status: 403, headers: { 'Content-Type': 'text/html' } });
+    const bare = rig({ routes: { turn: page } });
+    const edge = await bare.controller.create(IDEA);
+    assert.deepEqual([edge.phase, edge.sentence], ['stopped', COPY.failures['sign-in']]);
+    const theirs = rig({ routes: { turn: () => refusal(403, 'forbidden', 'This account can\'t make worlds right now.') } });
+    const barred = await theirs.controller.create(IDEA);
+    assert.deepEqual([barred.phase, barred.sentence], ['stopped', COPY.failures.suspended]);
+});
+
+test('account-guards review L2: a world kept for its go that goes with an account change under the new idea\'s turn is said with that stop', async () => {
+    const k = rig({ routes: { turn: (body, at, init) => (at === 1 ? sse(HANDED_OFF) : unanswered(init)) } });
+    await k.controller.create(IDEA);
+    const creating = k.controller.create({ ...IDEA, prompt: 'a lighthouse on a cliff in a storm' });
+    await waitFor(() => k.net.requests.length === 3, 'the new idea\'s turn asked');
+    k.acct.move();
+    const back = await creating;
+    assert.deepEqual([back.phase, back.sentence], ['stopped', COPY.creation.accountChangedDiscarded]);
+    // Nothing kept: the plain sentence.
+    const plain = rig({ routes: { turn: (body, at, init) => unanswered(init) } });
+    const going = plain.controller.create(IDEA);
+    await waitFor(() => plain.net.requests.length === 1, 'the turn asked');
+    plain.acct.move();
+    assert.deepEqual([(await going).phase, plain.controller.state.sentence], ['stopped', COPY.creation.accountChanged]);
+});
+
+test('account-guards review: a first visit\'s own caller then its link to Google is one creator: the world written for its go stays, and is shown', async () => {
+    const r = rig({ answer: null });
+    r.acct.known = false;
+    const ready = await r.controller.create(IDEA);
+    assert.deepEqual([ready.phase, r.acct.enters], ['ready', 1], 'its caller made at Create, then bound');
+    r.acct.link();
+    assert.deepEqual([r.controller.state.phase, r.controller.showBlocked(), r.controller.unshown], ['ready', null, true]);
+    const showing = r.controller.show();
+    r.stage.gos[0].answer(INSTALLED);
+    assert.equal((await showing).status, 'installed');
+    assert.equal(r.stage.installs, 1);
+});
+
+/**
+ * The fakes of EA9-U19 over this file's stage and account: a turn that hands off at once; sessions that seal at once,
+ * run the review's "Improve it" on demand, and say a cancel as a candidate's does (its phase `cancelled`).
+ */
+function roundRig() {
+    const handedOff = request => ({
+        seq: 1, request, phase: 'handed-off', meta: { turnId: 'turn-1', model: 'm', promptVersion: 'p' }, calls: [], findings: [],
+        design: {}, program: { nodes: [] }, question: null, reason: null, code: null, httpStatus: null, retryAfterSeconds: null,
+        bare: false, costMicroUsd: 0, unreported: 0, startedMs: 0, endedMs: 0,
+    });
+    const sessions = [];
+    const acct = account();
+    const ref = {};
+    const stage = stagePort(ref, null);
+    const controller = createCreationController({
+        turnSession: () => ({ state: null, cancel() {}, start: async request => handedOff(request) }),
+        candidateSession: onChange => {
+            const s = {
+                k: sessions.length, cancels: 0, snapshot: null, compiled: null,
+                async start() {
+                    s.snapshot = { id: `world-${s.k}` };
+                    s.compiled = [];
+                    onChange({ phase: 'static-verified', modules: [] });
+                    return { phase: 'static-verified' };
+                },
+                // As a candidate session's close does: its sealed world goes with it (candidate.ts's close).
+                cancel() { s.cancels++; s.snapshot = null; s.compiled = null; onChange({ phase: 'cancelled', modules: [] }); },
+                improve() {
+                    onChange({ phase: 'correcting', modules: [] });
+                    s.snapshot = { id: `world-${s.k}-improved` };
+                    onChange({ phase: 'static-verified', modules: [] });
+                },
+            };
+            sessions.push(s);
+            return s;
+        },
+        stage, account: acct,
+    });
+    ref.controller = controller;
+    return { controller, sessions, acct, stage };
+}
+
+async function onStage(r) {
+    await r.controller.create(IDEA);
+    const showing = r.controller.show();
+    r.stage.gos.at(-1).answer(INSTALLED);
+    await showing;
+    assert.equal(r.controller.state.phase, 'installed');
+}
+
+test('account-guards review: an improvement of the world on the stage, written or being shown, goes when another account signs in; the world stays; a link keeps it', async () => {
+    // Written and waiting for Show it.
+    const w = roundRig();
+    await onStage(w);
+    w.sessions[0].improve();
+    assert.deepEqual([w.controller.state.phase, w.controller.unshown], ['ready', true]);
+    const n = w.controller.n;
+    w.acct.move();
+    assert.ok(w.controller.n > n, 'κ moved');
+    assert.deepEqual([w.controller.state.phase, w.sessions[0].cancels, w.controller.unshown], ['installed', 1, false], 'the world on the stage stays; its improvement goes');
+    assert.equal(await w.controller.show(), null, 'nothing to show');
+    assert.deepEqual([w.stage.gos.length, w.stage.installs, w.stage.onStage], [1, 1, 'world-0']);
+    assert.equal(w.controller.installedSession, null, 'its paid actions went with the account that made it');
+
+    // Being shown: the Run stops (κ moved), and nothing installs.
+    const s = roundRig();
+    await onStage(s);
+    s.sessions[0].improve();
+    const showing = s.controller.show();
+    s.acct.move();
+    s.stage.gos[1].answer(INSTALLED);
+    assert.equal((await showing).status, 'stopped');
+    assert.deepEqual([s.stage.installs, s.stage.onStage, s.controller.state.phase], [1, 'world-0', 'installed']);
+
+    // A link: the same creator; its improvement waits for its go, then shows.
+    const l = roundRig();
+    await onStage(l);
+    l.sessions[0].improve();
+    l.acct.link();
+    assert.deepEqual([l.controller.state.phase, l.sessions[0].cancels, l.controller.showBlocked()], ['ready', 0, null]);
+    const linked = l.controller.show();
+    l.stage.gos[1].answer(INSTALLED);
+    assert.equal((await linked).status, 'installed');
+    assert.equal(l.stage.onStage, 'world-0-improved');
+});
+
+test('account-guards review: a Run whose commit beat the account change installs: the world is on the stage, said installed, not discarded', async () => {
+    const r = rig({ answer: null });
+    await r.controller.create(IDEA);
+    const showing = r.controller.show();
+    r.stage.committed = true;
+    r.acct.move();
+    assert.equal(r.controller.state.sentence, COPY.creation.discarded, 'said discarded while the Run is out');
+    r.stage.gos[0].answer(INSTALLED);
+    assert.equal((await showing).status, 'installed');
+    assert.deepEqual([r.controller.state.phase, r.controller.state.sentence, r.stage.installs], ['installed', null, 1]);
+});
+
+test('account-guards review: after a device loss nothing waits to be shown first: an improvement of the world on the stage cannot be shown, so Sign out asks nothing', async () => {
+    const r = roundRig();
+    await onStage(r);
+    r.sessions[0].improve();
+    assert.deepEqual([r.controller.state.phase, r.controller.unshown], ['ready', true]);
+    r.controller.deviceLost();
+    assert.deepEqual([r.controller.unshown, r.controller.showBlocked() !== null], [false, true]);
 });

@@ -15,7 +15,7 @@
 // in drops it (F4).
 
 import type { Api } from '../../forge-client/http';
-import type { LinkOutcome } from '../../forge-client/identity';
+import type { Collision, LinkOutcome } from '../../forge-client/identity';
 import { COPY } from '../../loop/copy';
 import type { CreationAccount } from '../../loop/creation';
 import { chipText, readAllowance } from '../../platform/allowance';
@@ -167,6 +167,14 @@ export class AccountControl {
     /** Called whenever the account shown changes (read, set up, dropped): the studio's save hears it (W3.6). */
     onAccount: (() => void) | null = null;
 
+    /**
+     * Whether a world written and waiting for Show it would be discarded by an account change (Q129, the user, 2026-11-04):
+     * then Sign out, and a collision's sign-in to another account, ask first. The studio says; absent, nothing waits.
+     */
+    unshownWorld: (() => boolean) | null = null;
+    /** The confirmation's "Show it first": the studio's Show it for that world (the creator's press, the GPU go). */
+    showUnshown: (() => void) | null = null;
+
     /** "Sign in to keep this world" (W3.6): the header's own Sign in, so its dialogs and its waits are the same. */
     signInToSave(): void {
         void this.signIn();
@@ -185,11 +193,35 @@ export class AccountControl {
     }
 
     private signOut(): Promise<void> {
+        // A world waiting for Show it is this account's: signing out discards it, so the creator chooses first (Q129).
+        // Escape, or closing the dialog, keeps both the account and the world.
+        if (this.unshownWorld?.()) {
+            this.dialog.open(COPY.account.unshownSignOutTitle, COPY.account.unshownSignOutBody, [
+                { label: COPY.account.showFirst, run: () => this.showUnshown?.() },
+                { label: COPY.account.unshownSignOutGo, quiet: true, run: () => void this.signOutNow(true) },
+            ]);
+            return Promise.resolve();
+        }
+        return this.signOutNow();
+    }
+
+    /** `discarding`: the creator chose to discard a world waiting for Show it, which the toast then says, not "still here". */
+    private signOutNow(discarding = false): Promise<void> {
         return this.act(async () => {
             await this.session.signOut();
             // Another tab may have signed someone in meanwhile: then nobody was signed out, as the creator sees it.
-            if (this.session.current.kind !== 'google') this.say(COPY.account.signedOut);
+            if (this.session.current.kind !== 'google') this.say(discarding ? COPY.account.signedOutDiscarded : COPY.account.signedOut);
         });
+    }
+
+    /** A collision's sign-in to the account that holds the credential: another uid, so it asks first as Sign out does. */
+    private signInExisting(collision: Collision): void {
+        const go = () => void this.act(async () => this.settle(await this.session.signInExisting(collision)));
+        if (!this.unshownWorld?.()) return go();
+        this.dialog.open(COPY.account.unshownSignInTitle, COPY.account.unshownSignInBody, [
+            { label: COPY.account.showFirst, run: () => this.showUnshown?.() },
+            { label: COPY.account.unshownSignInGo, quiet: true, run: go },
+        ]);
     }
 
     /**
@@ -239,10 +271,7 @@ export class AccountControl {
                 return;
             case 'collision':
                 this.dialog.open(COPY.account.collisionTitle, COPY.account.collisionBody, [
-                    {
-                        label: COPY.account.collisionGo,
-                        run: () => void this.act(async () => this.settle(await this.session.signInExisting(outcome.collision))),
-                    },
+                    { label: COPY.account.collisionGo, run: () => this.signInExisting(outcome.collision) },
                     { label: COPY.account.cancel, quiet: true },
                 ]);
         }
@@ -442,6 +471,7 @@ export class AccountControl {
 export function creationAccount(session: AccountSession, control: Pick<AccountControl, 'changing' | 'afterEntry' | 'limit'>): CreationAccount {
     return {
         epoch: () => session.current.epoch,
+        uid: () => session.caller()?.uid ?? null,
         established: () => session.established,
         enter: async () => {
             try {

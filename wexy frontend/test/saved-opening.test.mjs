@@ -49,14 +49,14 @@ function harness({ session = fakeSession(), open = async () => opened, compile =
         api: base, session,
         open: async (api, id) => { await api.send({ method: 'GET', path: `/v1/worlds/${id}`, auth: true }); return open(); },
         compile, blocked,
-        run: async (ready, epoch, signal) => { runs.push({ title: ready.world.title, epoch, signal }); return run(signal); },
+        run: async (ready, readAs, signal) => { runs.push({ title: ready.world.title, readAs, signal }); return run(signal); },
         changed: () => { changes++; },
         record: (ok, text) => record.push([ok, text]),
     });
     return { opening, session, record, runs, reads, changes: () => changes };
 }
 
-test('W3-review mid: the path: signed in, read as the epoch\'s caller, compiled here, Show it offered, then the Run under that epoch', async () => {
+test('W3-review mid: the path: signed in, read as the epoch\'s caller, compiled here, Show it offered, then the Run for that caller, its owner', async () => {
     const h = harness();
     await h.opening.start();
     assert.deepEqual(h.opening.view(), { worldId: WORLD, sentence: COPY.open.ready('The castle'), offer: null, ready: true, running: false });
@@ -65,7 +65,7 @@ test('W3-review mid: the path: signed in, read as the epoch\'s caller, compiled 
     assert.equal(h.reads[0].caller.still(), true);
     assert.deepEqual(h.record.map(r => r[0]), [true]);
     await h.opening.show();
-    assert.deepEqual(h.runs.map(r => [r.title, r.epoch, r.signal.aborted]), [['The castle', 1, false]]);
+    assert.deepEqual(h.runs.map(r => [r.title, r.readAs, r.signal.aborted]), [['The castle', 'uid-1', false]], 'run for the caller it was read as, its owner');
 });
 
 test('W3-review mid: no Google session: Sign in is offered, nothing read; once signed in, it opens', async () => {

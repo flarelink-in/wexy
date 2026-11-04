@@ -1145,3 +1145,28 @@ test('EA-VR4j a revision whose program the browser refuses hands the next its no
     assert.equal(roomyButSpent.reviser.calls[0].findings.at(-1).message,
         'This attempt can still repair 18 module bodies with notes, and none for sky, whose repairs are spent: a plan past that is refused whole, before any of it is done.');
 });
+
+test('2026-11-04 a module call refused as forbidden is the account\'s standing, said as such; a sign-in failure stays a sign-in failure', async () => {
+    const { sentenceFor } = await import('../src/loop/candidate.ts');
+    assert.equal(sentenceFor('forbidden'), COPY.failures.suspended);
+    assert.equal(sentenceFor('forbidden', true), COPY.failures['sign-in'], 'a bare 403 is no word on the account');
+    assert.equal(sentenceFor('auth'), COPY.failures['sign-in']);
+    assert.equal(sentenceFor('appcheck'), COPY.failures['sign-in']);
+});
+
+test('the account-guards review: a bare 403 (an edge\'s page) at a module call or a revision is said as a sign-in, the gateway\'s own forbidden as the account\'s', async () => {
+    const bare = () => new ForgeError('forbidden', 403, 'HTTP 403', null, true);
+    const theirs = () => new ForgeError('forbidden', 403, 'This account can\'t make worlds right now.');
+    for (const [error, sentence] of [[bare(), COPY.failures['sign-in']], [theirs(), COPY.failures.suspended]]) {
+        const run = session({ modules: fakeModules({ motion: [{ throws: error }] }) });
+        const end = await run.s.start(handOff());
+        assert.deepEqual([end.phase, end.stop.scope, end.stop.sentence], ['failed', 'host', sentence], `module call: ${error.message}`);
+    }
+    const bad = world();
+    bad[1] = node('field', 'ng.buffer.storage', { elements: 0, layout: 'f32', strideFloats: 4, pingPong: true, init: 'zero' });
+    for (const [error, sentence] of [[bare(), COPY.failures['sign-in']], [theirs(), COPY.failures.suspended]]) {
+        const revising = session({ revise: fakeReviser([{ throws: error }]).revise });
+        const end = await revising.s.start(handOff(bad));
+        assert.deepEqual([end.phase, end.stop.scope, end.stop.sentence], ['failed', 'host', sentence], `revision: ${error.message}`);
+    }
+});

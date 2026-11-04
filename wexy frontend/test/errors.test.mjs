@@ -64,3 +64,13 @@ test('U7 a message is capped, so a misbehaving server cannot flood the log', asy
     const e = await errorFromResponse(response(500, { code: 'internal', message: 'x'.repeat(5000) }));
     assert.equal(e.message.length, 300);
 });
+
+test('U8 a 403 without our envelope (an edge\'s page) is bare, no service\'s word on the account; the gateway\'s own forbidden is not (2026-11-04)', async () => {
+    const page = await errorFromResponse(new Response('<html>403</html>', { status: 403 }));
+    assert.deepEqual([page.code, page.bare], ['forbidden', true]);
+    const theirs = await errorFromResponse(new Response(JSON.stringify({ code: 'forbidden', message: 'This account can\'t make worlds right now.' }), { status: 403 }));
+    assert.deepEqual([theirs.code, theirs.bare], ['forbidden', false]);
+    const unknown = await errorFromResponse(new Response(JSON.stringify({ code: 'nope', message: 'm' }), { status: 403 }));
+    assert.equal(unknown.bare, true, 'a body whose code is not ours is no word of ours');
+    assert.equal(new ForgeError('forbidden', 403, 'x').bare, false, 'a code the backend sent in its own stream is its word');
+});

@@ -1,6 +1,7 @@
 package ai.wexy.gateway.routes;
 
 import ai.wexy.gateway.appcheck.AppCheckFilter;
+import ai.wexy.gateway.auth.AccountStanding;
 import ai.wexy.gateway.auth.AuthorizationFilter;
 import ai.wexy.gateway.shield.RateLimits;
 import org.springframework.beans.factory.annotation.Value;
@@ -36,6 +37,9 @@ import java.util.function.Function;
  * Four of forge's routes spend App Check tokens: forge-plan, agent-turn, agent-module and agent-review
  * (EA6.4). With the platform's (PlatformRoutes) they are the routes the frontend mints a fresh token for
  * (ForgeRoutesTest pins the whole set). Every token minted here is for forge alone (W2's audience).
+ *
+ * Every route that spends a model call, or reports on one, also asks the platform whether a signed-in caller's account
+ * is suspended (AccountStanding, 2026-11-04): a suspended or deleting account is refused there, before forge.
  */
 @Configuration
 public class ForgeRoutes {
@@ -45,6 +49,7 @@ public class ForgeRoutes {
                                           RateLimits rateLimits,
                                           AppCheckFilter appCheck,
                                           AuthorizationFilter authorization,
+                                          AccountStanding standing,
                                           @Value("${wexy.forge-service.url}") String forgeService) {
 
         Function<GatewayFilterSpec, UriSpec> publicRead = f -> f
@@ -54,6 +59,7 @@ public class ForgeRoutes {
                 .filter(rateLimits.byClient("forge-create"))
                 .filter(appCheck.singleUse())
                 .filter(authorization.anonymousAllowed())
+                .filter(standing.spending())
                 .filter(rateLimits.byUserTiered("forge-create-user", "forge-create-anonymous"));
 
         // The agent turn (the agent-loop design §10): an expensive entry, like a plan, whose buckets count model calls (Q66).
@@ -61,6 +67,7 @@ public class ForgeRoutes {
                 .filter(rateLimits.byClient("agent-turn"))
                 .filter(appCheck.singleUse())
                 .filter(authorization.anonymousAllowed())
+                .filter(standing.spending())
                 .filter(rateLimits.byUserTiered("agent-turn-user", "agent-turn-anonymous"));
 
         // A module call (EA4.2, the frontend's candidate-loop design §6): one metered call each, with its own buckets and
@@ -69,6 +76,7 @@ public class ForgeRoutes {
                 .filter(rateLimits.byClient("agent-module"))
                 .filter(appCheck.singleUse())
                 .filter(authorization.anonymousAllowed())
+                .filter(standing.spending())
                 .filter(rateLimits.byUserTiered("agent-module-user", "agent-module-anonymous"));
 
         // A model's review of the world on the stage (EA6.4, the frontend's visual-review design §9.1): one metered call with
@@ -77,6 +85,7 @@ public class ForgeRoutes {
                 .filter(rateLimits.byClient("agent-review"))
                 .filter(appCheck.singleUse())
                 .filter(authorization.anonymousAllowed())
+                .filter(standing.spending())
                 .filter(rateLimits.byUserTiered("agent-review-user", "agent-review-anonymous"));
 
         // Its terms, read before the creator consents: signed in, the cached App Check token (nothing is spent).
@@ -90,12 +99,14 @@ public class ForgeRoutes {
                 .filter(rateLimits.byClient("forge-create"))
                 .filter(appCheck)
                 .filter(authorization.anonymousAllowed())
+                .filter(standing.spending())
                 .filter(rateLimits.byUserTiered("forge-create-user", "forge-create-anonymous"));
 
         Function<GatewayFilterSpec, UriSpec> forgeEdit = f -> f
                 .filter(rateLimits.byClient("forge-edit"))
                 .filter(appCheck)
                 .filter(authorization.anonymousAllowed())
+                .filter(standing.spending())
                 .filter(rateLimits.byUser("forge-edit-user"));
 
         Function<GatewayFilterSpec, UriSpec> admin = f -> f
@@ -104,10 +115,12 @@ public class ForgeRoutes {
 
         // W1 (the creations platform design §10): the caller's own allowance. Signed in, anonymous included, with the
         // cached App Check token (nothing is spent), an address bucket and a per-uid one.
+        // A barred account's allowance is refused as its model calls are, so its chip never offers a world it cannot make.
         Function<GatewayFilterSpec, UriSpec> accountRead = f -> f
                 .filter(rateLimits.byClient("account-read"))
                 .filter(appCheck)
                 .filter(authorization.anonymousAllowed())
+                .filter(standing.spending())
                 .filter(rateLimits.byUser("account-read-user"));
 
         return builder.routes()
