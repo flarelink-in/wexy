@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { BODY_DIAL } from '../src/contract/adapters/bodies.ts';
 import { canonicalJson } from '../src/contract/adapters/canonical.ts';
 import { AGENT_ACTION } from '../src/contract/agent/index.ts';
 import { sealSaved } from '../src/loop/replay.ts';
@@ -83,10 +84,17 @@ test('PL-FE1 a file is never trusted: each way it can be wrong is refused, said 
     await refused(edited(w => { w.graph = 'G'.repeat(64); }), null, 'unreadable', /\/graph: is not 64 lowercase hex digits/, 'a hash of the wrong shape');
     await refused(edited(w => { w.pins.bundle = 'x'; }), null, 'unreadable', /\/pins\/bundle: is not 64 lowercase hex digits/, 'a pin of the wrong shape');
     await refused(edited(w => { w.view = { target: [0, 0, 0], distance: 1, azimuth: 0, polar: 200, fov: 45 }; }), null, 'unreadable', /\/view\/polar: 200 is over 180/, 'a view out of bounds');
-    // A world at the format's bounds (32 bodies of 12,000 characters, every config near 4,096) stays under the cap:
-    // 496,175 bytes measured. So past the cap is a text no parse is spent on: the size is checked first.
-    const bounded = edited(w => { w.modules = Array.from({ length: 32 }, (_, i) => ({ ...w.modules[0], module: `m${i}`, body: 'y'.repeat(12000) })); w.program.nodes = w.program.nodes.map(n => ({ ...n, config: JSON.stringify({ pad: 'z'.repeat(3900) }) })); });
-    assert.ok(Buffer.byteLength(bounded) <= WORLD_MAX_BYTES, `a world at the bounds is ${Buffer.byteLength(bounded)} bytes`);
+    // A body's bound is the dial's. Until 2026-11-04 a world at the format's bounds (32 bodies of 12,000 characters, every
+    // config near 4,096) stayed under the cap, 496,175 bytes measured. Since then a body may hold 48,000 characters (800
+    // lines), so a world can fit the schema and still pass the cap: beside every config near its bound, eight bodies at
+    // the bound fit (ten were 587,813 bytes), 32 do not, and the cap refuses that text as too large before any parse is
+    // spent on it, as it refuses any text past it.
+    assert.equal(WORLD_SCHEMA.properties.modules.items.properties.body.maxLength, BODY_DIAL.maxChars, 'a saved body is bounded as a checked one is');
+    const withBodies = (count, chars) => edited(w => { w.modules = Array.from({ length: count }, (_, i) => ({ ...w.modules[0], module: `m${i}`, body: 'y'.repeat(chars) })); w.program.nodes = w.program.nodes.map(n => ({ ...n, config: JSON.stringify({ pad: 'z'.repeat(3900) }) })); });
+    assert.ok(Buffer.byteLength(withBodies(32, 12_000)) <= WORLD_MAX_BYTES, `32 bodies of 12,000: ${Buffer.byteLength(withBodies(32, 12_000))} bytes`);
+    assert.ok(Buffer.byteLength(withBodies(8, BODY_DIAL.maxChars)) <= WORLD_MAX_BYTES, `8 bodies at the bound: ${Buffer.byteLength(withBodies(8, BODY_DIAL.maxChars))} bytes`);
+    assert.ok(Buffer.byteLength(withBodies(10, BODY_DIAL.maxChars)) > WORLD_MAX_BYTES, `10 bodies at the bound: ${Buffer.byteLength(withBodies(10, BODY_DIAL.maxChars))} bytes`);
+    await refused(withBodies(32, BODY_DIAL.maxChars), null, 'too-large', /^the text is \d+ bytes; at most 524288$/, 'a world at the format\'s bounds');
     await refused(CASTLE + ' '.repeat(WORLD_MAX_BYTES), null, 'too-large', /^the text is \d+ bytes; at most 524288$/, 'past the cap');
     await refused('é'.repeat(WORLD_MAX_BYTES / 2 + 1), null, 'too-large', /^the text is 524290 bytes/, 'counted in UTF-8 bytes, not characters');
 });

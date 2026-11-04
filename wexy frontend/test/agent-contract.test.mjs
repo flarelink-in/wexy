@@ -189,8 +189,8 @@ test('EA-VR4a a revision\'s notes are the schema\'s, held whole: a list of at mo
 test('EA-VR4b the backend checks what the browser reads: its note\'s bound, and the code a kept body\'s note is sent as, when it is on this disk', { skip: !existsSync(BACKEND) && 'the backend repository is not on this disk' }, () => {
     const request = readFileSync(join(BACKEND, 'main/java/ai/wexy/forge/agent/ModuleRequest.java'), 'utf8');
     assert.match(request, new RegExp(`static final int NOTE_CHARS = ${NOTE_CHARS};`));
-    const repair = readFileSync(join(BACKEND, 'main/resources/prompts/module.repair.v2.md'), 'utf8');
-    assert.ok(repair.includes(NOTE_CODE), `module.repair.v2 explains ${NOTE_CODE}`);
+    const repair = readFileSync(join(BACKEND, 'main/resources/prompts/module.repair.v3.md'), 'utf8');
+    assert.ok(repair.includes(NOTE_CODE), `module.repair.v3 explains ${NOTE_CODE}`);
     const agent = readFileSync(join(BACKEND, 'main/resources/prompts/agent.v6.md'), 'utf8');
     for (const code of [SET_ASIDE_CODE, REPAIR_BUDGET_CODE]) assert.ok(agent.includes(code), `agent.v6 explains ${code}`);
     // Blank as the browser's trim counts it (the independent review of EA6.3).

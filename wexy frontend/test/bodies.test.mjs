@@ -138,7 +138,15 @@ test('EA-M2 each way a body breaks its form is refused at its line, in words a r
     refuses(I.motion, inMotion('    for (var k = 0u; k < arrayLength(&b_instances); k++) {', '    }'), 'loop-form', 2, /literal number/);
     refuses(I.motion, inMotion('    while (true) {', '        break;', '    }'), 'loop', 2);
     refuses(I.motion, inMotion('    for (var k = 0; k < 8; k++) {', '        for (var j = 0; j < 17; j++) {', '        }', '    }'), 'loop-form', 3, /8 × 17 = 136/);
-    refuses(I.motion, `${MOTION}\n${'// pad\n'.repeat(BODY_DIAL.maxLines)}`, 'lines', null, /at most 120/);
+    refuses(I.motion, `${MOTION}\n${'// pad\n'.repeat(BODY_DIAL.maxLines)}`, 'lines', null, new RegExp(`lines; at most ${BODY_DIAL.maxLines}$`));
+    // 2026-11-04 (the user: repairs were spent cutting working code to 120 lines): a body of 800 lines, 141 of them the
+    // castle's own size, is no finding at all; one past it is, and past the characters too.
+    assert.equal(BODY_DIAL.maxLines, 800);
+    assert.equal(BODY_DIAL.maxChars, 48_000);
+    const padded = (lines) => `${MOTION}\n${'// pad\n'.repeat(lines - MOTION.split('\n').length)}`;
+    assert.deepEqual(lintBody(I.motion, padded(141)).filter(f => f.code === 'lines' || f.code === 'size'), [], 'the castle\'s 141 lines');
+    assert.deepEqual(lintBody(I.motion, padded(BODY_DIAL.maxLines)).filter(f => f.code === 'lines' || f.code === 'size'), [], 'exactly at the bound');
+    refuses(I.motion, `${MOTION}\n${'//'.repeat(BODY_DIAL.maxChars / 2)}`, 'size', null, new RegExp(`characters; at most ${BODY_DIAL.maxChars}$`));
     refuses(I.motion, inMotion('    var a = 0u;', '    atomicAdd(&a, 1u);'), 'capability', 3, /no atomics/);
     refuses(I.motion, inMotion('    workgroupBarrier();'), 'capability', 2);
     refuses(I.sky, SKY.replace('let f = b_field_current[0] * 0.0;', 'let f = textureSample(t, s, uv).r;'), 'capability', 13);
@@ -275,7 +283,8 @@ test('EA-M6 the final lint decides; comments are never rewritten; a body\'s own 
     // mod the model wrote, not of a size it never wrote.
     const grown = await checkBody(I.motion, inMotion(`    let w = ${'mod('.repeat(30)}f32(index)${', 2.0)'.repeat(30)};`, '    b_instances[index] = w;'));
     assert.ok(grown.body.length <= BODY_DIAL.maxChars, `${grown.body.length} characters`);
-    assert.ok(grown.skipped.some(s => /line 2: the rewrite would make the body longer than its 12000 characters/.test(s.because)), JSON.stringify(grown.skipped));
+    assert.ok(grown.skipped.some(s => s.because === `line 2: the rewrite would make the body longer than its ${BODY_DIAL.maxChars} characters; the rest is left for the lint and the repair`),
+        JSON.stringify(grown.skipped));
     assert.deepEqual(errors(grown.findings).map(f => [f.code, f.line]), [['glsl', 2]]);
     // A mod call split across lines is left as written, and said so: no rewrite may change the line count.
     const split = fixBody(inMotion('    let s = mod(f32(index),', '        2.0);'));

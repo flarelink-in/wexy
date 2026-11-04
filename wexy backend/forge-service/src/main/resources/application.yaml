@@ -48,9 +48,11 @@ wexy:
     # so it doubled with the effort, and its deadline with it.
     agent:     { model: muse-spark-1.3,  provider: meta-spark,  max-output-tokens: 32000, timeout: 240s, reasoning-effort: high }
     # A module body (EA4.2, the frontend's candidate-loop design §6): Spark at medium, as the turn. Its cap holds the
-    # reasoning and a body of at most 12,000 characters (about 4,000 tokens); a starting value, measured at EA5's first
-    # live runs, as the author's 6,000 was cut by long reasoners (Q41).
-    module:    { model: muse-spark-1.3,  provider: meta-spark,  max-output-tokens: 12000, timeout: 120s, reasoning-effort: medium }
+    # reasoning and a body of at most 48,000 characters (about 16,000 tokens). Since 2026-11-04 a body may be 800 lines
+    # (the user: repairs were spent cutting working code to 120 lines, "lets not reject a working code at lint check just
+    # cause high size"), so the cap went from 12,000 to 24,000 and the deadline from 120 s to the agent's 240 s: at Spark's
+    # 140 to 200 tokens a second (10-28), a full cap takes 120 to 170 s.
+    module:    { model: muse-spark-1.3,  provider: meta-spark,  max-output-tokens: 24000, timeout: 240s, reasoning-effort: medium }
     # A model's review of the world on the stage (EA6.4, the frontend's visual-review design §9.1): Spark at low effort, the
     # frames and R, S and the kept findings in, a verdict of at most 32 issues out. One JSON answer, so its deadline stays
     # inside the gateway's 60 s between reads. The vision probe calls this role too.

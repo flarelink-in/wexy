@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { BODY_DIAL } from '../src/contract/adapters/bodies.ts';
 import { deriveInterfaces } from '../src/contract/adapters/interfaces.ts';
 import { resolveProgram } from '../src/contract/adapters/resolve.ts';
 import { unfence } from '../src/contract/unfence.ts';
@@ -80,7 +81,7 @@ test('EA-W11 every recorded way a module call ends reads to its outcome: the who
     assert.deepEqual(author.seen.filter(e => e.type === 'delta').map(e => e.chars), [deltas[0].length, deltas[0].length + deltas[1].length, deltas.join('').length]);
     const meta = author.outcome.meta;
     assert.deepEqual({ ...meta, subject: { ...meta.subject }, versions: { ...meta.versions } }, {
-        ...JOB, generationId: 'gen-1', model: 'm-1', source: 'live', role: 'module', promptVersion: 'module.author.v2',
+        ...JOB, generationId: 'gen-1', model: 'm-1', source: 'live', role: 'module', promptVersion: 'module.author.v3',
     });
     assert.ok(Object.isFrozen(author.outcome) && Object.isFrozen(meta) && Object.isFrozen(meta.subject), 'what was checked cannot change after');
 
@@ -161,7 +162,7 @@ test('EA-W13 a stream out of order, a done that is not the deltas\', or a stream
     await broken(sse([meta, d1, d2, d3, usage, ['done', { ...doneData, answerChars: 757 }]]), /done names an answer of 757 characters/, 'known');
     await broken(sse([meta, d1, d2, d3, usage, ['done', { ...doneData, answerSha256: '0'.repeat(64) }]]), /done names an answer/, 'known');
     await broken(sse([meta, d1, d2, d3, usage, ['done', { ...doneData, status: 'passed' }]]), /done.status is "passed", not ok/, 'known');
-    await broken(sse([meta, d1, d2, d3, usage, ['done', { ...doneData, answerChars: 12_001 }]]), /done.answerChars is not 1 to 12000/, 'known');
+    await broken(sse([meta, d1, d2, d3, usage, ['done', { ...doneData, answerChars: BODY_DIAL.maxChars + 1 }]]), new RegExp(`done.answerChars is not 1 to ${BODY_DIAL.maxChars}`), 'known');
     await broken(sse([meta, ['delta', { text: 42 }], usage, done]), /"text" is not a string/);
     await broken(sse([meta, d1, d2, d3, ['usage', { in: 1, out: 1, reasoning: null, cached: null, costMicroUsd: -1 }], done]), /usage.costMicroUsd is not a whole number/);
     await broken(sse([meta, d1, d2, d3, ['usage', { in: 1.5, out: 1, reasoning: null, cached: null, costMicroUsd: 1 }], done]), /usage.in is not a whole number or null/);
@@ -270,7 +271,7 @@ test('EA-W14 a module call is one POST of exactly the eleven fields, signed in, 
 });
 
 test('EA-W15 a cancel stops the read and closes the stream; the deadline is fixed when the call starts, and said as a timeout', async () => {
-    assert.equal(MODULE_DEADLINE_MS, 135_000, 'the module role\'s 120 s and 15 s for the identity, the gateway and the last event');
+    assert.equal(MODULE_DEADLINE_MS, 255_000, 'the module role\'s 240 s (2026-11-04) and 15 s for the identity, the gateway and the last event');
     // Cancelled after meta: the read rejects with the cancel itself, and the body is cancelled.
     const pairs = events(wire('author.sse'));
     const open = body([sse(pairs.slice(0, 2))], { keepOpen: true });

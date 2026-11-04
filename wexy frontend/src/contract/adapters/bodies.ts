@@ -19,10 +19,15 @@ import { ENTRY_EXCLUDED, WGSL_FUNCTIONS, WGSL_NAMES, type ModuleInterface } from
 /** The checker: a passing verdict is reused only under the same checker (the design §5). */
 export const BODY_CHECKER = 'ea4-body.v1';
 
-/** Q79 (decided): h1's dial for loops, nests and arrays, and at most 120 lines a body (up to two entries and helpers). */
+/**
+ * Q79 (decided): h1's dial for loops, nests and arrays. A body's size: 120 lines and 12,000 characters until 2026-11-04,
+ * then 800 and 48,000 (the user: repairs were spent cutting working code to 120 lines, "lets not reject a working code at
+ * lint check just cause high size"). The size bounds what a request, a stream and a saved world carry; the compiler and
+ * the repairs judge the code.
+ */
 export const BODY_DIAL = {
-    maxLines: 120,
-    maxChars: 12_000,
+    maxLines: 800,
+    maxChars: 48_000,
     maxLoopBound: DIAL.maxLoopBound,
     maxNestedProduct: DIAL.maxNestedProduct,
     maxArray: DIAL.maxArray,

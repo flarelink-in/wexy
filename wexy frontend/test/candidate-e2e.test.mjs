@@ -90,7 +90,7 @@ test('EA-E1 (the candidate loop, P6): the recorded hand-off, its module written 
     assert.deepEqual([end.modules.length, place.module, place.phase, place.calls, place.repairs], [1, 'place', 'passed', 2, 1]);
     assert.equal(place.codeHash, sha(place.body));
     assert.deepEqual(end.jobs.map(j => [j.jobId, j.module, j.purpose, j.status, j.charge]), [['job-1', 'place', 'author', 'ok', 'known'], ['job-2', 'place', 'repair', 'ok', 'known']]);
-    assert.deepEqual(end.jobs.map(j => j.promptVersion), ['module.author.v2', 'module.repair.v2']);
+    assert.deepEqual(end.jobs.map(j => j.promptVersion), ['module.author.v3', 'module.repair.v3']);
     assert.deepEqual(compiler.calls.map(l => l.split('#')[0]), ['place', 'place']);
 
     // The repair answered exactly what failed, about the body as judged.
@@ -127,7 +127,7 @@ test('EA-E1 (the candidate loop, P6): the recorded hand-off, its module written 
     assert.deepEqual([bundle.format, bundle.candidate, bundle.phase, bundle.modules[0].body], [CANDIDATE_BUNDLE, end.id, 'static-verified', place.body]);
     assert.equal(bundle.evidence.length, 8);
     assert.deepEqual(bundle.omitted, { records: 0, byPhase: {} });
-    assert.deepEqual(bundle.versions.templates, ['agent.v6', 'module.author.v2', 'module.repair.v2']);
+    assert.deepEqual(bundle.versions.templates, ['agent.v6', 'module.author.v3', 'module.repair.v3']);
     // The hand-off's turn as recorded, each call with its charge (the EA4.5 review): with the jobs, a record for each
     // call Q_C settled.
     assert.deepEqual(bundle.calls.turns, [{

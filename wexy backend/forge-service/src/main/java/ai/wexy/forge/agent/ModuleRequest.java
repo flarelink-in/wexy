@@ -57,7 +57,7 @@ public record ModuleRequest(String turnId, String jobId, JsonNode subject, JsonN
     static final int MAX_REQUEST_BYTES = 262_144;
     static final int MAX_INTERFACE_BYTES = 16_384;
     /** A body's characters, as the browser's dial counts them (`bodies.ts`, BODY_DIAL.maxChars). */
-    public static final int MAX_BODY_CHARS = 12_000;
+    public static final int MAX_BODY_CHARS = 48_000;
     static final int MAX_NODES = 32;
     static final int MAX_FINDINGS = 32;
     static final int FINDING_CHARS = 400;

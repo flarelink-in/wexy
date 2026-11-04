@@ -288,7 +288,7 @@ class ModuleRoutesTest {
         assertThat(meta.path("interfaceHash").asText()).isEqualTo(PLACE.path("interface").path("interfaceHash").asText());
         assertThat(meta.path("subject")).isEqualTo(author().path("subject"));
         assertThat(meta.path("versions")).isEqualTo(author().path("versions"));
-        assertThat(meta.path("promptVersion").asText()).isEqualTo("module.author.v2");
+        assertThat(meta.path("promptVersion").asText()).isEqualTo("module.author.v3");
         assertThat(meta.path("role").asText()).isEqualTo("module");
         StringBuilder text = new StringBuilder();
         data(wire, "delta").forEach(d -> text.append(d.path("text").asText()));
@@ -306,7 +306,7 @@ class ModuleRoutesTest {
         assertThat(g.kind()).isEqualTo(Generation.Kind.AGENT);
         assertThat(g.parentId()).isEqualTo(turnId);
         assertThat(g.status()).isEqualTo(Generation.Status.OK);
-        assertThat(g.promptVersion()).isEqualTo("module.author.v2");
+        assertThat(g.promptVersion()).isEqualTo("module.author.v3");
         assertThat(g.hostVersion()).isEqualTo("ea-abi.v2");
         assertThat(g.fn()).isEqualTo("place");
         assertThat(g.input()).contains("\"jobId\":\"job-1\"").contains(PLACE.path("interface").path("interfaceHash").asText()).doesNotContain(PROMPT)
@@ -334,14 +334,14 @@ class ModuleRoutesTest {
         String wire = streamed(repair(FAULT));
 
         assertThat(events(wire)).startsWith("meta", "delta").endsWith("usage", "done");
-        assertThat(data(wire, "meta").get(0).path("promptVersion").asText()).isEqualTo("module.repair.v2");
+        assertThat(data(wire, "meta").get(0).path("promptVersion").asText()).isEqualTo("module.repair.v3");
         assertThat(data(wire, "meta").get(0).path("subject").path("codeHash").asText()).isEqualTo(ModuleRequest.sha256(FAULT));
         String user = JSON.readTree(fake.requests().stream().filter(r -> r.path().endsWith("/chat/completions")).findFirst().orElseThrow().body())
                 .path("messages").get(1).path("content").asText();
         assertThat(user).contains("```wgsl\n" + FAULT + "\n```")
                 .contains("- line 6, call: " + JSON.writeValueAsString(repair(FAULT).path("previous").path("findings").get(0).path("message").asText()))
                 .contains(JSON.writeValueAsString(PROMPT));
-        assertThat(moduleRecords()).extracting(Generation::promptVersion).containsExactly("module.repair.v2");
+        assertThat(moduleRecords()).extracting(Generation::promptVersion).containsExactly("module.repair.v3");
         pin("repair.sse", wire);
     }
 
@@ -509,7 +509,7 @@ class ModuleRoutesTest {
         String wire = streamed(noted);
 
         assertThat(events(wire)).startsWith("meta", "delta").endsWith("usage", "done");
-        assertThat(data(wire, "meta").get(0).path("promptVersion").asText()).isEqualTo("module.author.v2");
+        assertThat(data(wire, "meta").get(0).path("promptVersion").asText()).isEqualTo("module.author.v3");
         String user = JSON.readTree(fake.requests().stream().filter(r -> r.path().endsWith("/chat/completions")).findFirst().orElseThrow().body())
                 .path("messages").get(1).path("content").asText();
         assertThat(user).endsWith(PLACE.path("interface").path("epilogue").asText() + "\n```\n\nWhat a revision of the program asks of this module's code"
@@ -640,7 +640,8 @@ class ModuleRoutesTest {
         answers.put("no-entry", "fn somethingElse(index: u32) {\n}");
         answers.put("only-in-comments", "// fn placeBlocks(index: u32) {}\n/* fn placeBlocks( /* nested */ fn placeBlocks( */ fn other() {}");
         answers.put("only-as-a-suffix", "fn myplaceBlocks(index: u32) {}");
-        answers.put("too-long", "fn placeBlocks(index: u32) {\n" + "    // pad\n".repeat(1_300) + "}");
+        // Padded just past the cap, whatever it is (12,000 characters until 2026-11-04, 48,000 since).
+        answers.put("too-long", "fn placeBlocks(index: u32) {\n" + "    // pad\n".repeat(ModuleRequest.MAX_BODY_CHARS / 11 + 1) + "}");
         start(5_000_000L);
         for (Map.Entry<String, String> e : answers.entrySet()) {
             newTurn();

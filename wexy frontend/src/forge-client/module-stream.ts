@@ -120,15 +120,16 @@ export interface ModuleStreamLimits {
 }
 
 /**
- * The module role writes at most 12,000 output tokens (the backend's application.yaml), reasoning included, and the
- * backend sends one delta for each piece of text the model streams, about a token each: at most about 12,000 deltas of
- * at most some 50,000 characters in all. These caps are a few times that, so a sane stream never meets them and a
- * runaway one stops here. The body itself is at most BODY_DIAL.maxChars once unfenced, as the server holds it.
+ * The module role writes at most 24,000 output tokens (the backend's application.yaml; 12,000 until 2026-11-04),
+ * reasoning included, and the backend sends one delta for each piece of text the model streams, about a token each: at
+ * most about 24,000 deltas of at most some 100,000 characters in all. These caps are a few times that, so a sane stream
+ * never meets them and a runaway one stops here. The body itself is at most BODY_DIAL.maxChars once unfenced, as the
+ * server holds it.
  */
 export const MODULE_STREAM_LIMITS: ModuleStreamLimits = {
-    totalChars: 1_048_576,
-    events: 16_384,
-    textChars: 131_072,
+    totalChars: 2_097_152,
+    events: 65_536,
+    textChars: 262_144,
     eventChars: { meta: 8_192, delta: 65_536, usage: 512, done: 512, error: 4_096, other: 4_096 },
 };
 

@@ -23,10 +23,11 @@ import type { Api } from './http';
 import { readModuleStream, type ModuleEvent, type ModuleJob, type ModuleOutcome, type ModulePurpose, type ModuleSubject, type ModuleVersions } from './module-stream';
 
 /**
- * The module role answers within 120 s (the backend's application.yaml), heartbeats every 15 s; the client allows that
- * and 15 s for the identity, the gateway and the last event, as the turn's deadline does. Fixed when the call starts.
+ * The module role answers within 240 s (the backend's application.yaml; 120 s until 2026-11-04, when a body could grow to
+ * 800 lines), heartbeats every 15 s; the client allows that and 15 s for the identity, the gateway and the last event, as
+ * the turn's deadline does. Fixed when the call starts.
  */
-export const MODULE_DEADLINE_MS = 135_000;
+export const MODULE_DEADLINE_MS = 255_000;
 
 /** This build's pins, which the backend holds every module request to (ModuleRequest.pins); EA-W9 pins them equal. */
 export const MODULE_VERSIONS: ModuleVersions = Object.freeze({
