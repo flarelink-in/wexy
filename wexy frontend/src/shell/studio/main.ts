@@ -108,10 +108,10 @@ type AccountFactsT = import('../../platform/save-controller').AccountFacts;
 type OpenedWorldT = import('../../platform/open-saved').OpenedWorld;
 /**
  * What a Run shows (W3.6): a creation's world (its title, S, whether it revises the one on the stage, and the caller its
- * Show it was pressed as, its owner: the second review of W3), a saved world reopened (with the account epoch it was read
- * under: W3's review), or a saved attempt replayed.
+ * Show it was pressed as), a saved world reopened (with the caller it was read as), or a saved attempt replayed. The
+ * caller is the world's owner, whose account alone ever saves it (Q129).
  */
-type RunOrigin = { readonly kind: 'creation'; readonly about: RunAbout; readonly ranAs: string | null } | { readonly kind: 'reopened'; readonly world: OpenedWorldT; readonly epoch: number } | { readonly kind: 'replay' };
+type RunOrigin = { readonly kind: 'creation'; readonly about: RunAbout; readonly ranAs: string | null } | { readonly kind: 'reopened'; readonly world: OpenedWorldT; readonly ranAs: string } | { readonly kind: 'replay' };
 /**
  * An agent world on the stage (EA5.3): its runtime, its candidate, the device verdicts it was admitted on, and its
  * install's number, to which each film of it is bound (EA5.5); and what its Run found (its boxes, the probe's report),
@@ -466,6 +466,16 @@ class Studio {
             });
             // W3.6: each world of the creator's saved once it is on the stage, for an account that can keep it.
             if (session && control) await this.mountSaves(api, session, control);
+            // Q129: a world waiting for Show it is the account's that made it, so Sign out asks first; "Show it first" is
+            // the creator's press of Show it, the GPU go.
+            if (control) {
+                control.unshownWorld = () => !!this.creation?.unshown;
+                // The stage may be held (a film, a capture, a review's frame): then the press is said, not lost.
+                control.showUnshown = () => {
+                    if (this.creation?.showBlocked()) this.showToast(COPY.account.showFirstLater, null);
+                    else void this.creation?.show();
+                };
+            }
             // Its paid work holds the account (Sign in and Sign out wait), and the empty stage says a world is being made.
             this.creation.subscribe(() => {
                 this.accountControl?.setBusy(this.busy || !!this.creation?.busy);
@@ -938,7 +948,12 @@ class Studio {
     private async mountSaves(api: Api, session: AccountSession, control: AccountControl): Promise<void> {
         const { createSaveController } = await import('../../platform/save-controller');
         const view = new SaveView({
-            retry: () => void this.saves?.retry(),
+            // An account not read yet (its read failed, or is under way): Try again reads it, and its read saves the world
+            // waiting for it; any other: the same request again (the independent review).
+            retry: () => {
+                if (session.current.kind === 'google' && control.saveKind === 'unknown') void control.afterEntry();
+                else void this.saves?.retry();
+            },
             saveAsNew: () => void this.saves?.saveAsNew(),
             openSaved: worldId => this.openSavedOne(worldId),
             signIn: () => control.signInToSave(),
@@ -996,8 +1011,9 @@ class Studio {
             saves.installed({
                 // Its camera as it shows now, its saved view applied: kept should the creator save it again (the review).
                 stage: w.epoch, source: 'reopened', snapshot, design: o.design, view: this.viewport?.currentView() ?? null, title: o.title, improves: null,
-                // The epoch it was read under: installed under another, it binds nothing (W3's review, its mid).
-                saved: { worldId: o.worldId, revisionId: o.revisionId, rowVersion: o.rowVersion, epoch: origin.epoch },
+                // Its owner, the caller it was read as: under another account it stays here, never saved there (Q129).
+                ranAs: origin.ranAs,
+                saved: { worldId: o.worldId, revisionId: o.revisionId, rowVersion: o.rowVersion },
             });
         } else {
             saves.installed({ stage: w.epoch, source: 'archive', snapshot, design: null, view: null, title: '', improves: null });
@@ -1031,8 +1047,8 @@ class Studio {
                 }
             },
             blocked: () => this.runBlocked() !== null,
-            run: async (ready, epoch, signal) => {
-                const summary = await this.runCandidate(ready.world.snapshot, ready.compiled, { kind: 'reopened', world: ready.world, epoch }, signal);
+            run: async (ready, readAs, signal) => {
+                const summary = await this.runCandidate(ready.world.snapshot, ready.compiled, { kind: 'reopened', world: ready.world, ranAs: readAs }, signal);
                 return summary.status === 'installed' ? 'installed' : summary.status === 'stopped' ? 'stopped' : 'refused';
             },
             changed: () => { if (this.opening === opening) this.renderOpening(); },

@@ -8,7 +8,7 @@ import type { Source } from '../forge-client/client';
 /** Why a world did not arrive, as the loop classifies it. */
 export type FailureKind =
     | 'cancelled' | 'plan' | 'author-slow' | 'author-failed' | 'ran-out' | 'paused' | 'budget' | 'rate' | 'offline' | 'sign-in'
-    | 'allowance' | 'quota' | 'refused' | 'too-heavy' | 'verify' | 'internal';
+    | 'allowance' | 'quota' | 'refused' | 'suspended' | 'too-heavy' | 'verify' | 'internal';
 
 export const COPY = {
     journey: {
@@ -60,9 +60,11 @@ export const COPY = {
         'sign-in': 'Wexy couldn\'t sign you in on this device. Reload the page and try again.',
         // W1 (the creations platform companion §12): what the server said of the caller's allowance and the idea. The
         // world on the stage and the idea in the box stay as they are; nothing was spent.
-        'allowance': 'You\'ve made your free world. Sign in with Google for early access: one world a day.',
+        'allowance': 'This browser has made its free world, or your network has made today\'s. Sign in with Google for early access: one world a day.',
         'quota': 'You\'ve made today\'s world. Early access gives one a day. You can still open, film and export your worlds.',
         'refused': 'This idea can\'t be made here. Try a different one.',
+        // 2026-11-04 (the user: "suspension force that"): a suspended or deleting account, refused at the gateway.
+        'suspended': 'This account can\'t make worlds right now.',
         'too-heavy': 'This idea is too heavy for this graphics card. Try fewer things, or a simpler look.',
         'verify': 'This one didn\'t work on your device. Try again, or try another idea.',
         'internal': 'Something went wrong. Press Create to try again.',
@@ -78,12 +80,25 @@ export const COPY = {
         signedIn: 'Signed in with Google',
         notNow: 'Not now',
         ok: 'OK',
-        allowanceTitle: 'You\'ve made your free world',
+        allowanceTitle: 'The free world is made',
         quotaTitle: 'Today\'s world is made',
         collisionTitle: 'That Google account already has a Wexy account',
         collisionBody: 'Sign in to it here instead? The world on screen stays as it is.',
         collisionGo: 'Sign in to that account',
         cancel: 'Cancel',
+        /**
+         * Q129 (the user, 2026-11-04): a world written and waiting for Show it is the signed-in account's; another account,
+         * or none, discards it, so a sign-out or a collision's sign-in asks first. Escape keeps the account and the world.
+         */
+        unshownSignOutTitle: 'Sign out?',
+        unshownSignOutBody: 'Your new world hasn\'t been shown yet. Signing out discards it.',
+        unshownSignOutGo: 'Sign out and discard',
+        unshownSignInTitle: 'Sign in to that account?',
+        unshownSignInBody: 'Your new world hasn\'t been shown yet. Signing in to that account discards it.',
+        unshownSignInGo: 'Sign in and discard',
+        showFirst: 'Show it first',
+        signedOutDiscarded: 'Signed out. Your new world was discarded.',
+        showFirstLater: 'Show it can\'t start right now. Your new world is still waiting: press Show it when it\'s ready.',
         blocked: 'Your browser blocked the sign-in window. Allow pop-ups for this site, then try again.',
         failed: 'Sign-in didn\'t work just now. Your world is still here; try again in a moment.',
         signedOut: 'Signed out. Your world is still here.',
@@ -193,6 +208,9 @@ export const COPY = {
         exhausted: 'This idea needed more steps than one try allows. Try a simpler version of it.',
         cancelled: 'Stopped. Your current world is unchanged.',
         accountChanged: 'You signed in or out, so this world was stopped. Your current world is unchanged.',
+        accountChangedDiscarded: 'You signed in or out, so this world was stopped, and your new world waiting for Show it was discarded. Your current world is unchanged.',
+        /** Q127 (a) reversed (the user, 2026-11-04): a world written and not yet shown belongs to the account that made it. */
+        discarded: 'The account changed before your new world was shown, so it was discarded. Your current world is unchanged.',
         deviceLost: 'Your graphics card stopped responding, so this world was stopped. Reload the page to carry on.',
         notHere: 'This world can\'t be tested on this device; your current world is unchanged.',
         runRefused: 'This world didn\'t pass its test on your graphics card; your current world is unchanged. Press Show it to try again, or try a simpler idea.',
@@ -232,7 +250,12 @@ export const COPY = {
         failedWhy: 'Saving isn\'t available right now. Your world is still here: you can still film it and take photos.',
         offline: 'Not saved: no connection',
         offlineWhy: 'Wexy couldn\'t reach its server. Check your connection, then press Try again.',
-        notSavedWhy: 'This world isn\'t saved to the account signed in now. Press Save to keep it there.',
+        notSavedWhy: 'Saving isn\'t available for this account right now. Your world is still here: you can still film it and take photos.',
+        notAllowedWhy: 'This account can\'t save worlds right now. Your world is still here: you can still film it and take photos.',
+        /** Q129 (the user, 2026-11-04): a world belongs to the account that made it, and only that account saves it. */
+        savedElsewhere: 'Saved to the account that made it',
+        savedElsewhereWhy: 'This world is saved to the account that made it, not to this one. It stays here: you can still film it and take photos.',
+        elsewhereWhy: 'This world was made with another account, and only that account can save it. It stays here: you can still film it and take photos.',
         conflict: 'Not saved: changed in another tab',
         conflictWhy: 'A newer version of this world was saved elsewhere. Save your copy as a new world, or open the saved one.',
         saveAsNew: 'Save as a new world',

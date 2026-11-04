@@ -53,11 +53,11 @@ export interface OpeningPorts {
     /** Whether something else holds the stage now, so a Run would wait (stage-holds.ts): Show it does nothing then. */
     blocked(): boolean;
     /**
-     * The stage's Run of the opened world, read under `epoch`: what it came to. `signal` aborts when the account changes
-     * while it runs, so the Run stops with the Head unchanged (the stage's own Stop) instead of installing it (the second
-     * review of W3).
+     * The stage's Run of the opened world, read as `readAs` (its owner, the caller of the epoch it was read under): what it
+     * came to. `signal` aborts when the account changes while it runs, so the Run stops with the Head unchanged (the
+     * stage's own Stop) instead of installing it (the second review of W3).
      */
-    run(ready: ReadyWorld, epoch: number, signal: AbortSignal): Promise<'installed' | 'stopped' | 'refused'>;
+    run(ready: ReadyWorld, readAs: string, signal: AbortSignal): Promise<'installed' | 'stopped' | 'refused'>;
     /** The card changed. */
     changed(): void;
     /** Developer view's record of the read: ok or not, in a developer's words. */
@@ -172,12 +172,13 @@ export class SavedOpening {
     async show(): Promise<void> {
         const ready = this.ready;
         if (!ready || this.running || this.ended || this.ports.blocked()) return;
-        if (!this.holds()) return this.lost();
+        if (!this.holds() || !this.caller) return this.lost();
+        const readAs = this.caller.uid;
         this.running = true;
         this.ports.changed();
         const stop = new AbortController();
         this.stopRun = stop;
-        const status = await this.ports.run(ready, this.epoch as number, stop.signal).finally(() => { this.stopRun = null; });
+        const status = await this.ports.run(ready, readAs, stop.signal).finally(() => { this.stopRun = null; });
         // Installed: the world reached the stage, which ended the opening (end()). Otherwise it waits for another press,
         // unless the account changed meanwhile.
         if (this.ended) return;

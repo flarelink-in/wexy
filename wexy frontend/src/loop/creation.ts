@@ -85,6 +85,11 @@ export interface CreationAccount {
     /** E_auth now (AccountSession's epoch): it moves when the account or its provider changes. */
     epoch(): number;
     /**
+     * The uid signed in now, as the session last read it (its caller), or null when no one is: an account change is a
+     * switch to another uid, so a link (an anonymous creator gaining Google, the same uid) is none (Q127 (a) reversed).
+     */
+    uid(): string | null;
+    /**
      * A caller is signed in now, as the session last read it, so a creation's E_auth is bound at once. False before any
      * reading (a first visit) and after a sign-out: the next call then makes a new anonymous caller.
      */
@@ -177,6 +182,11 @@ export interface CreationController {
      * wait (§6), so a round on the world on the stage never strands a paid world written for Show it.
      */
     readonly creating: boolean;
+    /**
+     * A world written and waiting for Show it, a new creation's or an improvement of the world on the stage's: an account
+     * change would discard it (Q129), so Sign out asks first.
+     */
+    readonly unshown: boolean;
     /** A stage was handed in: worlds can be shown ("Run on this GPU" is offered). */
     readonly showable: boolean;
     /** Why the stage cannot run now, in its own words (no stage, a Run, a capture), or null. */
@@ -296,6 +306,8 @@ interface End {
     sentence: string | null;
     question: string | null;
     limit: LimitKind | null;
+    /** An account change discarded it, unshown (Q127 (a) reversed): a commit that beat the discard clears it. */
+    discarded?: boolean;
 }
 
 interface Creation {
@@ -308,6 +320,11 @@ interface Creation {
      * established makes its own (create's first step): no move of the epoch stops it until its caller is known.
      */
     authEpoch: number | null;
+    /**
+     * The uid signed in when its epoch was bound: the account that made it, whose allowance it spent (Q129). Another uid
+     * signed in, or none, discards it while it is unshown; a link keeps the uid, so it keeps the world (P1).
+     */
+    authUid: string | null;
     /** Its own (I8), made at its first write. */
     session: CandidateSession | null;
     turn: AgentTurnState | null;
@@ -335,7 +352,7 @@ interface Creation {
 /** The turn's failure in the creator's words (failures.ts, as h1's plan's), and the limit dialog it opens. */
 function turnFailure(t: AgentTurnState): { sentence: string; limit: LimitKind | null } {
     if (!t.code || !isErrorCode(t.code)) return { sentence: COPY.failures.internal, limit: null };
-    const f = classifyError(new ForgeError(t.code, t.httpStatus ?? 0, t.reason ?? '', t.retryAfterSeconds), 'plan');
+    const f = classifyError(new ForgeError(t.code, t.httpStatus ?? 0, t.reason ?? '', t.retryAfterSeconds, t.bare === true), 'plan');
     return { sentence: f.sentence, limit: f.kind === 'allowance' ? 'allowance' : f.kind === 'quota' ? 'quota' : null };
 }
 
@@ -455,6 +472,8 @@ export function createCreationController(deps: CreationDeps): CreationController
     }
 
     const accountMovedFor = (c: Creation) => !!deps.account && c.authEpoch !== null && deps.account.epoch() !== c.authEpoch;
+    /** Another uid is signed in than the one `c` was made by, or none is: an account change (a link is none). */
+    const uidMovedFor = (c: Creation) => !!deps.account && c.authEpoch !== null && deps.account.uid() !== c.authUid;
     const improving = (c: Creation | null) => !!c && c === installed && WRITING.has(c.candidate?.phase ?? '');
     /**
      * A creation other than H's is under way or waits for its go (handed off, or written and checked): a round on H would
@@ -465,8 +484,9 @@ export function createCreationController(deps: CreationDeps): CreationController
     function newCreation(idea: AgentTurnRequest, manual: boolean, from?: Creation): Creation {
         // E_auth: the attempt's own turn's, an established caller's now, or (no caller yet) bound once create() has made one.
         const authEpoch = from ? from.authEpoch : deps.account?.established() ? deps.account.epoch() : null;
+        const authUid = from ? from.authUid : authEpoch !== null ? deps.account?.uid() ?? null : null;
         return {
-            idea, title: titleOf(idea.prompt), manual, authEpoch, session: null,
+            idea, title: titleOf(idea.prompt), manual, authEpoch, authUid, session: null,
             turn: from?.turn ?? null, handOff: from?.handOff ?? null, candidate: null, running: false, run: null, onStage: null, notice: null,
             planSince: clock(), planMs: from?.planMs ?? null, buildSince: null, buildMs: null, runSince: null, runMs: null,
             end: null, closed: false,
@@ -588,6 +608,7 @@ export function createCreationController(deps: CreationDeps): CreationController
                 return state;
             }
             c.authEpoch = account.epoch();
+            c.authUid = account.uid();
         }
         // The turn session is this creation's only from here: what the one it superseded still says is not shown as its.
         turnOwner = c;
@@ -736,7 +757,7 @@ export function createCreationController(deps: CreationDeps): CreationController
             installed = c;
             c.onStage = snapshot.id;
             c.runMs = c.runSince === null ? null : clock() - c.runSince;
-            if (c.end?.phase === 'cancelled') c.end = null;
+            if (c.end?.phase === 'cancelled' || c.end?.discarded) c.end = null;
             if (old && old !== c) release(old);
             publish(c);
             return summary;
@@ -805,21 +826,38 @@ export function createCreationController(deps: CreationDeps): CreationController
      */
     function accountMoved(): void {
         if (disposed) return;
+        // Q127 (a) reversed, Q129 decided (the user, 2026-11-04: "each account its own; a world lost is lost"): a world
+        // written and not yet shown belongs to the account that made it, so another uid signed in, or none, discards it,
+        // a Run of it under way included; the world on the stage stays as it is. A link keeps the uid, and keeps it.
+        const keptGone = !!kept && uidMovedFor(kept);
+        if (kept && keptGone) {
+            release(kept);
+            kept = null;
+        }
         const c = current;
         if (c && !c.closed && !c.end && accountMovedFor(c)) {
             const phase = phaseOf(c);
+            const other = uidMovedFor(c);
             if (c === installed) {
-                if (WRITING.has(c.candidate?.phase ?? '')) {
+                // A round on the world on the stage stops; its improvement, written or being shown, goes unshown.
+                if (WRITING.has(c.candidate?.phase ?? '') || (other && (phase === 'ready' || phase === 'running'))) {
                     n++;
                     c.session?.cancel();
                 }
             } else if (phase === 'turn' || phase === 'writing') {
                 n++;
-                c.end = { phase: 'stopped', at: rowOf(phase), sentence: COPY.creation.accountChanged, question: null, limit: null };
+                // A world kept for its go that went with the change is said with it (the independent review).
+                const sentence = keptGone ? COPY.creation.accountChangedDiscarded : COPY.creation.accountChanged;
+                c.end = { phase: 'stopped', at: rowOf(phase), sentence, question: null, limit: null };
                 if (turnOwner === c) turns.cancel();
                 c.session?.cancel();
-                // A world kept for its go stays, as any written world does (Q127 (a)): it comes back now (Q126 (b)).
+                // A world kept for its go comes back now (Q126 (b)), unless the account changed: then it went above.
                 decide(c, c.turn?.meta != null);
+            } else if (other && (phase === 'ready' || phase === 'running')) {
+                // κ moves, so a Run of it under way stops at its next check with the Head unchanged; the world goes.
+                n++;
+                c.end = { phase: 'stopped', at: rowOf(phase), sentence: COPY.creation.discarded, question: null, limit: null, discarded: true };
+                c.session?.cancel();
             }
         }
         publish();
@@ -869,6 +907,10 @@ export function createCreationController(deps: CreationDeps): CreationController
         },
         get creating() {
             return replacing();
+        },
+        get unshown() {
+            // Not after a device loss: nothing can be shown until the page is reloaded, so there is nothing to show first.
+            return !disposed && !lost && (!!kept || (!!current && !current.closed && phaseOf(current) === 'ready'));
         },
         get showable() {
             return !!deps.stage;

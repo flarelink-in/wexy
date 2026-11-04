@@ -94,14 +94,17 @@ for (const port of [GATEWAY_PORT, PLATFORM_PORT, PROXY_PORT, VITE_PORT]) {
 // re-signs B2's certificate with its own root, which Windows trusts and Java's own store does not, so every B2 call
 // failed its handshake (PKIX path building failed, SdkClientException; 2026-11-04). The gateway calls nothing outside.
 const WINDOWS_TRUST = process.platform === 'win32' ? ['-Djavax.net.ssl.trustStoreType=Windows-ROOT'] : [];
+const STANDING_TTL_MS = 2_000;
 const services = {
-    platform: { jar: platformJar, port: PLATFORM_PORT, jvm: WINDOWS_TRUST, env: () => cleanEnv(Object.fromEntries(B2_NAMES.map(n => [n, process.env[n]]))), proc: null, runs: 0 },
-    gateway: { jar: gatewayJar, port: GATEWAY_PORT, jvm: [], env: () => cleanEnv({}), proc: null, runs: 0 },
+    platform: { jar: platformJar, port: PLATFORM_PORT, jvm: WINDOWS_TRUST, args: [], env: () => cleanEnv(Object.fromEntries(B2_NAMES.map(n => [n, process.env[n]]))), proc: null, runs: 0 },
+    // The account's standing kept 2 s, not a minute: S2b suspends an account the studio's allowance read has just
+    // found active, and a minute's word would let its call through (the gateway checks that read too, since the review).
+    gateway: { jar: gatewayJar, port: GATEWAY_PORT, jvm: [], args: [`--wexy.auth.standing.ttl=${STANDING_TTL_MS}ms`], env: () => cleanEnv({}), proc: null, runs: 0 },
 };
 async function start(name) {
     const s = services[name];
     const log = openSync(join(OUT, `${name}-${++s.runs}.log`), 'w');
-    s.proc = spawn('java', ['-Xmx384m', ...s.jvm, '-jar', s.jar, '--spring.profiles.active=local', `--server.port=${s.port}`],
+    s.proc = spawn('java', ['-Xmx384m', ...s.jvm, '-jar', s.jar, '--spring.profiles.active=local', `--server.port=${s.port}`, ...s.args],
         { cwd: dirname(s.jar), stdio: ['ignore', log, log], env: s.env() });
     for (let i = 0; i < 240; i++) {
         if (await status(`http://localhost:${s.port}/actuator/health`) === 200) return true;
@@ -325,6 +328,25 @@ try {
         && firstSave.caller === 'google' && /^[A-Za-z0-9-]{16,64}$/.test(firstSave.key ?? '') && firstSave.title === TITLE_A && firstSave.sentSha === firstSave.textSha
         && readBack?.status === 200 && readBack.sha === firstSave.textSha && readBack.headSha === firstSave.textSha && readBack.bytes === firstSave.bytes,
         { save: firstSave && { status: firstSave.status, key: firstSave.key, bytes: firstSave.bytes, worldId: worldA?.worldId }, readBack });
+
+    // S2b (2026-11-04, "suspension force that"): the account suspended in the platform's database. A model call through
+    // the real gateway is refused there, 403 forbidden, before forge (which this drive does not run, so anything else
+    // would be a 503); the platform refuses its saves as well. Then the account is active again.
+    const me = await asCaller(token, 'GET', '/v1/me');
+    const accountId = me.json?.accountId ?? '';
+    const sql = q => spawnSync('docker', ['exec', 'wexy-mariadb-1', 'mariadb', '-N', '-uwexy_platform', '-plocal-dev-not-a-secret', 'wexy_platform', '-e', q], { encoding: 'utf8' });
+    const suspended = /^[0-9A-HJKMNP-TV-Z]{26}$/.test(accountId) && sql(`UPDATE account SET status='SUSPENDED' WHERE id='${accountId}'`).status === 0;
+    // The gateway's word on the account, from the sign-in's allowance read, outlived: it asks the platform again.
+    await sleep(STANDING_TTL_MS + 500);
+    const turn = await asCaller(token, 'POST', '/v1/agent/turn', { prompt: 'a lighthouse' });
+    const refusedSave = await asCaller(token, 'POST', '/v1/worlds', { title: 'Suspended', artifact: savedText ?? '{}', sha256: sha256(savedText ?? '{}') }, randomUUID());
+    const restored = suspended && sql(`UPDATE account SET status='ACTIVE' WHERE id='${accountId}'`).status === 0;
+    // And its barred word outlived too, before the studio's next allowance read.
+    await sleep(STANDING_TTL_MS + 500);
+    step('S2b a suspended account: its model call refused at the gateway (403 forbidden, its words), its save refused by the platform; active again after',
+        suspended && restored && turn.status === 403 && turn.json?.code === 'forbidden' && turn.json?.message === 'This account can\'t make worlds right now.'
+        && refusedSave.status === 403 && refusedSave.json?.code === 'forbidden',
+        { me: me.status, turn: [turn.status, turn.json?.code, turn.json?.message], save: [refusedSave.status, refusedSave.json?.code] });
 
     // S3: a second world, a world of its own.
     const readyB = await create(IDEA_B);

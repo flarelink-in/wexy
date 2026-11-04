@@ -8,8 +8,11 @@ import { COPY } from '../../loop/copy';
 import type { SaveState } from '../../platform/save-controller';
 import { h } from '../../shared/dom';
 
-/** What a creator can do about a save: `retry` ("Try again"), `save` (after another account signed in), and the rest. */
-export type SaveAction = 'retry' | 'save' | 'sign-in' | 'save-as-new' | 'open-saved' | 'your-worlds';
+/**
+ * What a creator can do about a save: `retry` ("Try again"), and the rest. Nothing for a world another account made
+ * (Q129): it is never saved into the account signed in now, by a press or by itself.
+ */
+export type SaveAction = 'retry' | 'sign-in' | 'save-as-new' | 'open-saved' | 'your-worlds';
 
 /** One save state in the creator's words. */
 export interface SaveLine {
@@ -34,7 +37,14 @@ export function saveLine(state: SaveState | null): SaveLine | null {
         case 'conflict': return { tone: 'warn', text: COPY.save.conflict, why: COPY.save.conflictWhy, actions: state.worldId ? ['save-as-new', 'open-saved'] : ['save-as-new'] };
         case 'storage-full': return { tone: 'warn', text: COPY.save.full, why: COPY.save.fullWhy, actions: ['your-worlds', 'retry'] };
         case 'too-large': return { tone: 'warn', text: COPY.save.tooLarge, why: COPY.save.tooLargeWhy, actions: [] };
-        case 'not-saved': return { tone: 'warn', text: COPY.save.notSaved, why: COPY.save.notSavedWhy, actions: ['save'] };
+        case 'not-saved': return { tone: 'warn', text: COPY.save.notSaved, why: COPY.save.notSavedWhy, actions: ['retry'] };
+        // The owner's account cannot save (suspended, being deleted): nothing to press would change that.
+        case 'not-allowed': return { tone: 'warn', text: COPY.save.notSaved, why: COPY.save.notAllowedWhy, actions: [] };
+        // The account that made it is not the one signed in (Q129): it stays here as a local world. Saved for its owner,
+        // it says so; it is never offered for saving here.
+        case 'elsewhere': return state.worldId
+            ? { tone: 'ok', text: COPY.save.savedElsewhere, why: COPY.save.savedElsewhereWhy, actions: [] }
+            : { tone: 'warn', text: COPY.save.notSaved, why: COPY.save.elsewhereWhy, actions: [] };
         case 'offline': return { tone: 'warn', text: COPY.save.offline, why: COPY.save.offlineWhy, actions: ['retry'] };
         case 'failed': return { tone: 'warn', text: COPY.save.notSaved, why: COPY.save.failedWhy, actions: ['retry'] };
     }
@@ -90,13 +100,12 @@ export class SaveView {
 
     private control(action: SaveAction, worldId: string | null): HTMLElement {
         if (action === 'your-worlds') return h('a', { class: 'save-link', href: CREATIONS }, COPY.save.yourWorlds);
-        const label = action === 'retry' ? COPY.save.tryAgain : action === 'save' ? COPY.save.save : action === 'sign-in' ? COPY.save.signIn
+        const label = action === 'retry' ? COPY.save.tryAgain : action === 'sign-in' ? COPY.save.signIn
             : action === 'save-as-new' ? COPY.save.saveAsNew : COPY.save.openSaved;
         const button = h('button', { type: 'button', class: 'btn btn-sm btn-quiet' }, label);
         button.addEventListener('click', () => {
             switch (action) {
-                case 'retry':
-                case 'save': this.actions.retry(); return;
+                case 'retry': this.actions.retry(); return;
                 case 'sign-in': this.actions.signIn(); return;
                 case 'save-as-new': this.actions.saveAsNew(); return;
                 case 'open-saved': if (worldId) this.actions.openSaved(worldId); return;

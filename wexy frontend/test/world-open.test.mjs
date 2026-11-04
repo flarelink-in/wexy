@@ -148,7 +148,7 @@ test('PL-FE5 the studio opens a saved world only through L3 on this device and t
     // Show it: the stage's own Run, which admits, builds, probes and draws the first frame before any switch, under the
     // epoch the world was read in; and a Run waits for every other holder of the stage.
     assert.match(open, /blocked: \(\) => this\.runBlocked\(\) !== null,/);
-    assert.match(open, /await this\.runCandidate\(ready\.world\.snapshot, ready\.compiled, \{ kind: 'reopened', world: ready\.world, epoch \}, signal\);/);
+    assert.match(open, /await this\.runCandidate\(ready\.world\.snapshot, ready\.compiled, \{ kind: 'reopened', world: ready\.world, ranAs: readAs \}, signal\);/);
     assert.match(method('private async showOpened('), /await this\.opening\?\.show\(\);/);
     assert.match(method('private async runCandidate('), /const r = await stage\.run\(snapshot, compiled, signal\);/);
     // And it is a press: the card's button, a double click one press; a world on the stage ends the opening.
@@ -173,8 +173,8 @@ test('W3.6 the studio saves what its Run installed, by where it came from: a cre
     const replay = save.slice(save.lastIndexOf('} else {'));
     assert.match(creation, /source: 'live', snapshot, design: about\.design, view: this\.viewport\?\.currentView\(\) \?\? null,/, 'S and the camera as it is at the install (F8)');
     assert.match(creation, /improves: about\.revises \? saves\.state\(\)\?\.stage \?\? null : null,/, 'a revision of the creation\'s world on the stage, under the install the controller knows it by');
-    assert.match(reopened, /source: 'reopened'[\s\S]*saved: \{ worldId: o\.worldId, revisionId: o\.revisionId, rowVersion: o\.rowVersion, epoch: origin\.epoch \}/,
-        'its saved head, so it is not saved again, and the epoch it was read under (W3\'s review)');
+    assert.match(reopened, /source: 'reopened'[\s\S]*ranAs: origin\.ranAs,\s*saved: \{ worldId: o\.worldId, revisionId: o\.revisionId, rowVersion: o\.rowVersion \}/,
+        'its saved head, so it is not saved again, for its owner, the caller it was read as (Q129)');
     assert.match(replay, /source: 'archive'/);
     // Every Run that installs hands its world over, after the switch, by its origin.
     assert.match(method('private async runCandidate('), /this\.afterSwitch\('its save', \(\) => this\.saveInstalled\(snapshot, origin\)\);/);
@@ -205,8 +205,16 @@ test('W3-review the studio binds what it saves and opens to the account: its cal
     // A reopened world keeps its camera for a later Save (the second review's low).
     assert.match(save, /source: 'reopened', snapshot, design: o\.design, view: this\.viewport\?\.currentView\(\) \?\? null,/);
     // The opening's Run takes the opening's signal, and the stage gets it (the second review's low).
-    assert.match(method('private async openFromUrl('), /run: async \(ready, epoch, signal\) => \{\s*const summary = await this\.runCandidate\(ready\.world\.snapshot, ready\.compiled, \{ kind: 'reopened', world: ready\.world, epoch \}, signal\);/);
+    assert.match(method('private async openFromUrl('), /run: async \(ready, readAs, signal\) => \{\s*const summary = await this\.runCandidate\(ready\.world\.snapshot, ready\.compiled, \{ kind: 'reopened', world: ready\.world, ranAs: readAs \}, signal\);/);
     assert.match(method('private async runCandidate('), /const r = await stage\.run\(snapshot, compiled, signal\);/);
+});
+
+test('account-guards review: Show it first says why when the stage is held, and Try again reads an account not read yet before it saves', () => {
+    const main = readFileSync(join(ROOT, 'src/shell/studio/main.ts'), 'utf8');
+    // L3: the confirmation's Show it first is the creator's Show it; when it cannot start, it is said, not lost.
+    assert.match(main, /control\.showUnshown = \(\) => \{\s*if \(this\.creation\?\.showBlocked\(\)\) this\.showToast\(COPY\.account\.showFirstLater, null\);\s*else void this\.creation\?\.show\(\);\s*\};/);
+    // L4: "Not saved" for an account not read yet: Try again reads it (its read saves the waiting world); else the request again.
+    assert.match(main, /retry: \(\) => \{\s*if \(session\.current\.kind === 'google' && control\.saveKind === 'unknown'\) void control\.afterEntry\(\);\s*else void this\.saves\?\.retry\(\);\s*\},/);
 });
 
 test('W3-review /creations: every call of the page goes out bound to its epoch\'s caller, and a world that cannot be read is not taken as gone', () => {
