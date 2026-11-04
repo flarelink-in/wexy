@@ -143,8 +143,8 @@ compose_check() {
     fi
 }
 compose_check compose.dev.yaml compose.platform.yaml compose.tunnel.yaml
-compose_check compose.prod.yaml compose.tunnel.yaml
-echo "compose: dev's stack (with the platform) and prod's merge"
+compose_check compose.prod.yaml compose.platform.yaml compose.tunnel.yaml
+echo "compose: dev's and prod's full stacks (platform and tunnel) merge"
 
 # The version label of an image's `latest` in the registry, or nothing when there is none. Read from the registry, so
 # it is the same answer on any machine (FlareLink reads local tags, which a fresh machine does not have).
@@ -207,8 +207,9 @@ for MODULE in "${MODULES[@]}"; do
 done
 
 echo "pushed ${MODULES[*]} as $NEW and latest. On the host (docs/deploy-design.md §10):"
-echo "  dev, on latest. Infisical dev must hold the platform's four first: MARIADB_ROOT_PASSWORD, MARIADB_USER,"
-echo "  MARIADB_PASSWORD, WEXY_ACCOUNT_HMAC_KEY (compose stops at the first one missing). The gateway and forge go"
+echo "  dev, on latest. Each environment must hold MARIADB_ROOT_PASSWORD, MARIADB_USER, MARIADB_PASSWORD,"
+echo "  WEXY_ACCOUNT_HMAC_KEY and all five B2_PRIVATE_* values (compose stops at the first one missing)."
+echo "  Prod needs its own private bucket and platform-only key. The gateway and forge go"
 echo "  together, as one pull does: forge refuses a token that does not name it (W2's audience)."
 echo "    infisical run --env=dev -- docker compose -f compose.dev.yaml -f compose.platform.yaml -f compose.tunnel.yaml pull"
 echo "    infisical run --env=dev -- docker compose -f compose.dev.yaml -f compose.platform.yaml -f compose.tunnel.yaml up -d"
@@ -217,8 +218,10 @@ echo "  then, on the laptop, through dev's tunnel (ssh -L 8400:127.0.0.1:8500 \"
 echo "  and through Cloudflare: bash deploy.sh smoke https://api-dev.wexy.ai (the zone's method rule must allow PATCH and"
 echo "  DELETE since W2: Security > WAF > custom rules, the deploy design's zone rules)"
 echo "  then the studio's half (wexy frontend): npm run build:dev; firebase deploy --only hosting:dev --project wexy-bf8f8"
-echo "  prod, pinned, once $NEW has run on dev (the platform stays dev's until W2 has run there):"
-echo "    WEXY_IMAGE_TAG=$NEW infisical run --env=prod -- docker compose -f compose.prod.yaml -f compose.tunnel.yaml up -d"
+echo "  prod, pinned, once $NEW has run on dev and prod's secrets, private bucket and tunnel are ready:"
+echo "    WEXY_IMAGE_TAG=$NEW infisical run --env=prod -- docker compose -f compose.prod.yaml -f compose.platform.yaml -f compose.tunnel.yaml pull"
+echo "    WEXY_IMAGE_TAG=$NEW infisical run --env=prod -- docker compose -f compose.prod.yaml -f compose.platform.yaml -f compose.tunnel.yaml up -d --wait"
+echo "  then: WEXY_SMOKE_ORIGIN=https://wexy.ai bash deploy.sh smoke https://api.wexy.ai"
 if [ ${#MODULES[@]} -lt ${#ALL[@]} ]; then
     echo "note: only ${MODULES[*]} has $NEW, and prod's WEXY_IMAGE_TAG pins every image: release all before pinning."
 fi

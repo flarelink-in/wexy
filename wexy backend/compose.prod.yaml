@@ -8,8 +8,10 @@
 # names written below. Every compose command needs it in front, `ps` and `logs` included:
 #
 #     infisical run --env=prod -- docker compose -f compose.prod.yaml up -d                          # SSH only
-#     infisical run --env=prod -- docker compose -f compose.prod.yaml -f compose.tunnel.yaml up -d   # public
-#     (and -f compose.records.yaml as well, from B1.1)
+#     WEXY_IMAGE_TAG=<tested-version> infisical run --env=prod -- docker compose -f compose.prod.yaml -f compose.platform.yaml -f compose.tunnel.yaml pull
+#     WEXY_IMAGE_TAG=<tested-version> infisical run --env=prod -- docker compose -f compose.prod.yaml -f compose.platform.yaml -f compose.tunnel.yaml up -d --wait
+#     The platform overlay is required for accounts and saved worlds; it needs prod's private bucket credentials.
+#     compose.records.yaml is separate future generation-record storage, not the saved-world platform.
 #
 # Images come from deploy.sh: EventVision's Vultr registry and the `latest` tag while the product is developed (the
 # user, 2026-10-29, Q47); WEXY_REGISTRY and WEXY_IMAGE_TAG override them. With `latest`, `up -d` alone keeps the image
