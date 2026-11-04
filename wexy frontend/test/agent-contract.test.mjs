@@ -37,7 +37,9 @@ const SCHEMA_HASH = 'c25fc7689301b9a8f79ae424de5aac489a11fed8399e9dbcb771c20581f
  * v3 (the refused turn's reservation with it), and revised.sse, a turn that revises a base; before, 24373afe… (agent.v4
  * without the two rules), 13b6a9cb… (10-31: agent.v3 and Q80's gates), cb04377c….
  */
-const WIRE_HASH = 'c5da82a46fa87a102ee0cb74946a2dfb7082eca3c4ce86a7d233246bb702dac7';
+// 810e4a46… since 2026-11-04: error-upstream.sse's turn makes a third call, its second schema repair, and its error says
+// why the last answer was not an object, in the parser's words; before, c5da82a4….
+const WIRE_HASH = '810e4a4642e6df5fdef784debdc8739a270d826d6f5d1cf24fd7f3c3add9b9dd';
 
 const lf = (s) => s.replace(/\r\n/g, '\n');
 const recordings = () => Object.fromEntries(readdirSync(FIXTURES).sort().map(n => [n, lf(readFileSync(join(FIXTURES, n), 'utf8'))]));

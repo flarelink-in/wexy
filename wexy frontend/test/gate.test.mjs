@@ -30,8 +30,8 @@ import {
 
 const STAGE = { width: 1280, height: 720 };
 /** This laptop's two GPUs as EA-G1 keyed them (dev/out/ea-g1, 11-01), with Chrome's WebGPU developer features on. */
-const AMD_IGPU = 'ea5-env.v2|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome/156';
-const GTX_1650 = 'ea5-env.v2|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome/156';
+const AMD_IGPU = 'ea5-env.v3|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome';
+const GTX_1650 = 'ea5-env.v3|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome';
 const short = id => `${id.slice(0, 12)}…`;
 
 /** The world under test with its gate: a device compiler and its verdicts, the go, the ledger, eligibility for it. */
@@ -223,8 +223,8 @@ test('EA-D10 eligibility: outside coverage, unknown adapter info, one fixture fo
     await refused(edit(e => { if (e.adapter === 'ng.compute.stage') e.adapterVersion = 2; return e; }),
         `EA_ELIGIBILITY ng.compute.stage@1 (node seed) has no coverage for ${where}; static only`, 'another adapter version');
     const elsewhere = `EA_ELIGIBILITY ng.buffer.storage@1 (node stars) has no coverage for ${where}; static only`;
-    await refused(eligibilityFor([galaxy], { environment: ENVIRONMENT.replace('chrome/156', 'chrome/157') }), elsewhere, 'another browser');
-    await refused(eligibilityFor([galaxy], { environment: 'ea5-env.v2|nvidia|turing|0x1f91|NVIDIA GeForce GTX 1650|d3d12|windows|chrome/156' }), elsewhere, 'another GPU');
+    await refused(eligibilityFor([galaxy], { environment: ENVIRONMENT.replace(/\|chrome$/, '|edge') }), elsewhere, 'another browser');
+    await refused(eligibilityFor([galaxy], { environment: 'ea5-env.v3|nvidia|turing|0x1f91|NVIDIA GeForce GTX 1650|d3d12|windows|chrome' }), elsewhere, 'another GPU');
     // Another model of the same architecture is another environment: one model's run never covers its family (H2).
     await refused(eligibilityFor([galaxy], { environment: ENVIRONMENT.replace('0x15d8|AMD Radeon(TM) Vega 8 Graphics', '0x1636|AMD Radeon(TM) Graphics') }), elsewhere, 'another model, one architecture');
     await refused(eligibilityFor([galaxy], { environment: ENVIRONMENT.replace('|windows|', '|linux|') }), elsewhere, 'another operating system');
@@ -248,18 +248,22 @@ test('EA-D10 eligibility: outside coverage, unknown adapter info, one fixture fo
     // The environment: the exact model, its backend, its operating system and browser, or nothing (the EA5.3 review, H2).
     const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36';
     const gtx = { vendor: 'NVIDIA', architecture: 'turing', device: '0x1F91', description: 'NVIDIA GeForce GTX 1650', backend: 'D3D12', isFallbackAdapter: false };
-    assert.deepEqual(environmentOf(gtx, ua), { key: 'ea5-env.v2|nvidia|turing|0x1f91|NVIDIA GeForce GTX 1650|d3d12|windows|chrome/156' });
+    assert.deepEqual(environmentOf(gtx, ua), { key: 'ea5-env.v3|nvidia|turing|0x1f91|NVIDIA GeForce GTX 1650|d3d12|windows|chrome' });
+    // The browser's family, not its version (2026-11-04): Chrome's update to 157 matched no entry of 156's runs, so every
+    // Run warned. A newer Chrome is the same environment; Edge is another.
+    assert.deepEqual(environmentOf(gtx, ua.replace('HeadlessChrome/156.0.0.0', 'Chrome/157.0.8103.38')), environmentOf(gtx, ua), 'a newer Chrome');
+    assert.notDeepEqual(environmentOf(gtx, `${ua} Edg/157.0.0.0`), environmentOf(gtx, ua), 'Edge');
     const rtx = { ...gtx, device: '0x1f08', description: 'NVIDIA GeForce RTX 2060' };
     assert.notDeepEqual(environmentOf(rtx, ua), environmentOf(gtx, ua), 'two models of one architecture: two environments');
     const linux = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36';
     assert.notDeepEqual(environmentOf(gtx, linux), environmentOf(gtx, ua), 'another operating system');
     assert.notDeepEqual(environmentOf({ ...gtx, backend: 'vulkan' }, ua), environmentOf(gtx, ua), 'another backend');
-    assert.deepEqual(environmentOf({ ...gtx, device: '' }, ua), { key: 'ea5-env.v2|nvidia|turing|-|NVIDIA GeForce GTX 1650|d3d12|windows|chrome/156' }, 'the description alone names the model');
+    assert.deepEqual(environmentOf({ ...gtx, device: '' }, ua), { key: 'ea5-env.v3|nvidia|turing|-|NVIDIA GeForce GTX 1650|d3d12|windows|chrome' }, 'the description alone names the model');
     assert.deepEqual(environmentOf({ ...gtx, device: '', description: '' }, ua), { unknown: hidden }, 'a browser that hides the model: no environment');
     assert.deepEqual(environmentOf({ ...gtx, isFallbackAdapter: true }, ua), { unknown: 'a software (fallback) adapter qualifies nowhere' });
     assert.deepEqual(environmentOf({ ...gtx, architecture: '' }, ua), { unknown: 'the adapter does not say its vendor and architecture' });
     assert.deepEqual(environmentOf(gtx, 'Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0'), { unknown: 'the browser is not one this host knows' });
-    assert.equal(browserOf('Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0'), 'edge/156');
+    assert.equal(browserOf('Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0'), 'edge');
     assert.equal(osOf('Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36'), 'android', 'Android says Linux too');
     // The identity is read from GPUAdapterInfo as the device reports it; a missing field is empty, never invented.
     assert.deepEqual(adapterIdentity({ vendor: 'amd', architecture: 'gcn-5', description: 'AMD Radeon(TM) Vega 8 Graphics', subgroupMinSize: 32 }),
@@ -338,10 +342,11 @@ test('EA5.4 and option B: the shipped eligibility, written by EA-G1, covers each
             for (const e of envelopes) assert.equal(at(w.x, key, e.width * e.height), null, `${key.split('|')[1]}: ${w.x.nodes.length} nodes at ${e.width}×${e.height}`);
         }
     }
-    // Nothing past what ran: a pixel over what EA-G1 rendered, another model, or a world the runs did not hold.
-    assert.match(at(worlds[1].x, AMD_IGPU, 2048 * 1152 + 1), /^EA_ELIGIBILITY ng\.render\.fullscreen@1 \(node backdrop\): pixels 2359297 over 2359296 /);
+    // Nothing past what ran: a pixel over the envelope EA-G1 was admitted at (2023×1138 since 2026-11-04: its canvas is
+    // held to the live cap, ea-g1.ts's coveredPixels), another model, or a world the runs did not hold.
+    assert.match(at(worlds[1].x, AMD_IGPU, 2023 * 1138 + 1), /^EA_ELIGIBILITY ng\.render\.fullscreen@1 \(node backdrop\): pixels 2302175 over 2302174 /);
     assert.match(at(worlds[1].x, AMD_IGPU.replace('0x1638|AMD Radeon(TM) Graphics', '0x15d8|AMD Radeon(TM) Vega 8 Graphics'), 2048 * 1152), /has no coverage for/);
-    assert.match(at(worlds[1].x, GTX_1650.replace('chrome/156', 'chrome/157'), 2048 * 1152), /has no coverage for/, 'another browser version');
+    assert.match(at(worlds[1].x, GTX_1650.replace(/\|chrome$/, '|edge'), 2048 * 1152), /has no coverage for/, 'another browser');
     // A value no run verified: custom lighting is gated, so no run lit a custom batch, and none is covered.
     const lit = await resolveProgram([
         node('ball', 'ng.geometry.primitive', { shape: 'sphere', size: 1, segments: 16 }),

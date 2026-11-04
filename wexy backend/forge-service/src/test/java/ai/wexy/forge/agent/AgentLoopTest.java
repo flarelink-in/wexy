@@ -85,6 +85,9 @@ class AgentLoopTest {
                 throw new AssertionError("the script has no answer for call " + n);
             }
             charged.run();
+            if (next instanceof ModelAnswer answer) {
+                return answer;
+            }
             return new ModelAnswer("gen-" + n, (String) next, "stop", 30_000L, 2_000L, 800L, 0L, cost);
         }
     }
@@ -225,31 +228,31 @@ class AgentLoopTest {
     void theTurnsTimeIsABudget() {
         AtomicLong now = new AtomicLong();
         Script script = new Script(needContext(), needContext(), valid("propose_design_and_program"));
-        script.onCall = () -> now.addAndGet(200_000);
+        script.onCall = () -> now.addAndGet(400_000);
 
         AgentOutcome outcome = run(script, AgentBudget.defaults(), now::get);
 
         assertThat(outcome.status()).isEqualTo(EXHAUSTED);
-        assertThat(outcome.reason()).contains("300 s");
+        assertThat(outcome.reason()).contains("600 s");
         assertThat(script.seen).hasSize(2);
     }
 
     @Test
     void aTurnWhoseTimeRunsOutBetweenCallsStartsNoOther() {
-        // The first answer arrives in time (299 s), and the turn's time runs out while its reads are answered: the next
+        // The first answer arrives in time (599 s), and the turn's time runs out while its reads are answered: the next
         // call is refused before it starts, so nothing is charged or sent. Without this check, gate A's deadline would
         // still end the turn, but only after a call with no time left had been charged and started (the mutation check,
         // 2026-10-31: "a turn's time unchecked before a call" survived every other test).
         AtomicLong now = new AtomicLong();
         Script script = new Script(needContext(), valid("propose_design_and_program"));
-        script.onCall = () -> now.set(299_000);
+        script.onCall = () -> now.set(599_000);
 
         AgentOutcome outcome = new AgentLoop(new AgentTools(BUNDLE), new ProgramCheck(BUNDLE, MANIFEST), SCHEMAS, PROMPTS,
                 AgentBudget.defaults(), now::get)
                 .run(REQUEST, script, event -> {
                     events.add(event);
                     if (event.name().equals("tools")) {
-                        now.set(301_000);
+                        now.set(601_000);
                     }
                 }, () -> false);
 
@@ -320,18 +323,57 @@ class AgentLoopTest {
     }
 
     @Test
-    void anAnswerOffTheSchemaGetsOneRepairThenTheTurnFails() {
-        Script script = new Script("Here is my plan: blocks!", "{\"kind\":\"ask\"}");
+    void anAnswerOffTheSchemaGetsTwoRepairsThenTheTurnFails() {
+        Script script = new Script("Here is my plan: blocks!", "{\"kind\":\"ask\"}", "Blocks, then.");
 
         AgentOutcome outcome = run(script);
 
         assertThat(outcome.status()).isEqualTo(FAILED);
         assertThat(outcome.code()).isEqualTo("upstream");
-        assertThat(script.seen).hasSize(2);
-        assertThat(script.seen.get(1).get(3).content()).startsWith("Your answer is not a valid action: it is not a JSON object.");
+        assertThat(script.seen).hasSize(3);
+        // Each repair says why, in the parser's words, never the answer's text (2026-11-04).
+        assertThat(script.seen.get(1).get(3).content())
+                .startsWith("Your answer is not a valid action: it is not a JSON object (Unrecognized token 'Here'");
+        assertThat(outcome.reason()).startsWith("the model's answer missed the action schema after a repair: it is not a JSON object (Unrecognized token 'Blocks'");
 
         events.clear();
         assertThat(run(new Script("not json", valid("propose_design_and_program"))).status()).isEqualTo(HANDED_OFF);
+        // The miss of 10-31 and 11-04: the first answer off the schema, the answer after it off again, then a valid one.
+        events.clear();
+        assertThat(run(new Script("not json", "[]", valid("propose_design_and_program"))).status()).isEqualTo(HANDED_OFF);
+    }
+
+    @Test
+    void anObjectInACodeFenceIsThatObject() {
+        // As PaperProbe reads one (2026-11-04): the object inside, which the schema still judges.
+        assertThat(run(new Script("```json\n" + valid("propose_design_and_program") + "\n```")).status()).isEqualTo(HANDED_OFF);
+        events.clear();
+        assertThat(run(new Script("```\n" + valid("propose_design_and_program") + "```")).status()).isEqualTo(HANDED_OFF);
+        events.clear();
+        AgentOutcome empty = run(new Script("```json\n```", "```", "```json"));
+        assertThat(empty.reason()).endsWith(": it is empty");
+    }
+
+    @Test
+    void anAnswerCutAtItsCapSaysSoNotThatItIsNotJson() {
+        // Meta ends an answer at the cap with finish "length": half an object, which reads "not a JSON object" (2026-11-04).
+        ModelAnswer cut = new ModelAnswer("gen-cut", "{\"kind\":\"propose_design_and_program\",\"design\":{\"idea\":\"a cas", "length",
+                30_000L, 32_000L, 29_000L, 0L, 50_000L);
+        AgentOutcome outcome = run(new Script(cut, cut, cut));
+        assertThat(outcome.status()).isEqualTo(FAILED);
+        assertThat(outcome.reason()).endsWith(": it was cut off at the output cap");
+    }
+
+    @Test
+    void aMissSaysWhatItIs() {
+        AgentOutcome empty = run(new Script("", " ", "\n"));
+        assertThat(empty.reason()).endsWith(": it is empty");
+        events.clear();
+        AgentOutcome array = run(new Script("[1]", "\"text\"", "[2]"));
+        assertThat(array.reason()).endsWith(": it is a JSON array, not an object");
+        events.clear();
+        AgentOutcome raw = run(new Script("{\"kind\":\"a\nb\"}", "{\"kind\":\"a\nb\"}", "{\"kind\":\"a\nb\"}"));
+        assertThat(raw.reason()).contains("it is not a JSON object (Illegal unquoted character").hasSizeLessThan(260);
     }
 
     @Test
@@ -397,13 +439,14 @@ class AgentLoopTest {
         for (String kind : List.of("need_context", "propose_design", "propose_program", "propose_design_and_program", "revise",
                 "finish", "propose_modules")) {
             events.clear();
-            Script script = new Script(action(kind).toString(), action(kind).toString());
+            // The first answer and its two repairs (2026-11-04), each without its kind's payload.
+            Script script = new Script(action(kind).toString(), action(kind).toString(), action(kind).toString());
 
             AgentOutcome outcome = run(script);
 
             assertThat(outcome.status()).as(kind).isEqualTo(FAILED);
             assertThat(outcome.code()).as(kind).isEqualTo("upstream");
-            assertThat(script.seen).as(kind).hasSize(2);
+            assertThat(script.seen).as(kind).hasSize(3);
         }
     }
 
@@ -411,7 +454,7 @@ class AgentLoopTest {
     void theTurnsTimeIsADeadlineEvenForACallInFlight() {
         AtomicLong now = new AtomicLong();
         Script script = new Script(valid("propose_design_and_program"));
-        script.onCall = () -> now.set(500_000);
+        script.onCall = () -> now.set(700_000);
 
         AgentOutcome outcome = run(script, AgentBudget.defaults(), now::get);
 
@@ -426,7 +469,7 @@ class AgentLoopTest {
         Script script = new Script(needContext(), valid("propose_design_and_program"));
         script.onCall = () -> now.addAndGet(100_000);
         run(script, AgentBudget.defaults(), now::get);
-        assertThat(script.remaining).containsExactly(Duration.ofSeconds(300), Duration.ofSeconds(200));
+        assertThat(script.remaining).containsExactly(Duration.ofSeconds(600), Duration.ofSeconds(500));
 
         AgentOutcome ended = run(new Script(needContext(), new AgentCallFailure("deadline", "the turn's time ran out")));
         assertThat(ended.status()).isEqualTo(EXHAUSTED);

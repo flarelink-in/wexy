@@ -116,12 +116,14 @@ export function parseEligibility(text: string): Parsed {
 /** The shipped eligibility: eligibility.json, parsed once. When it does not parse, nothing is eligible, and why is kept. */
 export const SHIPPED: Parsed = parseEligibility(eligibilityText);
 
-/** The browser, from its user agent: `chrome/156`, `edge/156`; null for any other, which matches no entry. */
+/**
+ * The browser's family, from its user agent: `chrome` or `edge`; null for any other, which matches no entry. Not its
+ * version (2026-11-04): Chrome updates every four weeks, and a key with its major version (`chrome/156`) matched no entry
+ * after each update, so every Run warned. Every Run is probed, as for the driver's version.
+ */
 export function browserOf(userAgent: string): string | null {
-    const edge = /\bEdg\/(\d+)\./.exec(userAgent);
-    if (edge) return `edge/${edge[1]}`;
-    const chrome = /\b(?:HeadlessChrome|Chrome)\/(\d+)\./.exec(userAgent);
-    return chrome ? `chrome/${chrome[1]}` : null;
+    if (/\bEdg\/\d+\./.test(userAgent)) return 'edge';
+    return /\b(?:HeadlessChrome|Chrome)\/\d+\./.test(userAgent) ? 'chrome' : null;
 }
 
 /** The operating system, from the user agent; null for one this host does not know. Android before Linux: it says both. */
@@ -134,8 +136,11 @@ export function osOf(userAgent: string): string | null {
     return null;
 }
 
-/** The fingerprint's version: what the key holds, and how it is read (the EA5.3 review, H2). */
-export const ENVIRONMENT_VERSION = 'ea5-env.v2';
+/**
+ * The fingerprint's version: what the key holds, and how it is read (the EA5.3 review, H2). v3 (2026-11-04): the
+ * browser's family, not its major version.
+ */
+export const ENVIRONMENT_VERSION = 'ea5-env.v3';
 
 /** What the environment is read from: the adapter's own info, as the device reports it. */
 export interface AdapterIdentity {
@@ -169,11 +174,12 @@ export type Environment = { key: string } | { unknown: string };
 /**
  * This device's environment (§7): the exact reviewed model, not its family (the EA5.3 review, H2). The key holds the
  * fingerprint's version, the vendor, the architecture, the model (its device identifier and description), the backend
- * where the browser says it, the operating system and the browser's major version, e.g.
- * `ea5-env.v2|nvidia|turing|0x1f91|NVIDIA GeForce GTX 1650|d3d12|windows|chrome/156`. Two models of one architecture are
+ * where the browser says it, the operating system and the browser's family, e.g.
+ * `ea5-env.v3|nvidia|turing|0x1f91|NVIDIA GeForce GTX 1650|d3d12|windows|chrome`. Two models of one architecture are
  * two environments. A browser that hides the model (Chrome does, unless its WebGPU developer features are on) gives no
  * environment at all, so eligibility never widens from a model to its family; nor does a software adapter, or an
- * operating system or browser this host does not know. The driver's version is not in the key: every Run is probed.
+ * operating system or browser this host does not know. Neither the driver's version nor the browser's is in the key:
+ * every Run is probed.
  */
 export function environmentOf(gpu: AdapterIdentity, userAgent: string): Environment {
     const vendor = gpu.vendor.trim().toLowerCase();

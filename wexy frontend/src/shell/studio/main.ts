@@ -152,7 +152,8 @@ function runNumbers(report: AgentReport | null): string {
     const ms = (v: number | undefined) => (v === undefined || Number.isNaN(v) ? 'not measured' : `${v.toFixed(1)} ms`);
     const parts = [`probe: init ${ms(p.initMs)}, step ${ms(p.computeMsPerFrame)}, frame ${ms(p.drawMsPerFrame)}`];
     if (report.coverageWarning) parts.unshift(report.coverageWarning);
-    if (p.maxSubmissionMs !== undefined) parts.push(`worst submission ${ms(p.maxSubmissionMs)} of ${p.budgetMs ?? 250} ms`);
+    if (p.maxSubmissionMs !== undefined) parts.push(`worst submission ${ms(p.maxSubmissionMs)}`);
+    if (p.caps) parts.push(`caps: init ${p.caps.init}, step ${p.caps.step}, frame ${p.caps.frame}, first frame ${p.caps.firstFrame} ms`);
     if (p.steadyFrameMs !== undefined) parts.push(`steady frame ${ms(p.steadyFrameMs)}`);
     parts.push(`reserved ${(report.reservation.total / 1e6).toFixed(0)} MB`);
     if (report.sanity && report.firstFrame) {

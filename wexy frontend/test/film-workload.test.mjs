@@ -236,10 +236,11 @@ test('EA-F1 refusals: each an EA_FILM before any unprobed full-size work, with n
     assert.ok(reports[0].probe, 'new target probed before full-size work');
     released(f, uncovered.port, 'past measured coverage, successfully validated');
 
-    // A probe over the cap at the film's size: the probe's refusal, and nothing of the world at full size on the film's engine.
-    f = await filmFor('galaxy', { model: costs({ fixed: 0.05, perInvocation: 1e-5, perPixel: 8e-5 }) });
+    // A probe over the frame's cap (500 ms since 2026-11-04) at the film's size: the probe's refusal, and nothing of the
+    // world at full size on the film's engine.
+    f = await filmFor('galaxy', { model: costs({ fixed: 0.05, perInvocation: 1e-5, perPixel: 1e-4 }) });
     await assert.rejects(runFilm(f, agentFilmWorkload(f.snap, f.deps, { fps: 60, still: VIEW }), { ...size, width: 2048, height: 1152 }),
-        /^Error: EA_FILM .* at 2048x1152: EA_PROBE one frame: \d+\.\d ms predicted, over the 250 ms cap$/);
+        /^Error: EA_FILM .* at 2048x1152: EA_PROBE one frame: \d+\.\d ms predicted, over the 500 ms cap$/);
     port = [...f.ports.values()][0];
     assert.ok(!port.log.some(l => l.startsWith('render')), 'init never ran at full size');
     released(f, port, 'over the cap');

@@ -368,10 +368,12 @@ test('the Run: a probe over the cap reaches no full-size work on the stage\'s en
     heavy.stage.press(heavy.snap);
     const r = await heavy.stage.run(heavy.snap, heavy.compiled);
     assert.equal(r.status, 'failed');
-    assert.equal(r.reason, 'EA_PROBE init: 307.7 ms predicted, over the 250 ms cap');
+    // Init within its 1,000 ms, the fixed step over its 250 ms (each kind by its cap, 2026-11-04).
+    assert.equal(r.reason, 'EA_PROBE one fixed step: 307.7 ms predicted, over the 250 ms cap');
     assert.equal(heavy.port.renders, 0, 'nothing submitted on the stage\'s engine: init\'s dispatch never ran there');
     assert.ok(!heavy.port.log.some(l => l.startsWith('offscreenTarget')), 'no first frame');
     assert.equal(r.report.probe.phases.init.measured.length, 2);
+    assert.equal(r.report.probe.phases.step.measured.length, 2);
     assert.equal(heavy.commits.length, 0);
     allReleased(heavy, 'a probe over the cap');
 

@@ -228,7 +228,8 @@ test('EA-MR5 the EA4.5 review: the hand-off\'s turn and a revision\'s are kept, 
     const said = eventData(wire('error-upstream.sse'), 'error')[0].message;
     assert.deepEqual(failed.turns[1], {
         role: 'revision', turnId: 'turn-1', revision: 1, status: 'broken', model: 'muse-spark-1.3', promptVersion: 'agent.v6', charge: 'unknown',
-        calls: [{ ...revisionCall, purpose: 'first' }, { ...revisionCall, n: 2, purpose: 'repair', generationId: 'gen-2' }], error: said,
+        // Its first call and its two schema repairs (2026-11-04).
+        calls: [{ ...revisionCall, purpose: 'first' }, { ...revisionCall, n: 2, purpose: 'repair', generationId: 'gen-2' }, { ...revisionCall, n: 3, purpose: 'repair', generationId: 'gen-3' }], error: said,
     });
     assert.equal(candidateBundle(failed).calls.turns[1].charge, 'unknown');
 

@@ -348,14 +348,16 @@ class AgentWireTest {
     }
 
     @Test
-    void aTurnWhoseAnswersMissTheSchemaTwice() throws Exception {
+    void aTurnWhoseAnswersMissTheSchemaThrice() throws Exception {
         start();
         answers(AgentRoutesTest.USAGE, "Here is my plan: blocks!", "Blocks, then.");
 
         String wire = streamed();
 
-        assertThat(events(wire)).containsExactly("meta", "call", "usage", "call", "usage", "error");
-        assertThat(wire).contains("\"purpose\":\"repair\"").contains("\"code\":\"upstream\"");
+        // The first answer and its two repairs (2026-11-04), and why the last missed, in the parser's words.
+        assertThat(events(wire)).containsExactly("meta", "call", "usage", "call", "usage", "call", "usage", "error");
+        assertThat(wire).contains("\"purpose\":\"repair\"").contains("\"code\":\"upstream\"")
+                .contains("it is not a JSON object (Unrecognized token 'Blocks'");
         pin("error-upstream.sse", wire);
     }
 

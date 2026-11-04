@@ -49,7 +49,7 @@ public record AgentBudget(int calls, int contextRounds, int perRound, int toolRe
 
     /** Q67's values. */
     public static AgentBudget defaults() {
-        return new AgentBudget(AgentTurn.MAX_CALLS, 2, 6, 8, 65_536, 2, 1, 1_000_000L, 300L, 196_608);
+        return new AgentBudget(AgentTurn.MAX_CALLS, 2, 6, 8, 65_536, 2, 2, 1_000_000L, 600L, 196_608);
     }
 
     private static void atLeast(List<String> wrong, String name, long value, long least) {

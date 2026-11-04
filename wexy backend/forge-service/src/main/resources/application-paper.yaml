@@ -10,8 +10,9 @@ wexy:
   paper:
     enabled: true
   meta-api:
-    # A plan from a 30,000-token prompt may reason in silence for a while before its first chunk.
-    read-idle-timeout: 150s
+    # A plan from a 30,000-token prompt may reason in silence for a while before its first chunk: above the paper role's
+    # 240 s, as the main profile's 245 s is above the agent's (150 s until 2026-11-04, under its own role's deadline).
+    read-idle-timeout: 245s
   roles:
     # Its own role, so its cap and deadline touch none of the loop's: Spark at medium effort, as the design's planning
     # actions (§6); the cap holds the reasoning and a plan of a few thousand tokens.

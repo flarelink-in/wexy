@@ -3,7 +3,8 @@
 // whose submissions advance a clock by a cost model, so what the probe predicts can be held to what the full world costs
 // under the same model; and the sanity look. No GPU.
 //   EA-D6  every prediction at least the full world's cost (the two-point fit alone would under-predict a padded
-//          dispatch); a submission predicted over the 250 ms cap refuses before anything runs at full size; a steady
+//          dispatch); a submission predicted over its kind's cap (init and the first frame 1,000 ms, a frame 500, a
+//          fixed step 250; 2026-11-04) refuses before anything runs at full size; a steady
 //          frame over 33 ms, and over 100 ms, admits with its warning (Q90); the projection's changed constants recorded;
 //          every variant released and every headless engine destroyed
 //   EA-D15 an empty fixedStep costs 0 ms with nothing extrapolated (block-film, foggy-dusk); a sub-millisecond pair is
@@ -73,7 +74,7 @@ test('EA-D6 the probe over-predicts the full world, refuses over the cap before 
         assert.deepEqual(p.projection.map(q => q.fraction), [8, 4]);
         assert.ok(p.projection[0].changed.includes('galaxyInit.EA_INVOCATIONS 12000 → 1500') && p.projection[1].changed.includes('galaxySpin.EA_INVOCATIONS 12000 → 3000'),
             `the changed host constants are recorded: ${JSON.stringify(p.projection)}`);
-        assert.equal(p.budgetMs, 250);
+        assert.deepEqual(p.caps, { init: 1000, step: 250, frame: 500, firstFrame: 1000 });
         assert.deepEqual(p.warnings, []);
         released(made);
     }
@@ -84,14 +85,23 @@ test('EA-D6 the probe over-predicts the full world, refuses over the cap before 
     assert.ok(Math.max(0, m8 - slope / 8) + slope < 0.05 + 12032 * 2e-3, 'the fit alone: under');
     assert.ok(predictPair(m8, m4).ms >= 0.05 + 12032 * 2e-3, 'with the floor: over');
 
-    // Over the cap: refused at init, its first phase, with the numbers; nothing ran at full size here (the stage's
+    // Each kind by its own cap (2026-11-04). The init that h1's 250 ms refused is within init's 1,000 ms, and the fixed
+    // step as heavy is over the step's 250 ms: refused there, with the numbers; nothing ran at full size here (the stage's
     // preparation never reaches runInit: stage.test.mjs).
     const heavy = probeDeps(costs({ fixed: 0.05, perInvocation: 0.02 }));
     const refused = await probeCandidate(snap, heavy.deps);
     assert.equal(refused.ok, false);
-    assert.equal(refused.reason, 'EA_PROBE init: 307.7 ms predicted, over the 250 ms cap');
-    assert.ok(refused.probe.phases.init.measured.length === 2 && refused.probe.phases.step === undefined, 'refused before a step was timed');
+    assert.equal(refused.reason, 'EA_PROBE one fixed step: 307.7 ms predicted, over the 250 ms cap');
+    assert.ok(refused.probe.initMs > 250 && refused.probe.initMs <= 1000, `init within its cap: ${refused.probe.initMs}`);
+    assert.ok(refused.probe.phases.step.measured.length === 2 && refused.probe.phases.frame === undefined, 'refused before a frame was timed');
     released(heavy.made);
+    // Over init's own cap: refused at init, its first phase.
+    const heavier = probeDeps(costs({ fixed: 0.05, perInvocation: 0.07 }));
+    const atInit = await probeCandidate(snap, heavier.deps);
+    assert.equal(atInit.ok, false);
+    assert.match(atInit.reason, /^EA_PROBE init: \d+\.\d ms predicted, over the 1000 ms cap$/);
+    assert.ok(atInit.probe.phases.init.measured.length === 2 && atInit.probe.phases.step === undefined, 'refused before a step was timed');
+    released(heavier.made);
 
     // A steady frame over 33 ms, and over 100 ms: admitted, each with its warning.
     for (const [perPixel, words] of [[2.2e-5, /^EA_SLOW \d+\.\d ms a steady frame here, over the 33 ms target$/], [7e-5, /^EA_SLOW \d+\.\d ms a steady frame here, over the 33 ms target \(over 100 ms: below 10 fps\)$/]]) {
@@ -99,7 +109,7 @@ test('EA-D6 the probe over-predicts the full world, refuses over the cap before 
         const out = await probeCandidate(snap, slow.deps);
         assert.equal(out.ok, true, out.reason);
         assert.match(out.probe.warnings[0], words);
-        assert.ok(out.probe.drawMsPerFrame < WORLD_PROBE.maxSubmissionMs, 'slow, but under the cap');
+        assert.ok(out.probe.drawMsPerFrame < WORLD_PROBE.caps.frame, 'slow, but under the cap');
         assert.equal(out.probe.contaminated, true);
         assert.match(out.probe.warnings[1], /the Head shared the queue/, 'the shared queue said, never subtracted');
         released(slow.made);
@@ -120,10 +130,17 @@ test('EA-D15 empty phases, the timer\'s floor, inconclusive pairs, NaN in typed 
     }
 
     // The device's floor (EA-G1): twice an empty submission's fence latency, where that is more than the timer's. A falling
-    // pair within it is noise on this device, bounded by floor scaling; above it, inconclusive.
+    // pair within it is noise on this device, bounded by floor scaling; above it, a fall within noise (two grains, half the
+    // floor and a tenth: 2026-11-04, as a frame's) is judged by direct scaling, and one past it is inconclusive.
     assert.deepEqual(predictPair(2.9, 2.78, 5.4), { ms: 2.9 * 8 * WORLD_PROBE.margin, rule: 'floor' }, 'foggy-dusk\'s init on the AMD iGPU (EA-G1, 11-01)');
-    assert.match(predictPair(2.9, 2.78).inconclusive, /above the floor of 1\.000 ms/, 'the same pair, judged by the timer\'s floor alone');
-    assert.match(predictPair(7, 6, 5.4).inconclusive, /above the floor of 5\.400 ms/);
+    assert.deepEqual(predictPair(2.9, 2.78), { ms: 2.9 * 8 * WORLD_PROBE.margin, rule: 'fit' }, 'the same pair above the timer\'s floor alone: within noise');
+    assert.deepEqual(predictPair(7, 6, 5.4), { ms: 7 * 8 * WORLD_PROBE.margin, rule: 'fit' });
+    // EA-G1 on the GTX 1650 (11-04): two clean coverage worlds refused on these, now judged.
+    assert.deepEqual(predictPair(2.95, 2.70), { ms: 2.95 * 8 * WORLD_PROBE.margin, rule: 'fit' }, 'cov-scale-xl\'s init');
+    assert.deepEqual(predictPair(3.45, 2.75, 1.2), { ms: 3.45 * 8 * WORLD_PROBE.margin, rule: 'fit' }, 'cov-shapes\'s init');
+    // Past noise, still inconclusive; and a pair that rises keeps its fit.
+    assert.match(predictPair(3.45, 2.2, 1.2).inconclusive, /below 1\/8's 3\.450 ms, above the floor of 1\.200 ms/);
+    assert.equal(predictPair(2, 3).rule, 'fit');
     assert.equal(median([1, 9, 2]), 2, 'a spike moves the median not at all');
     assert.equal(median([1, 2, 3, 4]), 2.5);
 
@@ -329,12 +346,13 @@ test('the EA5.4 review (High): the first full-size frame runs cold, and is predi
     assert.equal(out.probe.phases.frame.touched.length, 4);
     assert.ok(out.probe.phases.frame.touched.every(t => t > 0));
 
-    // A first touch heavy enough that the first frame alone passes the cap, while the steady frame does not: refused.
-    const heavy = probeDeps(costs({ fixed: 0.05, perInvocation: 1e-5, perPixel: 2e-7, touchPerPixel: 1.2e-4 }), { target: { width: 2048, height: 1152 } });
+    // A first touch heavy enough that the first frame alone passes its 1,000 ms cap, while the steady frame stays under
+    // the frame's 500 ms, and each variant's touched frame under it too: refused at the first frame.
+    const heavy = probeDeps(costs({ fixed: 0.05, perInvocation: 1e-5, perPixel: 2e-7, touchPerPixel: 4e-4 }), { target: { width: 2048, height: 1152 } });
     const refused = await probeCandidate(snap, heavy.deps);
     assert.equal(refused.ok, false);
-    assert.match(refused.reason, /^EA_PROBE the first frame: \d+\.\d ms predicted, over the 250 ms cap$/);
-    assert.ok(refused.probe.drawMsPerFrame < WORLD_PROBE.maxSubmissionMs, 'its steady frame under the cap');
+    assert.match(refused.reason, /^EA_PROBE the first frame: \d+\.\d ms predicted, over the 1000 ms cap$/);
+    assert.ok(refused.probe.drawMsPerFrame < WORLD_PROBE.caps.frame, 'its steady frame under the cap');
     released(heavy.made);
 });
 
@@ -399,10 +417,11 @@ test('EA-E (11-01): every timing runs in a quiet window, so the Head drawing on 
 
 test('EA-D9b a first run near the cap is never repeated: no warm-up, no second variant run, everything released', async () => {
     const snap = await sealedLive('galaxy');
-    const heavy = probeDeps(costs({ fixed: 0.05, perInvocation: 0.15 }));
+    // Near init's own cap (1,000 ms since 2026-11-04): its 1/8 variant alone about 920 ms.
+    const heavy = probeDeps(costs({ fixed: 0.05, perInvocation: 0.6 }));
     const out = await probeCandidate(snap, heavy.deps);
     assert.equal(out.ok, false);
-    assert.match(out.reason, /^EA_PROBE init: its 1\/8 variant alone took 230\.\d ms, near the 250 ms cap; nothing repeated it$/);
+    assert.match(out.reason, /^EA_PROBE init: its 1\/8 variant alone took 9\d\d\.\d ms, near the 1000 ms cap; nothing repeated it$/);
     assert.equal(heavy.made[0].port.renders, 1, 'the 1/8 variant ran once');
     assert.equal(heavy.made[1].port.renders, 0, 'the 1/4 variant never ran');
     released(heavy.made);
@@ -410,12 +429,13 @@ test('EA-D9b a first run near the cap is never repeated: no warm-up, no second v
 
 test('the EA5.4 review\'s over-budget run: a variant\'s first frame at the larger frame near the cap is never repeated there', async () => {
     const snap = await sealedLive('galaxy');
-    // Pixel-bound: a variant's first frame (three passes at 640×360) about 83 ms, within the first runs' rule; the 1/8
-    // variant's first at 1280×720 (two passes) about 221 ms, which with the margin is past the cap, so it is the last.
-    const heavy = probeDeps(costs({ fixed: 0.05, perInvocation: 1e-6, perPixel: 1.2e-4 }));
+    // Pixel-bound: a variant's first frame (three passes at 640×360) about 173 ms, within the first runs' rule; the 1/8
+    // variant's first at 1280×720 (two passes) about 460 ms, which with the margin is past the frame's 500 ms cap, so it
+    // is the last.
+    const heavy = probeDeps(costs({ fixed: 0.05, perInvocation: 1e-6, perPixel: 2.5e-4 }));
     const out = await probeCandidate(snap, heavy.deps);
     assert.equal(out.ok, false);
-    assert.match(out.reason, /^EA_PROBE one frame: its 1\/8 variant alone took 2\d\d\.\d ms at 1280×720, near the 250 ms cap; nothing repeated it$/);
+    assert.match(out.reason, /^EA_PROBE one frame: its 1\/8 variant alone took 4\d\d\.\d ms at 1280×720, near the 500 ms cap; nothing repeated it$/);
     const log = heavy.made[0].port.log;
     const after = log.slice(log.lastIndexOf('postResize 1280x720') + 1);
     assert.equal(after.filter(e => e.startsWith('render')).length, 1, 'one frame at the larger frame, then nothing');
@@ -424,7 +444,8 @@ test('the EA5.4 review\'s over-budget run: a variant\'s first frame at the large
 });
 
 test('11-02, after EA-G1\'s over-budget world: each warm-up and timed batch is sized to its work, so none holds much more than the cap, and every prediction still covers the full world', async () => {
-    const { maxSubmissionMs: cap, frameRuns, runs, warm, margin } = WORLD_PROBE;
+    // A batch's bound is the quiet window's 250 ms, kept when the caps rose (2026-11-04).
+    const { batchMs: cap, frameRuns, runs, warm, margin } = WORLD_PROBE;
     // The rule: as many runs as fit in the cap at the pace measured; one at least, the calibrated count at most.
     assert.equal(batchRuns(0, 2, frameRuns), frameRuns, 'a warm-up that took no time: the calibrated count');
     assert.equal(batchRuns(2 * 3, 2, frameRuns), frameRuns, 'a 3 ms frame: 83 would fit, 24 run');
@@ -482,12 +503,13 @@ test('11-02, after EA-G1\'s over-budget world: each warm-up and timed batch is s
     assert.deepEqual(light.out.probe.phases.step.runs, [runs, runs]);
     released(light.made);
 
-    // A pixel-bound frame heavy enough to refuse at 2048×1152: 80 ns a pixel a pass, about 147 ms a frame at 1280×720
-    // for either variant (as EA-G1's stacked fog drew 57 and 106 ms on the AMD iGPU). The same refusal as before.
-    const pixelModel = costs({ fixed: 0.05, perInvocation: 1e-5, perPixel: 8e-5 });
+    // A pixel-bound frame heavy enough to refuse at 2048×1152 under the frame's 500 ms (2026-11-04): 100 ns a pixel a
+    // pass, about 184 ms a frame at 1280×720 for either variant (EA-G1's stacked fog drew 57 and 106 ms on the AMD iGPU;
+    // 80 ns, 250 ms's case, now predicts under the cap). The same refusal as before, at the frame's cap.
+    const pixelModel = costs({ fixed: 0.05, perInvocation: 1e-5, perPixel: 1e-4 });
     const heavy = await windowed(pixelModel);
     assert.equal(heavy.out.ok, false);
-    assert.match(heavy.out.reason, /^EA_PROBE one frame: \d+\.\d ms predicted, over the 250 ms cap$/);
+    assert.match(heavy.out.reason, /^EA_PROBE one frame: \d+\.\d ms predicted, over the 500 ms cap$/);
     const f = heavy.out.probe.phases.frame;
     assert.equal(f.runs.length, 4);
     assert.ok(f.runs.every((n, i) => Number.isInteger(n) && n >= 1 && n * f.measured[i] <= cap), `each batch within the cap: ${JSON.stringify({ runs: f.runs, measured: f.measured })}`);

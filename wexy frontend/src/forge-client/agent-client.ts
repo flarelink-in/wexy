@@ -19,11 +19,11 @@ import { ForgeError } from './errors';
 import type { Api } from './http';
 
 /**
- * The server ends a turn at its turn-seconds, 300 s, a call in flight included (gate A), then writes its last event.
- * The client allows that and 15 s for the identity, the gateway and the last event. The deadline is fixed when the
- * turn starts, so a heartbeat never extends it.
+ * The server ends a turn at its turn-seconds, 600 s since the turn reasons at high effort (2026-11-04; 300 s before), a
+ * call in flight included (gate A), then writes its last event. The client allows that and 15 s for the identity, the
+ * gateway and the last event. The deadline is fixed when the turn starts, so a heartbeat never extends it.
  */
-export const AGENT_DEADLINE_MS = 315_000;
+export const AGENT_DEADLINE_MS = 615_000;
 
 /** The engine bundle this build embeds (EA1), which a turn's meta must name (I2). */
 export const ENGINE_BUNDLE_HASH: string = (() => {

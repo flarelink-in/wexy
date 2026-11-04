@@ -244,8 +244,8 @@ export const DEFAULT_LIMITS = Object.freeze({
     maxComputeWorkgroupsPerDimension: 65_535, maxTextureDimension2D: 8192, maxVertexBuffers: 8, maxVertexAttributes: 16, maxColorAttachments: 8,
 });
 
-/** This laptop's AMD iGPU as ea5-env.v2 keys it (eligibility.ts's environmentOf), and that as the gate takes it. */
-export const ENVIRONMENT = 'ea5-env.v2|amd|gcn-5|0x15d8|AMD Radeon(TM) Vega 8 Graphics|d3d12|windows|chrome/156';
+/** This laptop's AMD iGPU as ea5-env.v3 keys it (eligibility.ts's environmentOf), and that as the gate takes it. */
+export const ENVIRONMENT = 'ea5-env.v3|amd|gcn-5|0x15d8|AMD Radeon(TM) Vega 8 Graphics|d3d12|windows|chrome';
 export const ENV = Object.freeze({ key: ENVIRONMENT });
 
 /**
