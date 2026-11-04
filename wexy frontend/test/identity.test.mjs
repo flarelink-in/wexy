@@ -2,7 +2,27 @@
 // browser and Wexy's web app; it is checked in the browser once the app is registered (playground-port design).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createIdentity } from '../src/forge-client/identity.ts';
+import { createIdentity, configureAppCheckDebug } from '../src/forge-client/identity.ts';
+
+test('App Check debug attestation is limited to the local dev server, even with an injected global', () => {
+    for (const hostname of ['localhost', '127.0.0.1', '[::1]']) {
+        const page = {};
+        configureAppCheckDebug(page, true, hostname);
+        assert.equal(page.FIREBASE_APPCHECK_DEBUG_TOKEN, true);
+        page.FIREBASE_APPCHECK_DEBUG_TOKEN = 'local-harness-token';
+        configureAppCheckDebug(page, true, hostname);
+        assert.equal(page.FIREBASE_APPCHECK_DEBUG_TOKEN, 'local-harness-token');
+        configureAppCheckDebug(page, false, hostname);
+        assert.equal(page.FIREBASE_APPCHECK_DEBUG_TOKEN, false);
+    }
+    for (const dev of [true, false]) {
+        for (const hostname of ['wexy.ai', 'dev.wexy.ai', 'wexy-dev.web.app']) {
+            const page = { FIREBASE_APPCHECK_DEBUG_TOKEN: 'must-not-be-used' };
+            configureAppCheckDebug(page, dev, hostname);
+            assert.equal(page.FIREBASE_APPCHECK_DEBUG_TOKEN, false);
+        }
+    }
+});
 
 const base = { firebase: null, appCheckSiteKey: null };
 

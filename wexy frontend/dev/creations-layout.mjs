@@ -60,6 +60,8 @@ const results = [];
 for (const [page, path, ready] of [
     ['preview', '/dev/creations-preview.html', `document.body.dataset.ready === '1'`],
     ['page', '/creations', `!!document.querySelector('.history-message')`],
+    ['home', '/', `!!document.querySelector('.nav-creations')`],
+    ['studio', '/studio.html', `!!document.querySelector('.creation-view') || !!document.querySelector('.btn-forge')`],
 ]) {
     for (const width of [320, 390, 1280]) {
         await send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: width < 600 });
@@ -68,10 +70,33 @@ for (const [page, path, ready] of [
         let ok = false;
         for (let i = 0; i < 60 && !ok; i++) { ok = await evaluate(ready).catch(() => false); if (!ok) await sleep(250); }
         await sleep(300);
-        const m = await evaluate(`({ scroll: document.documentElement.scrollWidth, inner: window.innerWidth,
-            cards: document.querySelectorAll('.world-card').length, message: document.querySelector('.history-message')?.textContent ?? null })`);
+        if (page === 'studio') {
+            const switched = await evaluate(`(() => {
+                const live = document.querySelector('.creation-modes [data-mode="live"]');
+                const playground = document.querySelector('.creation-modes [data-mode="playground"]');
+                if (!live || !playground) return false;
+                const modes = live.closest('.creation-modes');
+                const model = document.querySelector('#model');
+                if (model?.value !== 'muse-v1.3' || !model.querySelector('option[value="muse-v1.3-contributor"]')?.disabled) return false;
+                const initiallyHidden = modes.hidden && getComputedStyle(modes).display === 'none';
+                playground.click();
+                const selected = !modes.hidden && playground.getAttribute('aria-pressed') === 'true'
+                    && document.querySelector('.btn-forge')?.textContent.includes('Playground example');
+                live.click();
+                return initiallyHidden && selected && modes.hidden && getComputedStyle(modes).display === 'none'
+                    && live.getAttribute('aria-pressed') === 'true'
+                    && !document.querySelector('.btn-forge')?.textContent.includes('Playground example');
+            })()`);
+            if (!switched) thrown.push('Live / Playground did not switch in place');
+        }
+        const m = await evaluate(`({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth, inner: window.innerWidth,
+            cards: document.querySelectorAll('.world-card').length, message: document.querySelector('.history-message')?.textContent ?? null,
+            creations: (() => { const a = document.querySelector('.nav-creations, .studio-creations');
+                if (!a) return null; const r = a.getBoundingClientRect();
+                return { href: a.getAttribute('href'), visible: r.width > 0 && r.height > 0 && r.left >= 0 && r.right <= innerWidth }; })() })`);
         writeFileSync(join(OUT, `${page}-${width}.png`), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
-        const pass = ok && m.scroll === width && thrown.length === 0;
+        const pass = ok && m.inner === width && m.scroll === m.client && thrown.length === 0
+            && (!['home', 'studio'].includes(page) || m.creations?.visible && m.creations.href === '/creations');
         results.push({ page, width, pass, ready: ok, ...m, thrown: [...thrown] });
         console.log(`${pass ? 'PASS' : 'FAIL'} ${page} at ${width}: page ${m.scroll} px wide, ${m.cards} cards${m.message ? `, "${m.message}"` : ''}${thrown.length ? `, threw: ${thrown[0]}` : ''}`);
     }

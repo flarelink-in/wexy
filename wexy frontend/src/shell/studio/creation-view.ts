@@ -27,6 +27,8 @@ export interface CreationViewParts {
     idea(): AgentTurnRequest | null;
     /** Why Create cannot start, beyond the controller's own (no stage yet, an example being built, no backend), or null. */
     blocked(): string | null;
+    /** Playground mode owns the button while selected; this view leaves it alone. */
+    enabled?(): boolean;
     /** The clock the controller times its steps by, in ms: `performance.now` unless a harness says otherwise. */
     now?(): number;
     /**
@@ -96,6 +98,7 @@ export class CreationView {
 
     /** The primary button's press, as its label says: Create world, Stop, or Show it (a world ready, or one paused). */
     press(): void {
+        if (this.parts.enabled?.() === false) return;
         const phase = this.controller.state.phase;
         if (phase === 'ready' || this.resized()) void this.controller.show();
         else if (BUSY.has(phase)) this.controller.cancel();
@@ -114,6 +117,7 @@ export class CreationView {
 
     /** A new creation from the idea in the box: superseding a world written and waiting, never H's (creation.ts). */
     create(): void {
+        if (this.parts.enabled?.() === false) return;
         if (this.createBlocked() !== null) return;
         const idea = this.parts.idea();
         if (idea) void this.controller.create(idea);
@@ -146,6 +150,11 @@ export class CreationView {
 
     /** The button and the rows as the controller says now; the studio calls it too when what blocks Create changes. */
     render(): void {
+        if (this.parts.enabled?.() === false) {
+            this.again.hidden = true;
+            this.stopTicking();
+            return;
+        }
         const st = this.controller.state;
         const busy = BUSY.has(st.phase);
         const ready = st.phase === 'ready' || this.resized();

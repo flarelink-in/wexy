@@ -295,6 +295,16 @@ function devAccount(): AccountPort {
     };
 }
 
+/** Debug attestation is local-development only, including a token injected by a local test harness. */
+export function configureAppCheckDebug(page: { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean | string }, dev: boolean, hostname: string): void {
+    if (dev && isLoopback(hostname)) {
+        if (typeof page.FIREBASE_APPCHECK_DEBUG_TOKEN !== 'string') page.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+    } else {
+        // The SDK also accepts an already-set global: explicitly disable it on hosted pages and in release builds.
+        page.FIREBASE_APPCHECK_DEBUG_TOKEN = false;
+    }
+}
+
 async function loadFirebase(firebase: FirebaseWebConfig, config: PublicConfig): Promise<Loaded> {
     const [{ initializeApp }, authModule, checkModule] = await Promise.all([
         import('firebase/app'), import('firebase/auth'), import('firebase/app-check'),
@@ -307,10 +317,7 @@ async function loadFirebase(firebase: FirebaseWebConfig, config: PublicConfig): 
         // token instead; the SDK logs it, to be registered under App Check > Apps > Manage debug tokens. A debug
         // token passes attestation from anywhere, so a production build (dev false) or a real host never asks. A
         // token already set on the page is kept: a test harness gives a registered one at run time (never a build's).
-        if (config.dev && isLoopback(location.hostname)) {
-            const page = globalThis as { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean | string };
-            if (typeof page.FIREBASE_APPCHECK_DEBUG_TOKEN !== 'string') page.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
-        }
+        configureAppCheckDebug(globalThis as { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean | string }, config.dev, location.hostname);
         try {
             appCheck = checkModule.initializeAppCheck(app, {
                 provider: new checkModule.ReCaptchaEnterpriseProvider(config.appCheckSiteKey),

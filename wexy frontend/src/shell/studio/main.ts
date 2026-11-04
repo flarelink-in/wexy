@@ -8,7 +8,7 @@
 // and the GPU numbers.
 // EA9.1 (agent-first-studio-design.md; Q114, Q115 and Q118 decided 2026-11-03): behind ?create=agent the idea box's
 // Create is the agent's (src/loop/creation.ts): one turn, its modules and their repairs, then "Show it", the GPU go. The
-// page without it is h1's, unchanged. ?agent=1's Developer-view panels watch the same controller (creation-path.ts).
+// agent path is now the default; ?legacy=1 keeps h1 available. ?agent=1's panels watch the same controller.
 
 import '@fontsource-variable/geist';
 import '@fontsource-variable/unbounded';
@@ -70,9 +70,10 @@ const STYLES: Array<{ value: Style | 'auto'; label: string }> = [
 const LENGTHS = [6, 12, 20, 30];
 /** The backend's cap on an idea (wexy.loop.caps.prompt-chars). */
 const PROMPT_CHARS = 600;
-/** The starters: the playground's three examples and host h1's two exemplar worlds, every one hand-written. */
+/** Hand-written playground starters; the shrine stays parked until its rendering is fixed. */
 const STARTERS: Array<{ id: string; label: string; prompt: string }> = [
-    ...ARCHETYPES.map(a => ({ id: a.id, label: ({ 'kerr-black-hole': 'Black hole', 'celestial-torii': 'Sakura shrine', 'magnetic-star': 'Magnetar' })[a.id] ?? a.name, prompt: a.examplePrompt })),
+    // Keep the shrine implementation, but park its preset until its rendering is fixed.
+    ...ARCHETYPES.filter(a => a.id !== 'celestial-torii').map(a => ({ id: a.id, label: ({ 'kerr-black-hole': 'Black hole', 'magnetic-star': 'Magnetar' })[a.id] ?? a.name, prompt: a.examplePrompt })),
     { id: 'galaxy', label: 'Galaxy', prompt: 'A spiral galaxy, gold at the core and blue along the arms, threaded with dark dust' },
     { id: 'collision', label: 'Colliding galaxies', prompt: COLLISION_PROMPT },
     { id: 'storm', label: 'Storm', prompt: 'A dark thunderstorm cloud that churns and turns in place while lightning flickers inside it' },
@@ -219,6 +220,8 @@ class Studio {
     private creation: CreationControllerT | null = null;
     /** The creator's Create on the agent path (?create=agent): the idea box's button and the Journey. */
     private creationView: CreationViewT | null = null;
+    private playground = false;
+    private readonly creationModes = h('div', { class: 'creation-modes segmented', role: 'group', 'aria-label': 'Creation mode' });
     /** Resolves once the stage (and its device compiler) exists: an agent Create waits for it, an autorun too. */
     private stageReady: Promise<void>;
     private markStageReady: () => void = () => {};
@@ -325,9 +328,10 @@ class Studio {
             void this.accountControl.restore();
         }
         // ?create=agent, ?legacy=1, ?agent=1 and the loaders, resolved once (agent-first-studio-design.md §9).
-        this.path = selectCreationPath(params, { switched: false, gateway: !!this.live },
+        this.path = selectCreationPath(params, { switched: true, gateway: !!this.live },
             { unavailable: COPY.creation.noGateway, invalid: COPY.creation.invalid });
         const path = this.path;
+        this.playground = path.loader?.kind === 'scene' || params.get('source') === 'mock';
         this.mountLeft();
         // On phones the allowance chip, and since W2 the handle and its claim, read as a line under the idea box, not in
         // the header (studio.css).
@@ -481,6 +485,7 @@ class Studio {
             this.creation.subscribe(() => {
                 this.accountControl?.setBusy(this.busy || !!this.creation?.busy);
                 this.setBuilding(this.busy || !!this.creation?.busy);
+                this.renderCreate();
             });
         }
         if (this.path.create === 'agent' && this.creation) {
@@ -494,6 +499,7 @@ class Studio {
                     return null;
                 },
                 blocked: () => this.createBlocked(),
+                enabled: () => !this.playground,
                 paused: () => !!this.agentWorld?.runtime.isPaused,
             });
             this.forgeBtn.after(this.creationView.again);
@@ -514,9 +520,26 @@ class Studio {
 
     /** The idea box's button as it stands: the creation view's on the agent path, h1's otherwise. */
     private renderCreate(): void {
+        this.creationModes.hidden = !this.playground;
+        const busy = this.busy || !!this.creation?.busy || !!this.stage?.busy;
+        for (const button of this.creationModes.querySelectorAll<HTMLButtonElement>('button')) {
+            button.disabled = busy;
+            button.setAttribute('aria-pressed', String((button.dataset.mode === 'playground') === this.playground));
+        }
+        if (this.playground) {
+            this.creationView?.render();
+            this.forgeBtn.disabled = busy || !this.viewport;
+            this.forgeBtn.classList.toggle('is-busy', this.busy);
+            this.forgeBtn.querySelector('span')!.textContent = this.busy ? 'Loading example…' : 'Playground example';
+            this.showSourceBadge('mock');
+            return;
+        }
         if (this.path.create === 'agent') {
             if (this.creationView) this.creationView.render();
-            else this.forgeBtn.disabled = true;
+            else {
+                this.forgeBtn.disabled = true;
+                this.forgeBtn.querySelector('span')!.textContent = COPY.creation.create;
+            }
             return;
         }
         // h1's Create waits for a Run too (?agent=1), shown whenever this runs, at the latest as the Run ends.
@@ -925,8 +948,8 @@ class Studio {
         this.empty.hidden = true;
         this.hud.root.hidden = false;
         this.hud.title.textContent = agentTitle(w);
-        // The header names a creation's world as h1's plan names its own (EA9.1); a replayed attempt leaves it as it was.
-        if (title !== null) $('#scene-title').textContent = title;
+        // Every installed world replaces the previous label, including an archived attempt without a creation title.
+        $('#scene-title').textContent = title ?? agentTitle(w);
         // Its source, in today's three words (§8 step 6): Live for a creation's, From the archive for a saved attempt's.
         this.hud.source.textContent = COPY.source[w.source];
         this.hud.source.title = COPY.sourceTitle[w.source];
@@ -1035,6 +1058,9 @@ class Studio {
             open: async (bound, id) => (await import('../../platform/open-saved')).openSaved(bound, id),
             // L3 on this device: the stage's device compiler, once the stage exists.
             compile: async world => {
+                this.prompt.value = world.design.intent.trim() || world.title;
+                this.prompt.dispatchEvent(new Event('input'));
+                $('#scene-title').textContent = world.title;
                 const { compileSaved } = await import('../../loop/replay');
                 await this.stageReady;
                 const compiler = this.deviceCompiler;
@@ -1076,6 +1102,7 @@ class Studio {
     /** The empty stage's card's part for a saved world being opened: where it stands, and Show it once it is ready. */
     private renderOpening(): void {
         const o = this.opening?.view() ?? null;
+        this.empty.classList.toggle('is-opening', !!o);
         const block = this.openBlock;
         const key = o ? `${o.worldId}|${o.sentence}|${o.offer}|${o.ready}` : '';
         if (key !== this.openShown) {
@@ -1136,6 +1163,7 @@ class Studio {
     // ------------------------------------------------------------------ layout
 
     private mountLeft(): void {
+        this.creationModes.hidden = !this.playground;
         const examples = h('div', { class: 'examples-chips' }, STARTERS.map(s => {
             const b = h('button', { type: 'button', class: 'chip', title: s.prompt }, s.label);
             b.addEventListener('click', () => this.starter(s.prompt));
@@ -1144,16 +1172,37 @@ class Studio {
         this.forgeBtn.disabled = true;
         // On the agent path the creation view owns this button's press (creation-view.ts): Create world, Stop or Show it.
         this.forgeBtn.addEventListener('click', () => {
-            if (this.path.create !== 'agent') void this.forge(this.live ? 'live' : 'mock');
+            if (this.playground || this.path.create !== 'agent') void this.forge(this.playground || !this.live ? 'mock' : 'live');
         });
+        for (const [mode, label] of [['live', 'Live creation'], ['playground', 'Playground']] as const) {
+            const button = h('button', { type: 'button', 'aria-pressed': String((mode === 'playground') === this.playground) }, label);
+            button.dataset.mode = mode;
+            button.addEventListener('click', () => {
+                if (this.busy || this.creation?.busy || this.stage?.busy) return;
+                // Switching the next action never creates a world or removes the one on the stage.
+                this.playground = mode === 'playground';
+                this.showSourceBadge(this.playground ? 'mock' : 'live');
+                this.renderCreate();
+                this.prompt.focus();
+            });
+            this.creationModes.append(button);
+        }
         this.length.addEventListener('change', () => this.setDuration(Number(this.length.value)));
         this.sourceBadge.title = COPY.sourceTitle.mock;
         const card = h('section', { class: 'prompt-card' },
             h('header', { class: 'panel-head' }, h('h2', null, 'Your idea'), this.sourceBadge),
+            this.creationModes,
             h('div', { class: 'prompt-box' }, this.prompt, h('div', { class: 'prompt-tools' }, h('span', { class: 'prompt-count dev-only' }))),
             h('div', { class: 'examples' }, h('span', { class: 'examples-label' }, 'Try'), examples),
             h('div', { class: 'prompt-row' },
                 h('label', { class: 'select' }, h('span', null, 'Style'), this.style),
+                // Display-only until another model is supported by the gateway; no request routing changes.
+                h('label', { class: 'select' }, h('span', null, 'Model'),
+                    h('select', { id: 'model', 'aria-label': 'Model' },
+                        h('option', { value: 'muse-v1.3', selected: true }, 'Muse v1.3'),
+                        h('option', { value: 'muse-v1.3-contributor', disabled: true }, 'Muse v1.3 Contributor'),
+                    ),
+                ),
                 h('label', { class: 'select' }, h('span', null, 'Video length'), this.length),
             ),
             this.forgeBtn,
@@ -1173,7 +1222,8 @@ class Studio {
      * creation is under way: the two would share the stage and the steps.
      */
     private starter(prompt: string): void {
-        if (this.creation?.busy) return;
+        if (this.busy || this.creation?.busy || this.stage?.busy) return;
+        this.playground = true;
         this.prompt.value = prompt;
         this.prompt.dispatchEvent(new Event('input'));
         void this.forge('mock');
@@ -1235,11 +1285,6 @@ class Studio {
     }
 
     private mountEmpty(): void {
-        const chips = STARTERS.map(s => {
-            const b = h('button', { type: 'button', class: 'chip chip-lg' }, s.label);
-            b.addEventListener('click', () => this.starter(s.prompt));
-            return b;
-        });
         // Where the idea and the steps are depends on the layout: beside the stage, or below it once the panels stack.
         this.empty.replaceChildren(h('div', { class: 'empty-card' },
             h('span', { class: 'empty-logo', html: logo(64) }),
@@ -1247,8 +1292,7 @@ class Studio {
             this.openBlock,
             h('h3', null, 'Describe a world'),
             h('p', { class: 'empty-building', role: 'status', html: 'Follow the steps <span class="at-wide">on the left</span><span class="at-narrow">below</span>' }),
-            h('p', { class: 'empty-lede', html: '<span class="at-wide">Type an idea on the left, or tap one below.</span><span class="at-narrow">Tap an idea below, or scroll down to type your own.</span> It turns into a living 3D world you can fly around, and then into a video.' }),
-            h('div', { class: 'empty-examples' }, chips),
+            h('p', { class: 'empty-lede', html: '<span class="at-wide">Start with an idea in the panel on the left.</span><span class="at-narrow">Scroll down to start with an idea.</span>' }),
         ), h('p', { class: 'empty-source' }));
     }
 
@@ -1638,6 +1682,7 @@ class Studio {
         this.empty.hidden = true;
         this.hud.root.hidden = false;
         this.hud.title.textContent = spec.title;
+        $('#scene-title').textContent = spec.title;
         this.hud.source.textContent = COPY.source[source];
         this.hud.source.title = COPY.sourceTitle[source];
         this.hud.source.hidden = false;
@@ -1728,6 +1773,7 @@ class Studio {
 
     /** While the empty stage waits for a first world, its mark turns and the starters step aside. */
     private setBuilding(busy: boolean): void {
+        this.empty.classList.toggle('is-ready', this.creation?.state.phase === 'ready');
         if (this.empty.classList.contains('is-building') === busy) return;
         this.empty.classList.toggle('is-building', busy);
         const title = this.empty.querySelector('h3');
@@ -1871,8 +1917,8 @@ class Studio {
                 // A held shortcut repeats: each repeat would press again, through Show it into a new paid Create (the EA9.2
                 // review). Only the first press of the keys counts, on either path.
                 if (e.repeat) return;
-                if (this.path.create === 'agent') this.creationView?.shortcut();
-                else void this.forge(this.live ? 'live' : 'mock');
+                if (this.path.create === 'agent' && !this.playground) this.creationView?.shortcut();
+                else void this.forge(this.playground || !this.live ? 'mock' : 'live');
                 return;
             }
             if (isTyping() || e.ctrlKey || e.metaKey || e.altKey || this.exporter.el.open) return;
