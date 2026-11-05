@@ -697,7 +697,16 @@ class AgentLoopTest {
         base.set("design", outcome.design());
         base.set("program", outcome.program());
         assertThat(ModuleRequest.utf8(base.toString())).isLessThanOrEqualTo(AgentBase.MAX_BASE_BYTES);
-        assertThat(AgentBase.validated(base, BUNDLE.bundleHash(), SCHEMAS, new ProgramCheck(BUNDLE, MANIFEST)).program()).isEqualTo(outcome.program());
+        // Taken whole: the same nodes, each config the canonical text of the same tree (the second EA9.4 review: what the
+        // model reads of a config is what was checked and screened, so the padding's spaces go).
+        JsonNode kept = AgentBase.validated(base, BUNDLE.bundleHash(), SCHEMAS, new ProgramCheck(BUNDLE, MANIFEST)).program();
+        JsonNode handed = outcome.program();
+        assertThat(kept.path("nodes").size()).isEqualTo(handed.path("nodes").size());
+        for (int i = 0; i < kept.path("nodes").size(); i++) {
+            assertThat(kept.path("nodes").get(i).path("id")).isEqualTo(handed.path("nodes").get(i).path("id"));
+            assertThat(JSON.readTree(kept.path("nodes").get(i).path("config").asText()))
+                    .isEqualTo(JSON.readTree(handed.path("nodes").get(i).path("config").asText()));
+        }
 
         // A byte past it: the check says no revision could carry it, and the turn's own revision makes it smaller.
         events.clear();

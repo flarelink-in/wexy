@@ -118,4 +118,22 @@ class RedisGrantStoreTest {
         assertThat(store.join("wexy:grant:g2", "o1", "revision", 2, "p1", null, "g2")).isEqualTo(GrantStore.Join.FULL);
         assertThat(store.counts(List.of("wexy:allow:early:d:o1", "wexy:allow:none"))).containsExactly(1L, 0L);
     }
+
+    /** The probe (the EA9.4 review): join's checks, in its order, writing nothing; and join's answer after it. */
+    @Test
+    void theRealProbeAnswersAsJoinWouldAndWritesNothing() {
+        grant(List.of("wexy:allow:early:d:o1"), List.of(5L), "g3", "wexy:grant:of:plan-3");
+        assertThat(store.probe("wexy:grant:none", "o1", "revision", 2, "p1")).as("no such grant").isEqualTo(GrantStore.Join.NONE);
+        assertThat(store.probe("wexy:grant:g3", "o2", "revision", 2, "p1")).as("another owner's").isEqualTo(GrantStore.Join.NONE);
+        assertThat(store.probe("wexy:grant:g3", "o1", "revision", 2, "p2")).as("another prompt").isEqualTo(GrantStore.Join.NONE);
+        for (int i = 0; i < 5; i++) {
+            assertThat(store.probe("wexy:grant:g3", "o1", "revision", 2, "p1")).isEqualTo(GrantStore.Join.JOINED);
+        }
+        assertThat(redis.opsForHash().get("wexy:grant:g3", "revision")).as("nothing counted").isNull();
+        assertThat(store.probe("wexy:grant:g3", "o1", "revision", 2, null)).as("no prompt asked").isEqualTo(GrantStore.Join.JOINED);
+        assertThat(store.join("wexy:grant:g3", "o1", "revision", 2, "p1", null, "g3")).isEqualTo(GrantStore.Join.JOINED);
+        assertThat(store.join("wexy:grant:g3", "o1", "revision", 2, "p1", null, "g3")).isEqualTo(GrantStore.Join.JOINED);
+        assertThat(store.probe("wexy:grant:g3", "o1", "revision", 2, "p1")).as("its budget spent").isEqualTo(GrantStore.Join.FULL);
+        assertThat(redis.opsForHash().get("wexy:grant:g3", "revision")).isEqualTo("2");
+    }
 }

@@ -1,5 +1,6 @@
 package ai.wexy.forge.allowance;
 
+import ai.wexy.forge.safety.ContentSafety;
 import ai.wexy.forge.safety.RecordedContentSafety;
 
 import java.time.Clock;
@@ -47,9 +48,14 @@ public final class TestAdmissions {
 
     /** An admission under `properties`, over a new in-memory store on `clock`, with the recorded content safety. */
     public static Admit admit(AllowanceProperties properties, Clock clock) {
+        return admit(properties, clock, new RecordedContentSafety());
+    }
+
+    /** As {@link #admit(AllowanceProperties, Clock)}, with `safety` in place of the recorded one. */
+    public static Admit admit(AllowanceProperties properties, Clock clock, ContentSafety safety) {
         InMemoryGrantStore store = new InMemoryGrantStore(clock);
         PromptGrants grants = new PromptGrants(store, properties, clock);
-        return new Admit(new PromptAdmission(grants, new RecordedContentSafety()), grants, store);
+        return new Admit(new PromptAdmission(grants, safety), grants, store);
     }
 
     /** One that grants every test that is not about the allowances. */

@@ -19,6 +19,10 @@ package ai.wexy.common;
  *
  * W3 (2026-11-03 evening) adds {@code storage-full} (403): the account's saved worlds or bytes at their cap. It never
  * carries {@code Retry-After}: deleting a world frees space, and waiting does not.
+ *
+ * EA9.4 (2026-11-04; its second review) adds {@code world-refused} (422): a revision whose world, its design or program,
+ * content safety refused. Not the creator's words ({@code content-refused}): saying the change another way cannot help,
+ * so the studio offers a new idea instead.
  */
 public enum ErrorCode {
 
@@ -32,6 +36,7 @@ public enum ErrorCode {
     CONFLICT("conflict", 409),
     TOO_LARGE("too-large", 413),
     CONTENT_REFUSED("content-refused", 422),
+    WORLD_REFUSED("world-refused", 422),
     RATE("rate", 429),
     QUOTA("quota", 429),
     INTERNAL("internal", 500),

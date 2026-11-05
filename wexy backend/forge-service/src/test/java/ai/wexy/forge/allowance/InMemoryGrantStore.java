@@ -133,6 +133,19 @@ public final class InMemoryGrantStore implements GrantStore {
     }
 
     @Override
+    public synchronized Join probe(String grantKey, String owner, String field, long limit, String prompt) {
+        check();
+        Entry e = live(grantKey);
+        if (e == null || !owner.equals(e.hash().get("owner"))) {
+            return Join.NONE;
+        }
+        if (prompt != null && !prompt.equals(e.hash().get("prompt"))) {
+            return Join.NONE;
+        }
+        return Long.parseLong(e.hash().getOrDefault(field, "0")) >= limit ? Join.FULL : Join.JOINED;
+    }
+
+    @Override
     public synchronized void dispatched(String grantKey) {
         check();
         Entry e = live(grantKey);
