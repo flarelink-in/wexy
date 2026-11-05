@@ -3,7 +3,7 @@
     "actionSchema": "agent-action.v3",
     "abi": "ea-abi.v2",
     "checker": "ea4-body.v1",
-    "bundle": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+    "bundle": "aa60280bae32e3aa780d34352ac42ef9c323d39f201b72cd5dc6c07a562f6824",
     "manifest": "8bdd11e8ef2f0ced4b0cabbbac19ca4b6ff0df03fca2d56082005b05b1497220",
     "policy": "e9c5e17c3547945855c6075956766777026677846a90093f63d8b35b3915579b"
   },
@@ -11,8 +11,8 @@
     "castle": {
       "sha256": "e87914fdfe0dcae929a4d11b55cab406d22ca8c636cc6d2f163caaeab6bb2fc3",
       "bytes": 20541,
-      "x": "631229dc450d368aeb14f3051bec90a7828cb27119a4b417bf85ebebd20a71d0",
-      "candidate": "7fce81a49cebaae3cd0e817b722b071dae9850ce46e7f9726fd2c74852a35de1"
+      "x": "f7b91cec99216752d503b92766204f97b36987a190d07fd76f559156f7861371",
+      "candidate": "9b236f9f9ed9d71759e677fa099518a15215920280d67acca75edca6f9c2a8ed"
     }
   }
 }

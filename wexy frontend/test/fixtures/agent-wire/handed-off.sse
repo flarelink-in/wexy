@@ -1,5 +1,5 @@
 event:meta
-data:{"turnId":"turn-1","model":"muse-spark-1.3","source":"live","promptVersion":"agent.v7","bundleHash":"d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646","actionSchema":"agent-action.v3","manifestHash":"8bdd11e8ef2f0ced4b0cabbbac19ca4b6ff0df03fca2d56082005b05b1497220"}
+data:{"turnId":"turn-1","model":"muse-spark-1.3","source":"live","promptVersion":"agent.v7","bundleHash":"aa60280bae32e3aa780d34352ac42ef9c323d39f201b72cd5dc6c07a562f6824","actionSchema":"agent-action.v3","manifestHash":"8bdd11e8ef2f0ced4b0cabbbac19ca4b6ff0df03fca2d56082005b05b1497220"}
 
 event:call
 data:{"n":1,"purpose":"first"}
@@ -8,7 +8,7 @@ event:usage
 data:{"n":1,"generationId":"gen-1","in":30000,"out":2000,"reasoning":800,"cached":null,"costMicroUsd":46000}
 
 event:tools
-data:{"n":1,"round":1,"results":[{"tool":"read_doc","target":"agent/guide","ok":true,"bytes":483,"error":null},{"tool":"inspect_api","target":"core:NullGraph","ok":true,"bytes":6602,"error":null}]}
+data:{"n":1,"round":1,"results":[{"tool":"read_doc","target":"agent/guide","ok":true,"bytes":483,"error":null},{"tool":"inspect_api","target":"core:NullGraph","ok":true,"bytes":6769,"error":null}]}
 
 event:call
 data:{"n":2,"purpose":"after-tools"}

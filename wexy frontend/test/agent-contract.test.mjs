@@ -37,11 +37,15 @@ const SCHEMA_HASH = 'c25fc7689301b9a8f79ae424de5aac489a11fed8399e9dbcb771c20581f
  * v3 (the refused turn's reservation with it), and revised.sse, a turn that revises a base; before, 24373afe… (agent.v4
  * without the two rules), 13b6a9cb… (10-31: agent.v3 and Q80's gates), cb04377c….
  */
-// 91569a5d… since 2026-11-05 (the ground shape): agent.v7 and the manifest that names the ground, so every meta's
-// promptVersion and manifestHash, and the refused turn's reservation (160,585 → 162,508 µUSD, the template's shape facts
-// and the manifest's longer summaries); before, 810e4a46… (2026-11-04): error-upstream.sse's turn makes a third call, its
-// second schema repair, and its error says why the last answer was not an object, in the parser's words; before, c5da82a4….
-const WIRE_HASH = '91569a5d53d41aca3dab3c01ac35b46bc26477222f1cc83e32cf71888586b276';
+// 2bed7a26… since 2026-11-05 evening (what the model reads, corrected): the engine bundle aa60280b… (null-graph's docs
+// on each shape's facing, pbr, the lights and the clear; the family index and H from the adapter manifest), so every
+// meta's bundleHash, a read_doc's bytes (6602 → 6769) and the refused turn's reservation (162,508 → 164,675 µUSD:
+// agent.v7's camera and batch facts, the longer index); before, 91569a5d… (2026-11-05, the ground shape): agent.v7 and
+// the manifest that names the ground, so every meta's promptVersion and manifestHash, and the refused turn's
+// reservation (160,585 → 162,508 µUSD, the template's shape facts and the manifest's longer summaries); before,
+// 810e4a46… (2026-11-04): error-upstream.sse's turn makes a third call, its second schema repair, and its error says
+// why the last answer was not an object, in the parser's words; before, c5da82a4….
+const WIRE_HASH = '2bed7a268e94e3355806fcbcfcc00019e562c32027e9ab5d95d4b2a6a69f23bb';
 
 const lf = (s) => s.replace(/\r\n/g, '\n');
 const recordings = () => Object.fromEntries(readdirSync(FIXTURES).sort().map(n => [n, lf(readFileSync(join(FIXTURES, n), 'utf8'))]));

@@ -122,10 +122,13 @@ Blocks under a film look, still: data to show the form, not the answer to this r
 
 Wexy's host creates the null-graph engine on its canvas and device, builds every node of the
 program into it, and runs the frame loop: a world never touches the canvas, the device or the
-engine itself. The host owns the camera: the world says in cameraAndTiming where it looks and how
-it moves, and the host moves it. The host also films the world and draws any debug UI. Families
-whose status in the index says "host only" are the host's, and families marked "unavailable" need
-files or downloads: no adapter uses either.
+engine itself. The host owns the camera: when the world is shown it frames the world's bounds, and
+from then on the creator orbits it and sets its keyframes. cameraAndTiming describes the view you
+mean, for the creator and the review; the host never moves the camera from it, so a world must
+read well from any side. The host also films the world and draws any debug UI. Families
+whose status in the index says "host only" are the host's, families marked "unavailable" need
+files or downloads, and those with "no Wexy adapter" have none yet: a program uses none of them.
+The others run only through the adapters their status names.
 
 ## Engine facts that decide whether a plan can work
 
@@ -145,6 +148,10 @@ files or downloads: no adapter uses either.
   when a custom batch moves its vertices (hills, waves).
 - The host's camera sees 200 units, and frames the world from at most 80 units away: keep a world,
   its ground included, within about 150 units across.
+- What a batch cannot do yet: alpha is ignored, so every batch is opaque, and both faces of every
+  triangle are drawn. pbr draws as a fully rough metal: use lambert or toon for painted, plastic,
+  stone or wooden surfaces. The rig's lights are set once and never move, and its ambient lights
+  only faces that point up. Without a post chain the background is a fixed dark grey.
 - Phases: init runs once; fixedStep runs zero to four times a frame at a fixed rate, so motion that
   must not depend on the frame rate goes there; frame runs once a frame. A compute stage names its
   phase, reads buffers through reads and writes them through writes. Two stages of one phase that

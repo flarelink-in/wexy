@@ -107,7 +107,7 @@ test('EA-S2 the recorded failures are the backend\'s own errors, after everythin
     await readAgentStream(res(wire('error-budget.sse')), e => seen.push(e), { bundleHash: ENGINE_BUNDLE_HASH }).catch(() => {});
     assert.deepEqual(seen.map(e => e.type), ['meta', 'call', 'usage', 'tools']);
     // No usage came for the first call, so its reservation stands as its cost, and its tokens are unknown.
-    assert.deepEqual(seen[2].usage, { n: 1, generationId: 'gen-1', in: null, out: null, reasoning: null, cached: null, costMicroUsd: 162_508 });
+    assert.deepEqual(seen[2].usage, { n: 1, generationId: 'gen-1', in: null, out: null, reasoning: null, cached: null, costMicroUsd: 164_675 });
 
     await refuses(wire('error-upstream.sse'), 'upstream', /missed the action schema after a repair/);
 });
@@ -242,7 +242,8 @@ test('EA-S10 a turn quoting another engine bundle is refused at its meta and can
     const seen = [];
     const error = await readAgentStream(new Response(b), e => seen.push(e), { bundleHash: 'f'.repeat(64) }).catch(e => e);
     assert.ok(error instanceof AgentVersionError && error instanceof ForgeError, String(error));
-    assert.match(error.message, /^EA_VERSION_MISMATCH bundle d923cc218830, runtime ffffffffffff: /);
+    // The recording names this build's bundle (EA-W3 holds the recordings to it), so the server's side is ours.
+    assert.match(error.message, new RegExp(`^EA_VERSION_MISMATCH bundle ${ENGINE_BUNDLE_HASH.slice(0, 12)}, runtime ffffffffffff: `));
     assert.deepEqual([error.identity, error.server], ['bundle', ENGINE_BUNDLE_HASH]);
     assert.deepEqual(seen, []);
     assert.equal(b.state.cancelled, true);

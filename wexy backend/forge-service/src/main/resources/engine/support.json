@@ -1,18 +1,18 @@
 {
- "version": "ea-h1",
+ "version": "ea-h2",
  "engine": "null-graph@1.2.1",
  "entries": [
   {
    "family": "core",
    "status": "unverified",
-   "adapter": null,
-   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+   "adapter": "ng.buffer.storage, ng.compute.stage, ng.render.mesh_batch, ng.render.custom_batch, ng.render.fullscreen",
+   "reason": "Tier 1, through these adapters alone. A program names adapters and their config, never the engine's methods. The host makes the passes and the camera; instances use the 14-float layout; every batch is opaque, depth on, both faces drawn."
   },
   {
    "family": "geometry",
    "status": "unverified",
-   "adapter": null,
-   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+   "adapter": "ng.geometry.primitive",
+   "reason": "Tier 1, through these adapters alone. ng.geometry.primitive: the thirteen primitives and the host's ground, from one size (fixed proportions) and segments. The plane stands upright (XY, facing +Z). No custom geometry, megabuffers or meshlets."
   },
   {
    "family": "loaders",
@@ -23,8 +23,8 @@
   {
    "family": "materials",
    "status": "unverified",
-   "adapter": null,
-   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+   "adapter": "ng.material.stock",
+   "reason": "Tier 1, through these adapters alone. ng.material.stock: kind and baseColor only, no maps (matcap is refused). Basic, lambert, toon and emissive multiply baseColor by the instance colour; pbr ignores it and draws as a rough metal."
   },
   {
    "family": "profiler",
@@ -42,55 +42,55 @@
    "family": "cameras",
    "status": "unsupported",
    "adapter": null,
-   "reason": "Wexy's host owns the camera: a program gives keyframes and the host moves the camera through them."
+   "reason": "Wexy's host owns the camera: it frames the world when shown, and the creator orbits it and sets its keyframes. A program cannot move it: a world must read well from any side."
   },
   {
    "family": "lights",
    "status": "unverified",
-   "adapter": null,
-   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+   "adapter": "ng.light.rig",
+   "reason": "Tier 1, through these adapters alone. ng.light.rig: ambient, at most one directional and four point lights, set once at init (they never move); standard technique. The ambient arrives from straight above: downward faces get none. Only lambert, toon and pbr are lit."
   },
   {
    "family": "post",
    "status": "unverified",
-   "adapter": null,
-   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+   "adapter": "ng.post.chain",
+   "reason": "Tier 1, through these adapters alone. ng.post.chain: the sixteen built-in effects, one intensity each (0 to 4), run in the program's order; no CustomEffect. Without a chain the background is a fixed dark grey."
   },
   {
    "family": "visibility",
-   "status": "unverified",
+   "status": "unsupported",
    "adapter": null,
-   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+   "reason": "No Wexy adapter (the engine-aware design's Tier 2): a program cannot name it."
   },
   {
    "family": "shadows",
-   "status": "unverified",
+   "status": "unsupported",
    "adapter": null,
-   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+   "reason": "No Wexy adapter (the engine-aware design's Tier 2): a program cannot name it."
   },
   {
    "family": "environment",
-   "status": "unverified",
+   "status": "unsupported",
    "adapter": null,
-   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+   "reason": "No Wexy adapter (the engine-aware design's Tier 2): a program cannot name it."
   },
   {
    "family": "picking",
-   "status": "unverified",
+   "status": "unsupported",
    "adapter": null,
-   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+   "reason": "No Wexy adapter (the engine-aware design's Tier 2): a program cannot name it."
   },
   {
    "family": "text",
-   "status": "unverified",
+   "status": "unsupported",
    "adapter": null,
-   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+   "reason": "No Wexy adapter (the engine-aware design's Tier 2): a program cannot name it."
   },
   {
    "family": "agents",
-   "status": "unverified",
+   "status": "unsupported",
    "adapter": null,
-   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+   "reason": "No Wexy adapter (the engine-aware design's Tier 2): a program cannot name it."
   },
   {
    "family": "inference",
@@ -100,9 +100,9 @@
   },
   {
    "family": "physics",
-   "status": "unverified",
+   "status": "unsupported",
    "adapter": null,
-   "reason": "No Wexy adapter yet; EA5 builds the first ones (the design's Tier-1)."
+   "reason": "No Wexy adapter (the engine-aware design's Tier 2): a program cannot name it."
   },
   {
    "family": "film",

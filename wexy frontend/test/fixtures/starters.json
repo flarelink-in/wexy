@@ -3,9 +3,9 @@
   "starters": {
     "castle": {
       "from": "dev/replays/castle.json",
-      "candidate": "7fce81a49cebaae3cd0e817b722b071dae9850ce46e7f9726fd2c74852a35de1",
-      "x": "631229dc450d368aeb14f3051bec90a7828cb27119a4b417bf85ebebd20a71d0",
-      "sha256": "5d2c2ab5567f21135fb31aaac298f143b7a1ac13b0c3dbf56d613a7e03395fd5",
+      "candidate": "9b236f9f9ed9d71759e677fa099518a15215920280d67acca75edca6f9c2a8ed",
+      "x": "f7b91cec99216752d503b92766204f97b36987a190d07fd76f559156f7861371",
+      "sha256": "72c041e97eda70918048862a4b5b39a164a9e4540c218ef5399f84273d789896",
       "bytes": 18999,
       "modules": [
         "castlePlace",
@@ -16,9 +16,9 @@
     },
     "voxel-island": {
       "from": "test/fixtures/live-candidates/block-film.json",
-      "candidate": "915810fb7abf8f2f0a06776c9f213e5c4ba3e3fe3a82bcd3ffcbb4f643ff7cbb",
-      "x": "195d3c62a3ed8b988d59caf75769cf63fd09428de9fe3d476aa6b7b955222721",
-      "sha256": "cb438a7846abcf176a25d813a0e70193c4b98598775a9f653eed1010dc9a84bd",
+      "candidate": "1ff3ea0ffd7b01dcd65980a4ec3fe8cd6a4fdff0dcdacabdd79af8c4f47332ec",
+      "x": "cd40d469846e2c7974148072006a428ee7161ff7555772a36c8329658dd9b8be",
+      "sha256": "24d33f9c0ab9173804d1135931fcb55a42b7b67e6492c7a78433e8b9cdf6944e",
       "bytes": 6348,
       "modules": [
         "place"
@@ -26,9 +26,9 @@
     },
     "spiral-galaxy": {
       "from": "test/fixtures/live-candidates/galaxy.json",
-      "candidate": "1c61860432204a138741246f3630884155232305edf42d225ab97670d82413f8",
-      "x": "b4e4bbc8c9f44cc36becb641f9fe3ad65034757ca72e6ab9f8aae93e0e90fa7c",
-      "sha256": "0b5658ef015145b564178afb2bf5851d1191899900705a99dce97ba07dd47953",
+      "candidate": "de355ee1c526e943330287716f396916d9c87af95be948dd6e60e7c39149a8a1",
+      "x": "c26f1937bac7a5b9c20692131d9cf3c54c5b652ce768c95604bbe88783de315f",
+      "sha256": "028b2b10445ebbb0c347ce0f4c83f0239c77a2f598dc33c5f70986ae4efd95b0",
       "bytes": 8480,
       "modules": [
         "backdropSky",

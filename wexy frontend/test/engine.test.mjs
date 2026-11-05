@@ -151,12 +151,24 @@ test('EA-U3n the source check refuses a checkout that exports other names than t
     assert.deepEqual(compareExports({ ...installedNames, film: ['Film'] }, installedNames), ['film: a subpath the installed package does not have']);
 });
 
-test('EA-H the support manifest is honest: nothing is supported before an adapter exists, and every family says why', () => {
+// The Tier 1 audit of 11-05: H and the index said every world family "may" be used, shadows and fog among them, while
+// no adapter ran any of them. Both now follow the adapter manifest, and the index says what H says.
+test('EA-H the support manifest is honest: a family names the adapters that run it, one no adapter runs is unsupported, and every family says why', () => {
     const families = new Set(ENGINE.capabilities.families.map(f => f.id));
     assert.deepEqual(new Set(ENGINE.support.entries.map(e => e.family)), families);
+    const manifest = JSON.parse(readFileSync(join(ROOT, 'src/contract/adapters/descriptors.json'), 'utf8'));
+    const escape = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     for (const e of ENGINE.support.entries) {
-        assert.ok(['unverified', 'unsupported'].includes(e.status), `${e.family}: ${e.status}`);
-        assert.equal(e.adapter, null, `${e.family}: no adapter exists yet`);
+        const family = ENGINE.capabilities.families.find(f => f.id === e.family);
+        const ids = manifest.adapters.filter(a => a.family === e.family).map(a => a.id);
+        // Device verification is eligibility's, per adapter: a family Wexy runs stays unverified.
+        if (ids.length) assert.deepEqual([e.status, e.adapter], ['unverified', ids.join(', ')], `${e.family}: runs through its adapters alone`);
+        else assert.deepEqual([e.status, e.adapter], ['unsupported', null], `${e.family}: no adapter runs it`);
         assert.ok(e.reason.length > 10, e.family);
+        const status = ids.length ? `Wexy runs it only through ${escape(ids.join(', '))}\\. `
+            : family.use === 'world' ? 'no Wexy adapter: never plan with it\\.' : family.use === 'host' ? 'host only: ' : 'unavailable: ';
+        assert.match(ENGINE.capabilities.familyIndex, new RegExp(`## ${escape(e.family)} · [^\\n]*\\nStatus: ${status}`), `${e.family}: the index says what H says`);
     }
+    assert.doesNotMatch(ENGINE.capabilities.familyIndex, /a world may use it/, 'no family is offered without an adapter');
+    assert.doesNotMatch(ENGINE.capabilities.familyIndex, /a program gives keyframes/, 'no program moves the camera');
 });

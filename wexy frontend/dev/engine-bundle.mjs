@@ -1,8 +1,9 @@
 // The engine bundle of EA1 (engine-aware design §5.1, §5.2; src/contract/engine/): K, every export of the installed
 // null-graph with its declaration, doc comment and the documents that mention it, with the hand-reviewed family map
 // (families.json) and its prompt index; D, null-graph's agent guide, API pages, migration notes, package README and
-// runnable starters, each with its source, size and hash; H, the support manifest (nothing runnable until adapters
-// exist); and the manifest pinning all of it to the installed package. Deterministic: the same inputs write the same
+// runnable starters, each with its source, size and hash; H, the support manifest (a family resolves only through the
+// adapters src/contract/adapters/descriptors.json names, and one no adapter runs is unsupported); and the manifest
+// pinning all of it to the installed package. Deterministic: the same inputs write the same
 // bytes. The documents come from the checkout's commit (git show), never its working tree, so the bundle is exactly
 // one commit's. It refuses rather than guesses: a checkout of another version, or one whose exports map, sources'
 // export names (subpath by subpath) or tracked dist/index.js are not the installed package's; a package and documents
@@ -144,18 +145,36 @@ const families = map.families.map((f, i) => {
     return { ...f, symbolCount: declared[f.id].length };
 });
 
+// ---- which families Wexy runs: those its adapter manifest names, and no other (the Tier 1 audit of 11-05: the index
+// said every world family "may" be used, shadows and fog among them, while no adapter ran any of them)
+const adapterManifest = JSON.parse(read(join(ROOT, 'src', 'contract', 'adapters', 'descriptors.json')));
+const adaptersOf = id => adapterManifest.adapters.filter(a => a.family === id).map(a => a.id);
+for (const a of adapterManifest.adapters) {
+    if (!families.some(f => f.id === a.family && f.use === 'world')) fail(`adapter ${a.id}: family ${a.family} is not a world family of families.json`);
+}
+for (const f of families.filter(x => x.use === 'world')) {
+    if (adaptersOf(f.id).length && !f.reason) fail(`${f.id}: Wexy runs it through ${adaptersOf(f.id).join(', ')}; its reason must say what they take`);
+    if (!adaptersOf(f.id).length && f.reason) fail(`${f.id}: no adapter runs it, so its reason must be null (the index says so itself)`);
+}
+
 // ---- the prompt's family index: every family, or nothing (design §5.1)
-const statusOf = f => (f.use === 'world' ? 'a world may use it; no Wexy adapter runs it yet' : f.use === 'host' ? `host only: ${f.reason}` : `unavailable: ${f.reason}`);
+const statusOf = f => {
+    if (f.use === 'host') return `host only: ${f.reason}`;
+    if (f.use === 'external') return `unavailable: ${f.reason}`;
+    const ids = adaptersOf(f.id);
+    return ids.length ? `Wexy runs it only through ${ids.join(', ')}. ${f.reason}` : 'no Wexy adapter: never plan with it.';
+};
 const familyIndex = [
     `# null-graph ${pkg.version}: every family, and what Wexy can run`,
-    'Names are exact: use only these. Read a family\'s documents before planning with it.',
+    'Names are exact: use only these. A program names Wexy\'s adapters, never null-graph\'s classes. Read a family\'s documents before planning with it.',
     '',
     ...families.flatMap(f => [
         `## ${f.id} · ${f.subpath} · ${f.title}`,
         `Status: ${statusOf(f)}`,
         f.summary,
         `Key: ${f.keySymbols.join(', ')} (${f.symbolCount} export${f.symbolCount === 1 ? '' : 's'}).`,
-        ...f.notes.map(n => `- ${n}`),
+        // A family no adapter runs keeps its summary for discovery, not the notes on using it.
+        ...(f.use === 'world' && !adaptersOf(f.id).length ? [] : f.notes).map(n => `- ${n}`),
         `Docs: ${[...f.docs, ...f.examples].join(', ')}.`,
         '',
     ]),
@@ -163,16 +182,18 @@ const familyIndex = [
 const indexBytes = Buffer.byteLength(familyIndex, 'utf8');
 if (indexBytes > INDEX_BUDGET) fail(`the family index is ${indexBytes} bytes, over its ${INDEX_BUDGET}: shorten families.json, never drop a family`);
 
-// ---- H: nothing is supported until an adapter exists
+// ---- H: a family resolves only through the adapters the manifest names. Their device verification is eligibility's
+// (src/exec/eligibility.json), per adapter, so a family stays unverified; one no adapter runs is unsupported (Tier 2).
 const support = {
-    version: 'ea-h1',
+    version: 'ea-h2',
     engine: `null-graph@${pkg.version}`,
-    entries: families.map(f => ({
-        family: f.id,
-        status: f.use === 'world' ? 'unverified' : 'unsupported',
-        adapter: null,
-        reason: f.use === 'world' ? 'No Wexy adapter yet; EA5 builds the first ones (the design\'s Tier-1).' : f.reason,
-    })),
+    entries: families.map(f => {
+        if (f.use !== 'world') return { family: f.id, status: 'unsupported', adapter: null, reason: f.reason };
+        const ids = adaptersOf(f.id);
+        return ids.length
+            ? { family: f.id, status: 'unverified', adapter: ids.join(', '), reason: `Tier 1, through these adapters alone. ${f.reason}` }
+            : { family: f.id, status: 'unsupported', adapter: null, reason: 'No Wexy adapter (the engine-aware design\'s Tier 2): a program cannot name it.' };
+    }),
 };
 
 // ---- write (or compare), then the manifest of hashes

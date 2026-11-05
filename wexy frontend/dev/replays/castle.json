@@ -5,7 +5,7 @@
   "candidate": "df1f8c6679e228ee5b9912d717b1e3599dab0736c54e07237a58000cab4f7df9",
   "phase": "static-verified",
   "versions": {
-    "bundle": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+    "bundle": "aa60280bae32e3aa780d34352ac42ef9c323d39f201b72cd5dc6c07a562f6824",
     "actionSchema": "agent-action.v2",
     "manifest": "8bdd11e8ef2f0ced4b0cabbbac19ca4b6ff0df03fca2d56082005b05b1497220",
     "abi": "ea-abi.v2",

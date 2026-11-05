@@ -7,7 +7,7 @@
       "subpath": "null-graph",
       "title": "Engine, render passes, batches, compute stages",
       "use": "world",
-      "reason": null,
+      "reason": "A program names adapters and their config, never the engine's methods. The host makes the passes and the camera; instances use the 14-float layout; every batch is opaque, depth on, both faces drawn.",
       "summary": "The NullGraph engine owns the WebGPU device and runs an explicit, ordered sequence of compute stages and render passes; there is no scene graph, no parenting and no automatic light. A batch is one pipeline drawing many instances from a storage buffer; a compute stage dispatches one WGSL kernel. Every other family plugs into this sequence.",
       "keySymbols": ["NullGraph", "Camera", "RenderPassNode", "ComputeStageNode", "RenderBatch", "PipelineConfig", "ComputeStageConfig", "BufferManager"],
       "notes": [
@@ -23,7 +23,7 @@
       "subpath": "null-graph/geometry",
       "title": "Primitives, vertex layouts, packed meshes",
       "use": "world",
-      "reason": null,
+      "reason": "ng.geometry.primitive: the thirteen primitives and the host's ground, from one size (fixed proportions) and segments. The plane stands upright (XY, facing +Z). No custom geometry, megabuffers or meshlets.",
       "summary": "Pure CPU math: thirteen primitives (cube, sphere, plane, cylinder, cone, capsule, torus, ring, pyramid, octahedron, tetrahedron, icosahedron, dodecahedron) and custom geometry as typed arrays with a vertex layout, uploaded once and bound to a batch with setBatchGeometry. Megabuffers and meshlets feed the visibility system.",
       "keySymbols": ["Primitives", "Geometry", "GeometryBuilder", "StandardLayout", "VertexLayout", "MegabufferBuilder", "MeshletBuilder"],
       "notes": [
@@ -50,12 +50,12 @@
       "subpath": "null-graph/materials",
       "title": "Stock materials and their shader builders",
       "use": "world",
-      "reason": null,
+      "reason": "ng.material.stock: kind and baseColor only, no maps (matcap is refused). Basic, lambert, toon and emissive multiply baseColor by the instance colour; pbr ignores it and draws as a rough metal.",
       "summary": "Each material is a shader builder (build*Shader: WGSL for the batch's pipeline) plus a class that owns its uniforms and textures and binds them at group 1 with applyToBatch: Basic (unlit), Lambert, Toon, Matcap, Emissive and StandardPBR. buildMaterialFragment and the WGSL chunks let a custom shader reuse the same lighting.",
       "keySymbols": ["StandardPBRMaterial", "LambertMaterial", "ToonMaterial", "BasicMaterial", "EmissiveMaterial", "MatcapMaterial", "buildPBRShader", "buildMaterialFragment"],
       "notes": [
         "Stock vertex shaders read 14 floats an instance: [0] unused, [1..3] position, [4..7] rotation quaternion (w = 1 for none), [8..10] scale, [11..13] color.",
-        "Lit builders take lighting = lightSystem.getShaderLayout(); without it PBR falls back to one hardcoded key light, and Basic uses no light at all.",
+        "Lit builders (Lambert, Toon, PBR) take lighting = lightSystem.getShaderLayout(); without it each falls back to one fixed key light. Basic, Emissive and Matcap use no light.",
         "PBR wants albedo, normal and packed maps: the engine's fallback textures serve when there are none."
       ],
       "docs": ["api/materials", "agent/guide"],
@@ -90,7 +90,7 @@
       "subpath": "null-graph/cameras",
       "title": "Camera controllers",
       "use": "host",
-      "reason": "Wexy's host owns the camera: a program gives keyframes and the host moves the camera through them.",
+      "reason": "Wexy's host owns the camera: it frames the world when shown, and the creator orbits it and sets its keyframes. A program cannot move it: a world must read well from any side.",
       "summary": "Orbital, fly, follow and path camera states (pure math producing the eye and target for Camera.updateView), with optional DOM event proxies, decoupled so they can run in a worker.",
       "keySymbols": ["OrbitalCameraState", "FlyCameraState", "FollowCameraState", "PathCameraState", "OrbitalEventProxy"],
       "notes": [],
@@ -102,7 +102,7 @@
       "subpath": "null-graph/lights",
       "title": "Data-oriented lights",
       "use": "world",
-      "reason": null,
+      "reason": "ng.light.rig: ambient, at most one directional and four point lights, set once at init (they never move); standard technique. The ambient arrives from straight above: downward faces get none. Only lambert, toon and pbr are lit.",
       "summary": "Lights are 16-float slices in one Float32Array written through cursor proxies (directional, point, spot, ambient, hemisphere, rect area, torch). LightSystem supplies the matching WGSL (getShaderLayout) for lit materials and, for the tiled and clustered techniques, a compute stage that bins the lights before the draws.",
       "keySymbols": ["LightSystem", "DirectionalLightProxy", "PointLightProxy", "SpotLightProxy", "AmbientLightProxy", "HemisphereLightProxy", "RectAreaLightProxy", "TorchLightProxy"],
       "notes": [
@@ -117,7 +117,7 @@
       "subpath": "null-graph/post",
       "title": "Post-processing chain",
       "use": "world",
-      "reason": null,
+      "reason": "ng.post.chain: the sixteen built-in effects, one intensity each (0 to 4), run in the program's order; no CustomEffect. Without a chain the background is a fixed dark grey.",
       "summary": "PostChain runs screen-space effects after the scene pass: engine.render([scenePass, ...post.getPassSequence()]). Sixteen built-in effects (AutoExposure, Bloom, Bokeh, CelShade, ChromaticAberration, ColorGrade, FXAA, FilmGrain, GodRays, Halation, Kuwahara, LensFlare, Outline, SSAO, Tonemap, Vignette) and CustomEffect, a WGSL fn effect(uv: vec2f) -> vec4f over the chain's input, and the depth when asked.",
       "keySymbols": ["PostChain", "CustomEffect", "Bloom", "Tonemap", "ColorGrade", "FilmGrain", "Kuwahara", "Outline"],
       "notes": [

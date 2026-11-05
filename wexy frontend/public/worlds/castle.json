@@ -2,7 +2,7 @@
  "note": "A starter (EA9.4, Q122 (a)): a world Meta's models made earlier, replayed in the studio with no model call. Recorded by dev/starters.mjs from dev/replays/castle.json.",
  "attempt": "starter-castle",
  "versions": {
-  "bundle": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+  "bundle": "aa60280bae32e3aa780d34352ac42ef9c323d39f201b72cd5dc6c07a562f6824",
   "manifest": "8bdd11e8ef2f0ced4b0cabbbac19ca4b6ff0df03fca2d56082005b05b1497220",
   "abi": "ea-abi.v2",
   "checker": "ea4-body.v1"
