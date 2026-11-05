@@ -32,6 +32,7 @@ The no-key routes below do not substitute for live Meta-call evidence in the sub
 - [Optional hosting and credit protection](#optional-hosting-and-credit-protection)
 - [Architecture and repository layout](#architecture-and-repository-layout)
 - [Status, provenance and license](#status-provenance-and-license)
+- [Created with Wexy](#created-with-wexy)
 
 ## What the product does
 
@@ -441,3 +442,27 @@ The new terms do not revoke MIT or other permissions already granted for earlier
 Dependencies retain their own licenses: this change does not relicense NullGraph, Firebase,
 Mediabunny, fonts, Apache's Maven wrapper or other third-party components. Preserve their notices.
 Public GitHub visibility/forking does not grant unrestricted product or commercial reuse.
+
+## Created with Wexy
+
+A few worlds running in Wexy's real-time WebGPU playground. These screenshots show
+hand-written playground scenes, not model-generated results or pre-rendered video clips.
+Open an example in the hosted studio to explore it and capture your own stills or video.
+
+### Black Hole
+
+[![A black hole surrounded by a glowing accretion disk](wexy%20frontend/public/showcase/kerr-black-hole.webp)](https://wexy.ai/studio.html?source=mock&scene=kerr-black-hole)
+
+[Explore Black Hole](https://wexy.ai/studio.html?source=mock&scene=kerr-black-hole)
+
+### Storm
+
+[![A dark, churning thunderstorm cloud against a black sky](wexy%20frontend/public/showcase/storm.webp)](https://wexy.ai/studio.html?source=mock&scene=storm)
+
+[Explore Storm](https://wexy.ai/studio.html?source=mock&scene=storm)
+
+### Magnetar
+
+[![A bright star inside an orange plasma disk, wrapped in blue magnetic field lines](wexy%20frontend/public/showcase/magnetic-star.webp)](https://wexy.ai/studio.html?source=mock&scene=magnetic-star)
+
+[Explore Magnetar](https://wexy.ai/studio.html?source=mock&scene=magnetic-star)
