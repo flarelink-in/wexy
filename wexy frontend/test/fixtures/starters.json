@@ -1,0 +1,40 @@
+{
+  "note": "Each starter's id(C), X hash and file hash, as dev/starters.mjs recorded them under this build. EA9-U11 holds public/worlds/ to them.",
+  "starters": {
+    "castle": {
+      "from": "dev/replays/castle.json",
+      "candidate": "c6ca8a62f349f0bac39dc690e6e7febf6176e65ffa41ca00fbe3652ea0fcce2b",
+      "x": "9441a3d0dcfc7a8f77e8d0b6b9fc4176de2e4db47e46d17d42e2500263d38bdf",
+      "sha256": "920033999cf5b41202fec00c96b6b77d637c7ff677a088cfdd50499948d30096",
+      "bytes": 18999,
+      "modules": [
+        "castlePlace",
+        "flagFlutter",
+        "flagPlace",
+        "sky"
+      ]
+    },
+    "voxel-island": {
+      "from": "test/fixtures/live-candidates/block-film.json",
+      "candidate": "e0028e4ba5a8975fad461d958ede090af1ec04ce0a9131bbcf494a61608a57cc",
+      "x": "dff6a62241d4aa57ce4d1dcab3db5280d91217981180df828f6a7ed4d19b51c4",
+      "sha256": "4278ac246c08f82e638631623922cf1052a7a45919d977b5a0a460bf904c98b8",
+      "bytes": 6348,
+      "modules": [
+        "place"
+      ]
+    },
+    "spiral-galaxy": {
+      "from": "test/fixtures/live-candidates/galaxy.json",
+      "candidate": "afaad962da8814687a392c270a894a31e93f21e3395046cece92223809f508d2",
+      "x": "ce25aba70d3e3070f5ca8745f6de2dc66587c21a21124148e4fc2fb2e8f1a7a4",
+      "sha256": "6f413980f7a8fbc9dd3e829fda3c7ad662cfaa1202f4de68f0d297a4bb0faa28",
+      "bytes": 8480,
+      "modules": [
+        "backdropSky",
+        "galaxyInit",
+        "galaxySpin"
+      ]
+    }
+  }
+}

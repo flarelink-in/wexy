@@ -233,13 +233,18 @@ test('EA-MR5 the EA4.5 review: the hand-off\'s turn and a revision\'s are kept, 
     });
     assert.equal(candidateBundle(failed).calls.turns[1].charge, 'unknown');
 
-    // Refused before any stream (an envelope): no meta, no call, the refusal's words; still unknown, as Q_C keeps it.
+    // Refused before any stream, in the backend's own envelope: no meta, no call, the refusal's words. Refused at admission,
+    // so nothing was spent (EA9.4's review): its charge known, and Q_C gives its reservation back (unknown before EA9.4).
     const envelope = new Response('{"code":"bad-request","message":"base.versions.manifest is not this server\'s."}', { status: 400, headers: { 'Content-Type': 'application/json' } });
     const refused = await machine(envelope).session.start(handOff());
     assert.deepEqual(refused.turns[1], {
-        role: 'revision', turnId: null, revision: 1, status: 'refused', model: null, promptVersion: null, charge: 'unknown', calls: [],
+        role: 'revision', turnId: null, revision: 1, status: 'refused', model: null, promptVersion: null, charge: 'known', calls: [],
         error: 'base.versions.manifest is not this server\'s.',
     });
+    assert.deepEqual([refused.budget.calls, refused.budget.revisions, refused.stop.charged], [{ settled: 3, reserved: 0, unknown: 0 }, 0, false]);
+    // A gateway's page with no envelope of ours (bare) may follow work: unknown, the whole reservation kept.
+    const page = await machine(new Response('<html>502</html>', { status: 502 })).session.start(handOff());
+    assert.deepEqual([page.turns[1].charge, page.budget.calls.unknown, page.stop.charged], ['unknown', 6, undefined]);
 
     // A cancel while the revision runs, over a reviser that honours it and over one deaf to it: nothing its turn says
     // after the cancel is kept or shown; its record ends cancelled, its charge unknown.

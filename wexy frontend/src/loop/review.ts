@@ -169,13 +169,19 @@ export interface ReviewDeps {
     busy?(): string | null;
     /**
      * Why no paid action may answer a review now: a new world is being made (EA9.1, agent-first-studio-design.md §6:
-     * while a replacement is under way, no other paid mutation); null otherwise.
+     * while a replacement is under way, no other paid mutation), or another world is on its way to the stage (a Run, an
+     * example's build, a starter: EA9.4's review, said "another world …"); null otherwise.
      */
     paidBusy?(): string | null;
     /** A model's review (EA6.4); null or absent without a backend. */
     reviewer?(): Reviewer | null;
     /** The creator's consent; absent, it lasts as long as this object. */
     consent?: ConsentStore;
+    /**
+     * W1's dialog, for a round the allowance refused (an expired prompt's revision is an entry: `account-required`, or
+     * `quota`), as a creation's limit opens it (EA9.4's review); absent, the round's sentence alone says it.
+     */
+    limit?(kind: 'allowance' | 'quota', sentence: string): void;
     onChange(): void;
     /** The frames whose JPEGs were dropped, so whatever shows them lets them go. */
     onDrop?(frameIds: readonly string[]): void;
@@ -306,6 +312,7 @@ export function sentenceOf(diagnostic: string): string {
     if (diagnostic.startsWith('EA_REVIEW_DROPPED')) return COPY.review.aiDropped;
     if (diagnostic.startsWith('EA_REVIEW_FAILED')) return COPY.review.aiFailed;
     if (diagnostic.startsWith('EA_REVIEW_BUDGET') || diagnostic.startsWith('EA_TURN_BUDGET')) return COPY.review.budget;
+    if (diagnostic.startsWith('EA_REVIEW_REFUSED')) return COPY.review.worldRefused;
     if (diagnostic.startsWith('EA_REVIEW_UNAVAILABLE')) return COPY.review.noSession;
     if (diagnostic.startsWith('EA_CAPTURE_UNAVAILABLE')) return COPY.review.unavailable;
     if (diagnostic.startsWith('EA_REVIEW_SIZE')) return COPY.review.tooLarge;
@@ -313,9 +320,29 @@ export function sentenceOf(diagnostic: string): string {
     if (diagnostic.startsWith('EA_REVIEW_BUSY a model')) return COPY.review.aiBusy;
     if (diagnostic.startsWith('EA_REVIEW_BUSY an improvement')) return COPY.review.improving;
     if (diagnostic.startsWith('EA_REVIEW_BUSY a new world')) return COPY.review.making;
+    if (diagnostic.startsWith('EA_REVIEW_BUSY another world')) return COPY.review.replacing;
     if (diagnostic.startsWith('EA_REVIEW_BUSY')) return COPY.review.busy;
     return COPY.review.notApplied;
 }
+
+/**
+ * A round that brought no new world, in the creator's words: its budget's, its words refused or its world's (EA9.4:
+ * content safety screens a revision's base, the creator's words as `content-refused`, the world's own as
+ * `world-refused`), or the backend's own refusal (an expired prompt makes the revision an entry, which W1's allowance may
+ * refuse, `account-required` or `quota`; a rate, a pause, the service away), as the transport says it; anything else the
+ * review's own.
+ */
+export function roundSentence(stop: { scope: string; code?: string; sentence: string; stopped?: true } | null | undefined): string {
+    if (stop?.stopped) return COPY.review.stopped;
+    if (stop?.scope === 'budget') return COPY.review.budget;
+    if (stop?.code === 'content-refused') return COPY.review.refused;
+    if (stop?.code === 'world-refused') return COPY.review.worldRefused;
+    if (stop?.code && WORDED.has(stop.code)) return stop.sentence;
+    return COPY.review.notApplied;
+}
+
+/** The backend's refusals whose sentence (candidate.ts's sentenceFor) already says what happened and what to do. */
+const WORDED: ReadonlySet<string> = new Set(['account-required', 'quota', 'rate', 'budget', 'paused', 'unavailable', 'auth', 'appcheck', 'forbidden']);
 
 /** The disclosure this build holds for a policy version, or null: a version with no text keeps the review shut. */
 export function disclosureFor(policyVersion: string | null) {
@@ -364,6 +391,12 @@ export class StageReviews {
      * stopped nothing), saying why.
      */
     private ai: { consent: ReviewConsent; controller: AbortController; why: string | null } | null = null;
+    /**
+     * The worlds, by id(C), whose own words content safety refused (EA9.4, the backend's `world-refused`: its design or
+     * program, whatever the creator asked): no revision of one can pass, so neither a change nor a model's review is
+     * offered for it again. Kept for the page's life; a new world has another id.
+     */
+    private readonly refusedWorlds = new Set<string>();
     private readonly unwatch: (() => void) | null;
     /** Reviews dropped from the history, counted. */
     dropped = 0;
@@ -460,6 +493,8 @@ export class StageReviews {
         const stage = this.deps.stage();
         if (!stage || stage.epoch !== r.epoch) return `EA_STALE_EVIDENCE expected the world on the stage (${short(stage?.candidate ?? null)}), the review is about ${short(r.candidate)}`;
         if (this.deps.generation() !== r.deviceGeneration) return 'EA_STALE_EVIDENCE the device was replaced since this review';
+        // Before any busy word: "improve it once that is done" would promise what the backend refused (EA9.4).
+        if (this.refusedWorlds.has(r.candidate)) return `EA_REVIEW_REFUSED content safety refused this world's own words (${short(r.candidate)}): no revision of it is admitted`;
         if (this.improvingNow || r.status === 'improving') return 'EA_REVIEW_BUSY an improvement is under way';
         if (this.reviewingNow || r.status === 'reviewing') return 'EA_REVIEW_BUSY a model\'s review is under way';
         const paid = this.deps.paidBusy?.() ?? null;
@@ -619,16 +654,27 @@ export class StageReviews {
         const verdict = [...st.evidence].reverse().find(e => e.phase === 'visual' && e.subject.candidate === review.candidate && e.producedBy === 'creator');
         if (verdict && !review.visualEvidenceIds.includes(verdict.id)) review.visualEvidenceIds.push(verdict.id);
         // The round's own account; a session that cannot give one is read from its state.
-        const round = result.round ?? { improved: st.phase === 'static-verified' && !!st.id && st.id !== review.candidate, stop: st.stop, restored: false };
+        // Without it, nothing is known to be given back: a refusal is then never pinned on the creator's words or the world.
+        const round = result.round ?? { improved: st.phase === 'static-verified' && !!st.id && st.id !== review.candidate, stop: st.stop, restored: false, givenBack: false };
         if (round.improved) {
             if (current) review.status = 'awaiting-run';
             review.improvedTo = st.id;
         } else {
             if (current) review.status = 'not-improved';
+            const code = round.stop?.code;
+            // Content safety's word on the round's own revision, whose base is the world on the stage and the creator's
+            // words: only when nothing of the round was spent (`givenBack`). A later automatic revision's refusal is about
+            // the model's new program, never this world or these words (EA9.4's review), so it is said as not applied.
+            const own = round.givenBack;
+            // The world's own words refused (EA9.4): it takes no change here again, whoever asks, in whatever words.
+            if (code === 'world-refused' && own) this.refusedWorlds.add(review.candidate);
             review.error = `${round.stop?.diagnostic ?? `the round ended ${st.phase}`}${round.restored ? '; the session is back on the candidate on the stage' : ''}`;
             // The review's own words: the world stays on the stage, the developer's line says why (EA-VR11 showed the
-            // candidate's "setup problem" sentence reading oddly here, for a revision that asked a question).
-            review.sentence = round.stop?.scope === 'budget' ? COPY.review.budget : COPY.review.notApplied;
+            // candidate's "setup problem" sentence reading oddly here, for a revision that asked a question). Words content
+            // safety refused (EA9.4: the backend screens a revision's base) are said as such, so the creator can rephrase.
+            review.sentence = !own && (code === 'content-refused' || code === 'world-refused') ? COPY.review.notApplied : roundSentence(round.stop);
+            // An expired prompt's revision is an entry, which the allowance may refuse: W1's dialog, as for a creation.
+            if (current && (code === 'account-required' || code === 'quota')) this.deps.limit?.(code === 'quota' ? 'quota' : 'allowance', review.sentence);
         }
         this.deps.onChange();
         return { ok: true };
@@ -893,6 +939,19 @@ export class StageReviews {
         return `visual rounds ${b.visualRounds} of ${l.visualRounds} · calls ${used} of ${l.calls}${b.calls.unknown ? ` (${b.calls.unknown} unknown)` : ''}`
             + ` · revisions ${b.revisions} of ${l.revisions}, each holding ${l.revisionCalls} calls while it runs · authors ${b.authors} of ${l.authors} · repairs ${b.repairs} of ${l.repairs}`
             + ` · AI reviews ${b.reviews ?? 0} of ${l.reviews ?? 0}`;
+    }
+
+    /**
+     * How many more improvements the session holding the world on the stage allows (EA9.4, the creator's count): the
+     * least of Q_C's visual rounds, revisions and calls left (a round holds `revisionCalls` while it runs); null without
+     * a session. A count, never a percentage (design guidelines §2).
+     */
+    roundsLeft(): number | null {
+        const st = this.deps.session()?.state;
+        if (!st) return null;
+        const b = st.budget, l = st.limits;
+        const used = b.calls.settled + b.calls.reserved + b.calls.unknown;
+        return Math.max(0, Math.min((l.visualRounds ?? 0) - b.visualRounds, l.revisions - b.revisions, Math.floor((l.calls - used) / l.revisionCalls)));
     }
 
     private refuse(r: ReviewRecord | null, diagnostic: string): ReviewAct {

@@ -46,8 +46,11 @@ test('homepage keeps the hero concise and provides undated future directions and
 test('studio keeps presets beside the idea, not over the empty canvas, and replaces installed titles', () => {
     const main = read('src/shell/studio/main.ts');
     const empty = main.slice(main.indexOf('private mountEmpty()'), main.indexOf('private mountCaptureBar()'));
-    assert.doesNotMatch(empty, /STARTERS|empty-examples|chip-lg/);
-    assert.match(main, /class: 'examples-chips'[^\n]+STARTERS\.map/);
+    assert.doesNotMatch(empty, /STARTERS|starterChips|empty-examples|chip-lg/);
+    // The chips beside the idea (EA9.4: the agent path's starters first, then h1's examples; test/starters.test.mjs).
+    assert.match(main, /class: 'examples-chips' \}, this\.starterChips\(\)\)/);
+    const chips = main.slice(main.indexOf('private starterChips('), main.indexOf('private async openStarter('));
+    assert.match(chips, /STARTERS\.filter\([^)]*\)\.map\(/);
     assert.match(main, /\$\('#scene-title'\)\.textContent = title \?\? agentTitle\(w\)/);
     const legacy = main.slice(main.indexOf('private publishLegacy('), main.indexOf('private async hotSwap('));
     assert.match(legacy, /\$\('#scene-title'\)\.textContent = spec\.title/);
@@ -70,4 +73,15 @@ test('studio switches to agent creation by default, keeping legacy and loader pr
         assert.deepEqual(path.loader, { kind, name: 'example' });
         assert.equal(path.autorun, false);
     }
+});
+
+test('the Playground and Live creation say their own words on h1\'s page too: setBusy says the button through renderCreate (EA9.4\'s drive)', () => {
+    const main = read('src/shell/studio/main.ts');
+    const body = signature => main.slice(main.indexOf(signature), main.indexOf('\n    }\n', main.indexOf(signature)));
+    const busy = body('private setBusy(');
+    assert.match(busy, /this\.renderCreate\(\);/);
+    assert.doesNotMatch(busy, /'Creating…'|'Create world'/, 'no label of its own, which read Create world over a selected Playground');
+    const render = body('private renderCreate(');
+    assert.match(render, /textContent = this\.busy \? 'Loading example…' : 'Playground example';/);
+    assert.match(render, /textContent = this\.busy \? 'Creating…' : 'Create world';/, 'h1\'s, again after a switch back to Live');
 });

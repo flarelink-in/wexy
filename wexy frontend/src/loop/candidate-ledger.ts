@@ -218,6 +218,20 @@ export class Ledger {
     }
 
     /**
+     * A dispatched revision the backend refused at its admission, before any record or charge (EA9.4: its base's words
+     * failed content safety, which the backend screens before it joins the revision or calls a model): nothing was
+     * spent there, so nothing is here. Its calls are not counted, and the revision is given back. Only for that answer,
+     * an HTTP refusal whose code the backend gives before any stream: a request whose end was not seen settles unknown.
+     */
+    refusedAtAdmission(r: Reservation): void {
+        const o = this.open.get(r.id);
+        if (!o || r.kind !== 'revision') return;
+        this.open.delete(r.id);
+        this.reserved -= r.calls;
+        this.revisions--;
+    }
+
+    /**
      * Ends a dispatched reservation: `actual` calls known, or null when its end was not seen, which keeps the whole
      * reservation as unknown. A revision reconciles to its actual calls, at most its allowance.
      */

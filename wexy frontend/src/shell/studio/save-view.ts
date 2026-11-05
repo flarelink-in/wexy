@@ -12,7 +12,7 @@ import { h } from '../../shared/dom';
  * What a creator can do about a save: `retry` ("Try again"), and the rest. Nothing for a world another account made
  * (Q129): it is never saved into the account signed in now, by a press or by itself.
  */
-export type SaveAction = 'retry' | 'sign-in' | 'save-as-new' | 'open-saved' | 'your-worlds';
+export type SaveAction = 'retry' | 'sign-in' | 'save-as-new' | 'open-saved' | 'your-worlds' | 'save';
 
 /** One save state in the creator's words. */
 export interface SaveLine {
@@ -47,6 +47,8 @@ export function saveLine(state: SaveState | null): SaveLine | null {
             : { tone: 'warn', text: COPY.save.notSaved, why: COPY.save.elsewhereWhy, actions: [] };
         case 'offline': return { tone: 'warn', text: COPY.save.offline, why: COPY.save.offlineWhy, actions: ['retry'] };
         case 'failed': return { tone: 'warn', text: COPY.save.notSaved, why: COPY.save.failedWhy, actions: ['retry'] };
+        // Saved, then its camera views changed (EA9.4, Q119): its owner's Save keeps them with the saved world.
+        case 'changed': return { tone: 'warn', text: COPY.save.changed, why: COPY.save.changedWhy, actions: ['save'] };
     }
 }
 
@@ -57,6 +59,8 @@ export interface SaveViewActions {
     /** "Open the saved one" after a conflict: the saved head, once the creator confirms the stage's world goes. */
     openSaved(worldId: string): void;
     signIn(): void;
+    /** "Save" after the world's camera views changed (EA9.4): a revision of the saved world with them. */
+    save(): void;
 }
 
 /** The history's address: where a world is renamed or deleted, and room is made. */
@@ -101,13 +105,14 @@ export class SaveView {
     private control(action: SaveAction, worldId: string | null): HTMLElement {
         if (action === 'your-worlds') return h('a', { class: 'save-link', href: CREATIONS }, COPY.save.yourWorlds);
         const label = action === 'retry' ? COPY.save.tryAgain : action === 'sign-in' ? COPY.save.signIn
-            : action === 'save-as-new' ? COPY.save.saveAsNew : COPY.save.openSaved;
+            : action === 'save-as-new' ? COPY.save.saveAsNew : action === 'save' ? COPY.save.save : COPY.save.openSaved;
         const button = h('button', { type: 'button', class: 'btn btn-sm btn-quiet' }, label);
         button.addEventListener('click', () => {
             switch (action) {
                 case 'retry': this.actions.retry(); return;
                 case 'sign-in': this.actions.signIn(); return;
                 case 'save-as-new': this.actions.saveAsNew(); return;
+                case 'save': this.actions.save(); return;
                 case 'open-saved': if (worldId) this.actions.openSaved(worldId); return;
             }
         });

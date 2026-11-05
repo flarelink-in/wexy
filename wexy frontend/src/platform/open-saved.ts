@@ -7,6 +7,7 @@
 // routes are called: never a model (F5).
 
 import type { SolutionDesign } from '../contract/agent';
+import type { CameraKeyframe } from '../contract/spec';
 import type { DeepReadonly } from '../contract/engine/frozen';
 import type { Api } from '../forge-client/http';
 import type { SealedCandidate } from '../loop/snapshot';
@@ -26,6 +27,8 @@ export interface OpenedWorld {
     readonly design: DeepReadonly<SolutionDesign>;
     /** The camera it was saved with, or null: then the world is framed on what it builds. */
     readonly view: DeepReadonly<SavedView> | null;
+    /** The studio's keyframes it was saved with (Q119 (a), EA9.4): the timeline's, and its film's path. */
+    readonly keyframes: readonly CameraKeyframe[];
     /** What the file said beside what this build sealed (Developer view); never a reason to refuse, nor to trust (§8). */
     readonly provenance: { readonly graph: string; readonly candidate: string; readonly same: boolean };
 }
@@ -76,6 +79,7 @@ export async function openSaved(api: Api, worldId: string, signal?: AbortSignal)
         world: {
             worldId, title: world.title, revisionId: head.revisionId, rowVersion: world.rowVersion, snapshot: sealed.snapshot,
             design: parsed.world.design, view: parsed.world.view, provenance: sealed.provenance,
+            keyframes: parsed.world.keyframes.map(k => ({ t: k.t, target: [k.target[0], k.target[1], k.target[2]], distance: k.distance, azimuth: k.azimuth, polar: k.polar, fov: k.fov })),
         },
     };
 }

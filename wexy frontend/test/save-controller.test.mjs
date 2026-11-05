@@ -743,3 +743,110 @@ test('account-guards review L4: the creator\'s Try again and the account\'s word
     await h.saves.settled();
     assert.deepEqual([h.api.sent.map(r => r.path), h.saves.state().status], [['/v1/worlds'], 'saved']);
 });
+
+// EA9.4 (agent-first-studio-design.md §8 and §9; Q119 (a); the companion §7's explicit Save "and later its keyframes"): an
+// agent world's keyframes are the studio's, and its save keeps them.
+const KEY = { t: 0.25, target: [0, 5.5, 0], distance: 23, azimuth: 34.38, polar: 65.89, fov: 45 };
+
+test('EA9.4 a world\'s keyframes are saved with it: an edit after its save reads changed, and its owner\'s Save is one revision on its head with them', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [world(1, 1)] });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    assert.equal(h.saves.state().status, 'saved');
+    assert.deepEqual(JSON.parse(h.api.sent[0].body.artifact).keyframes, [], 'a new world has none');
+    h.saves.edited([KEY]);
+    assert.equal(h.saves.state().status, 'changed');
+    assert.equal(h.api.sent.length, 1, 'nothing sent by itself: Save is the creator\'s');
+    await h.saves.saveChanges();
+    assert.equal(h.api.sent.length, 2);
+    const r = h.api.sent[1];
+    assert.deepEqual([r.method, r.path, r.body.baseRevisionId, r.body.expectedVersion], ['POST', `/v1/worlds/${WORLD}/revisions`, REV[0], 0]);
+    assert.deepEqual(JSON.parse(r.body.artifact).keyframes, [KEY]);
+    assert.notEqual(r.key, h.api.sent[0].key, 'another request, another key');
+    assert.deepEqual([h.saves.state().status, h.saves.state().revisionId], ['saved', REV[1]]);
+    // Save again with nothing changed sends nothing.
+    await h.saves.saveChanges();
+    assert.equal(h.api.sent.length, 2);
+});
+
+test('EA9.4 an edit while the save is under way ends changed; a reopened world\'s keyframes come with it; another account\'s or a starter\'s edit sends nothing', async () => {
+    // An edit while the first save is out: that save sent the older keyframes, so it ends changed, not saved.
+    const h = harness({ 'POST /v1/worlds': [world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [world(1, 1)] });
+    const release = h.api.hold('POST /v1/worlds');
+    h.saves.installed(installed(1));
+    await sentAtLeast(h, 1);
+    h.saves.edited([KEY]);
+    release();
+    await h.saves.settled();
+    assert.equal(h.saves.state().status, 'changed');
+    assert.deepEqual(JSON.parse(h.api.sent[0].body.artifact).keyframes, [], 'it sent what it had');
+
+    // A reopened world comes with its saved keyframes; removing them is a change, saved as a revision of its saved head.
+    const o = harness({ [`POST /v1/worlds/${WORLD}/revisions`]: [world(2, 4)] });
+    o.saves.installed(installed(1, { source: 'reopened', ranAs: 'uid-1', saved: { worldId: WORLD, revisionId: REV[1], rowVersion: 3 }, keyframes: [KEY] }));
+    assert.equal(o.saves.state().status, 'saved');
+    o.saves.edited([]);
+    await o.saves.saveChanges();
+    assert.deepEqual([o.api.sent.length, o.api.sent[0].body.baseRevisionId, o.api.sent[0].body.expectedVersion], [1, REV[1], 3]);
+    assert.deepEqual(JSON.parse(o.api.sent[0].body.artifact).keyframes, []);
+
+    // Another account signed in: its owner's world is never saved here, by an edit or a press (Q129).
+    const a = harness({ 'POST /v1/worlds': [world(0)] });
+    a.saves.installed(installed(1));
+    await a.saves.settled();
+    a.account.uid = 'uid-2';
+    a.account.epoch++;
+    a.saves.accountChanged();
+    const said = a.states.length;
+    a.saves.edited([KEY]);
+    await a.saves.saveChanges();
+    assert.deepEqual([a.api.sent.length, a.saves.state().status], [1, 'elsewhere']);
+    assert.ok(!a.states.slice(said).some(s => s.status === 'saving'), 'not even "Saving…" is said for another account\'s press');
+
+    // A starter is nobody's to save: its keyframes neither.
+    const s = harness({});
+    s.saves.installed(installed(1, { source: 'starter', design: null, title: '' }));
+    s.saves.edited([KEY]);
+    await s.saves.saveChanges();
+    assert.deepEqual([s.api.sent.length, s.saves.state().status], [0, 'idle']);
+});
+
+test('EA9.4 review: changed is a difference from the saved views, never a count of edits: K then Remove is saved still; an edit under another account is said when its owner returns', async () => {
+    // K then Remove: the views are as saved, so nothing is offered; one kept is, and taken back reads saved again.
+    const h = harness({ 'POST /v1/worlds': [world(0)] });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    h.saves.edited([KEY]);
+    assert.equal(h.saves.state().status, 'changed');
+    h.saves.edited([]);
+    assert.equal(h.saves.state().status, 'saved', 'as saved again: no Save offered, no identical revision');
+    await h.saves.saveChanges();
+    assert.equal(h.api.sent.length, 1);
+
+    // Edited while another account was signed in: its owner, back, finds Save offered, not "Saved" over other views.
+    const a = harness({ 'POST /v1/worlds': [world(0)] });
+    a.saves.installed(installed(1));
+    await a.saves.settled();
+    a.account.uid = 'uid-2';
+    a.account.epoch++;
+    a.saves.accountChanged();
+    a.saves.edited([KEY]);
+    assert.equal(a.saves.state().status, 'elsewhere');
+    a.account.uid = 'uid-1';
+    a.account.epoch++;
+    a.saves.accountChanged();
+    assert.equal(a.saves.state().status, 'changed', 'its owner back: the views differ from the saved ones');
+    // An edit taken back before the owner's return is as saved.
+    const b = harness({ 'POST /v1/worlds': [world(0)] });
+    b.saves.installed(installed(1));
+    await b.saves.settled();
+    b.account.uid = 'uid-2';
+    b.account.epoch++;
+    b.saves.accountChanged();
+    b.saves.edited([KEY]);
+    b.saves.edited([]);
+    b.account.uid = 'uid-1';
+    b.account.epoch++;
+    b.saves.accountChanged();
+    assert.equal(b.saves.state().status, 'saved');
+});

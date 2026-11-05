@@ -23,7 +23,7 @@ import { NOTE_CODE, createCandidateSession } from '../src/loop/candidate.ts';
 import { Q_C } from '../src/loop/candidate-ledger.ts';
 import { COPY } from '../src/loop/copy.ts';
 import { CONSENT_KEY, KEEP_FRAMES, KEPT_BYTES, REVIEW_HISTORY, StageReviews, memoryConsent, sentenceOf, storedConsent, termsKey } from '../src/loop/review.ts';
-import { ForgeError } from '../src/forge-client/errors.ts';
+import { ERROR_STATUS, ForgeError } from '../src/forge-client/errors.ts';
 import { candidateBundle } from '../src/loop/candidate.ts';
 
 const node = (id, adapterId, config, inputs = []) => ({ id, adapterId, adapterVersion: 1, config: JSON.stringify(config), inputs });
@@ -153,17 +153,20 @@ function studio({ reviser = fakeReviser([handedOff(world({ size: 0.5 }))]), modu
     // Attempt ids unique across studios, so one studio's attempt is never mistaken for another's.
     const s = createCandidateSession({ modules, revise: revisable ? reviser.revise : undefined, limits, attemptId: () => `attempt-${++attempts}`, now: () => 1_000 }, () => {});
     /** `busy`: why the stage cannot be captured now (a Run, a film), or null. */
-    const st = { world: null, generation: 1, changes: 0, drops: [], captures: [], busy: null };
+    /** `paid`: why the paid actions wait (a new world being made, a world written for its go), or null. */
+    const st = { world: null, generation: 1, changes: 0, drops: [], captures: [], busy: null, paid: null, limits: [] };
     const reviews = new StageReviews({
         stage: () => st.world,
         capture: (w, stale) => { st.captures.push({ world: w, stale }); return capture(w, stale); },
         session: () => s,
         generation: () => st.generation,
         busy: () => st.busy,
+        paidBusy: () => st.paid,
         reviewer: () => reviewer,
         consent,
         onChange: () => { st.changes++; },
         onDrop: ids => st.drops.push(...ids),
+        limit: (kind, sentence) => st.limits.push({ kind, sentence }),
     });
     let epochs = 0;
     /** Puts `candidate` on the stage (what Run does), and its review is captured at once. */
@@ -1129,6 +1132,21 @@ function fakeDom() {
         append(...nodes) { for (const n of nodes) this.children.push(n instanceof FakeNode ? n : new FakeText(n)); }
         replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
         focus() {}
+        /** As a browser's, over `className`: what the panels toggle (EA9.4's review: a line kept for a screen reader). */
+        get classList() {
+            const names = () => this.className.split(' ').filter(Boolean);
+            const set = list => { this.className = [...new Set(list)].join(' '); };
+            return {
+                contains: name => names().includes(name),
+                add: (...more) => set([...names(), ...more]),
+                remove: (...less) => set(names().filter(n => !less.includes(n))),
+                toggle: (name, force) => {
+                    const on = force ?? !names().includes(name);
+                    set(on ? [...names(), name] : names().filter(n => n !== name));
+                    return on;
+                },
+            };
+        }
         get childElementCount() { return this.children.filter(c => c instanceof FakeElement).length; }
         get textContent() { return this.children.map(c => c.textContent).join(''); }
         set textContent(text) { this.children = text === '' ? [] : [new FakeText(text)]; }
@@ -1301,4 +1319,310 @@ test('EA6.4 the independent review\'s smaller fixes: a double press leaves nothi
     await s.reviews.capture();
     await settle();
     assert.equal(later.termsRead, reads);
+});
+
+// EA9-U23 and U24 (EA9.4; agent-first-studio-design.md §9; Q121, and the user's Q118 answer of 11-03: "a chat window style
+// new prompt to ask them to improve if any missed and then show again"): the creator's "Shape it" over this same review,
+// and a revision the backend refused for its words, which spent nothing.
+
+test('EA9-U23 the creator\'s "Shape it": Looks right; their words as one round, its Show it once; a refusal said with the words given back; plain words only', { timeout: 20_000 }, async () => {
+    const dom = fakeDom();
+    try {
+        const { ImproveView } = await import('../src/shell/studio/improve-view.ts');
+        const reviser = fakeReviser([handedOff(world({ size: 0.5 })), { throws: new ForgeError('content-refused', 422, 'These words can\'t be used here. Try saying the change another way.') }]);
+        const t = await reviewed({ reviser });
+        // The controller as the panel reads it: the shown creation's phase, whether it improves the world on the stage, its go.
+        const ctl = { state: { phase: 'installed', improves: true, sentence: null }, shows: 0, showBlocked: () => null, async show() { ctl.shows++; return null; } };
+        const lost = { now: false };
+        const view = new ImproveView({ reviews: t.reviews, creation: ctl, lost: () => lost.now });
+        const status = () => dom.byClass(view.el, 'imp-status');
+        const thread = () => dom.byClass(view.el, 'imp-thread').textContent;
+        const box = () => dom.byClass(view.el, 'imp-words');
+        const send = () => [...view.el.all()].find(e => e.className.split(' ').includes('imp-send'));
+
+        // A world made earlier (a starter, a saved world reopened, a replay): said, and nothing offered.
+        view.installed('earlier');
+        assert.equal(status().textContent, COPY.improve.madeEarlier);
+        assert.equal(dom.byClass(view.el, 'imp-composer').hidden, true);
+
+        // A creation's world: the ask, Looks right, the count, and Improve it once there are words.
+        view.installed('creation');
+        assert.ok(view.el.textContent.includes(COPY.improve.ask));
+        assert.equal(dom.button(view.el, COPY.improve.looksRight).disabled, false);
+        assert.equal(send().disabled, true, 'no words, nothing to send');
+        assert.equal(dom.byClass(view.el, 'imp-left').textContent, COPY.improve.left(2));
+        dom.button(view.el, COPY.improve.looksRight).click();
+        assert.equal(t.r.status, 'approved', 'a pass recorded, nothing spent');
+        assert.ok(thread().includes(COPY.improve.glad));
+        assert.equal(dom.button(view.el, COPY.improve.looksRight).hidden, true, 'said once');
+
+        // Sent: the words move into the thread; one revision carries them as the creator's finding, and only them.
+        box().value = 'make the towers taller';
+        view.render();
+        send().click();
+        assert.equal(box().value, '', 'the words left the box');
+        assert.ok(thread().includes('make the towers taller'));
+        await waitFor(() => t.r.status === 'awaiting-run', 'the round');
+        await settle();
+        assert.equal(reviser.calls.length, 1, 'one revision');
+        assert.deepEqual(reviser.calls[0].findings.filter(f => f.code === 'creator').map(f => f.message), ['make the towers taller']);
+        assert.ok(thread().includes(COPY.improve.ready));
+        // The improvement waits for its go: Show it, one press for a double click.
+        ctl.state = { phase: 'ready', improves: true, sentence: null };
+        view.render();
+        // The thread says it already: one sentence on screen once, not twice; the line kept for a screen reader alone
+        // (EA9.4's review: the thread is no live region, so a refused round was never heard).
+        assert.deepEqual([status().hidden, status().classList.contains('sr-only'), status().textContent], [false, true, COPY.improve.ready]);
+        const show = dom.button(view.el, COPY.improve.show);
+        assert.equal(show.hidden, false);
+        box().value = 'and a moat around it';
+        view.render();
+        assert.equal(send().disabled, true, 'nothing more is sent while the improvement waits for its go, whatever is typed');
+        box().value = '';
+        view.render();
+        show.click();
+        for (const l of show.listeners.get('click')) l({ type: 'click', target: show, detail: 2 });
+        assert.equal(ctl.shows, 1, 'one go for a double click');
+
+        // Shown: a new version of the same world, its thread going on, one improvement left.
+        const improved = t.s.snapshot.id;
+        ctl.state = { phase: 'installed', improves: true, sentence: null };
+        t.install(improved);
+        view.installed('creation', 'improved');
+        await waitFor(() => t.reviews.latest?.candidate === improved && t.reviews.latest.status === 'ready', 'the improved world\'s review');
+        view.render();
+        assert.ok(thread().includes(COPY.improve.shown));
+        assert.equal(dom.byClass(view.el, 'imp-left').textContent, COPY.improve.left(1));
+        // The same world shown again (past its envelope): its thread goes on, and nothing is said of it.
+        const said = thread();
+        view.installed('creation', 'same');
+        assert.equal(thread(), said);
+
+        // A second round, by Ctrl+Enter in the box: the backend refuses its words (422, before any call). Said as such, the
+        // words back in the box to say it another way, and nothing spent: the same round still left (EA9-U24).
+        const spent = structuredClone(t.s.state.budget);
+        box().value = 'add a moat';
+        view.render();
+        let sent = 0;
+        for (const l of box().listeners.get('keydown')) l({ ctrlKey: true, metaKey: false, key: 'Enter', repeat: false, preventDefault() {}, stopPropagation() { sent++; } });
+        assert.equal(sent, 1, 'the page\'s own shortcut does not hear it');
+        await waitFor(() => t.reviews.latest.status === 'not-improved', 'the refused round');
+        await settle();
+        view.render();
+        assert.equal(t.reviews.latest.sentence, COPY.review.refused);
+        assert.ok(thread().endsWith(COPY.review.refused));
+        assert.equal(box().value, 'add a moat', 'the words given back');
+        assert.equal(t.reviews.roundsLeft(), 1, 'the round given back');
+        assert.deepEqual([t.s.state.budget.visualRounds, t.s.state.budget.revisions, t.s.state.budget.calls], [spent.visualRounds, spent.revisions, spent.calls], 'nothing counted');
+        assert.equal(dom.byClass(view.el, 'imp-left').textContent, COPY.improve.left(1));
+
+        // Plain words only (§2's P5): no id(C), code, hash, model or WGSL anywhere in the panel.
+        assert.doesNotMatch(view.el.textContent, /EA_|id\(C\)|[0-9a-f]{12}|muse-|WGSL|module/);
+        // The device lost: said, nothing offered.
+        lost.now = true;
+        view.render();
+        assert.equal(status().textContent, COPY.improve.deviceLost);
+    } finally {
+        dom.restore();
+    }
+});
+
+test('EA9-U24 a round\'s sentence by the backend\'s code, never its prose: its words refused, an expired prompt\'s allowance, the budget, anything else', async () => {
+    const { roundSentence } = await import('../src/loop/review.ts');
+    assert.equal(roundSentence({ scope: 'budget', sentence: 'x' }), COPY.review.budget);
+    assert.equal(roundSentence({ scope: 'host', code: 'content-refused', sentence: COPY.failures.refused }), COPY.review.refused);
+    // A revision whose prompt expired is an entry, which W1's allowance may refuse: its own sentence, never "not applied".
+    assert.equal(roundSentence({ scope: 'host', code: 'account-required', sentence: COPY.failures.allowance }), COPY.failures.allowance);
+    assert.equal(roundSentence({ scope: 'host', code: 'quota', sentence: COPY.failures.quota }), COPY.failures.quota);
+    assert.equal(roundSentence({ scope: 'program', sentence: COPY.candidate.setup }), COPY.review.notApplied);
+    assert.equal(roundSentence({ scope: 'host', code: 'internal', sentence: COPY.candidate.refused }), COPY.review.notApplied);
+    assert.equal(roundSentence(null), COPY.review.notApplied);
+
+    // An unseen end still counts (EA-VR5): only the backend's 422 content-refused, answered before any call, gives back.
+    const t = studio({ reviser: fakeReviser([{ throws: new ForgeError('upstream', 502, 'the stream broke') }]) });
+    const first = await t.s.start(handOff());
+    t.install(first.id);
+    await waitFor(() => t.reviews.latest?.status === 'ready', 'the review');
+    const out = await t.reviews.improve(t.reviews.latest.id, 'make it taller', []);
+    assert.equal(out.ok, true);
+    assert.equal(t.s.state.budget.visualRounds, 1, 'a round whose revision broke stays spent');
+    assert.equal(t.reviews.latest.sentence, COPY.review.notApplied);
+});
+
+test('EA9-U24b the world\'s own words refused (422 world-refused, EA9.4\'s second backend review): said as the world\'s, nothing spent, and neither a change nor a model\'s review offered for that world again', { timeout: 20_000 }, async () => {
+    const { roundSentence } = await import('../src/loop/review.ts');
+    const { refusedBeforeAnyCall, sentenceFor } = await import('../src/loop/candidate.ts');
+    assert.equal(roundSentence({ scope: 'host', code: 'world-refused', sentence: COPY.failures.refused }), COPY.review.worldRefused);
+    // Create's own revision refused so says what a creation says: no world was shown yet (EA9.4's review).
+    assert.equal(sentenceFor('world-refused'), COPY.failures.refused);
+    // Nothing spent at admission: the creator's words or the world's, the allowance, a rate, the guard, as the backend's own
+    // envelope says it before any stream. A bare page, a refusal in the stream (status 200) or a timeout may follow work.
+    for (const code of ['world-refused', 'content-refused', 'account-required', 'quota', 'rate', 'budget', 'paused', 'unavailable', 'bad-request', 'auth', 'forbidden']) {
+        assert.equal(refusedBeforeAnyCall(new ForgeError(code, ERROR_STATUS[code], 'm')), true, code);
+    }
+    assert.equal(refusedBeforeAnyCall(new ForgeError('bad-request', 422, 'm', null, true)), false, 'a bare 422 is no refusal');
+    assert.equal(refusedBeforeAnyCall(new ForgeError('world-refused', 200, 'm')), false, 'said in the stream: work had begun');
+    for (const code of ['timeout', 'upstream', 'internal']) assert.equal(refusedBeforeAnyCall(new ForgeError(code, ERROR_STATUS[code], 'm')), false, code);
+    assert.equal(refusedBeforeAnyCall(new ForgeError('unavailable', 0, 'the network')), false, 'no answer: unknown');
+    assert.equal(sentenceOf('EA_REVIEW_REFUSED content safety refused this world\'s own words'), COPY.review.worldRefused);
+
+    const dom = fakeDom();
+    try {
+        const { ImproveView } = await import('../src/shell/studio/improve-view.ts');
+        const reviewer = fakeReviewer();
+        const reviser = fakeReviser([{ throws: new ForgeError('world-refused', 422, 'This world can\'t be changed here. Try a different idea.') }, handedOff(world({ size: 0.5 }))]);
+        const t = await reviewed({ reviser, reviewer });
+        t.reviews.giveConsent();
+        const ctl = { state: { phase: 'installed', improves: true, sentence: null }, shows: 0, showBlocked: () => null, async show() { ctl.shows++; return null; } };
+        const view = new ImproveView({ reviews: t.reviews, creation: ctl, lost: () => false });
+        const thread = () => dom.byClass(view.el, 'imp-thread').textContent;
+        const composer = () => dom.byClass(view.el, 'imp-composer');
+        const box = () => dom.byClass(view.el, 'imp-words');
+        view.installed('creation');
+        const spent = structuredClone(t.s.state.budget);
+        const rounds = t.reviews.roundsLeft();
+        box().value = 'make the towers taller';
+        view.render();
+        [...view.el.all()].find(e => e.className.split(' ').includes('imp-send')).click();
+        await waitFor(() => t.reviews.latest.status === 'not-improved', 'the refused round');
+        await settle();
+        view.render();
+        // Its own sentence, chosen by the code: never the creator's "say the change another way".
+        assert.equal(t.reviews.latest.sentence, COPY.review.worldRefused);
+        assert.ok(thread().endsWith(COPY.review.worldRefused));
+        const line = dom.byClass(view.el, 'imp-status');
+        assert.deepEqual([line.textContent, line.classList.contains('sr-only')], [COPY.review.worldRefused, true], 'seen once in the thread, and heard');
+        // Nothing spent: the round, the revision and its calls given back.
+        assert.deepEqual([t.s.state.budget.visualRounds, t.s.state.budget.revisions, t.s.state.budget.calls], [spent.visualRounds, spent.revisions, spent.calls]);
+        assert.equal(t.reviews.roundsLeft(), rounds);
+        // No change offered for this world again, in any words, nor a model's review of it: refused before any call.
+        assert.equal(composer().hidden, true);
+        assert.match(t.reviews.improvable(), /^EA_REVIEW_REFUSED /);
+        // Said before any busy word: "improve it once that is done" would promise what the backend refused.
+        t.st.paid = 'a new world is being made';
+        assert.match(t.reviews.improvable(), /^EA_REVIEW_REFUSED /);
+        t.st.paid = null;
+        const again = await t.reviews.improve(t.reviews.latest.id, 'add a moat', []);
+        assert.deepEqual([again.ok, again.sentence], [false, COPY.review.worldRefused]);
+        assert.match(t.reviews.aiReviewable(), /^EA_REVIEW_REFUSED /);
+        assert.equal((await t.reviews.aiReview(t.reviews.latest.id, [])).ok, false);
+        assert.deepEqual([reviser.calls.length, reviewer.calls.length], [1, 0], 'the refused revision only');
+        assert.equal(t.reviews.looksRight(t.reviews.latest.id).ok, true, 'Looks right still spends nothing and is recorded');
+        // The same world shown again (past its envelope) is that world still.
+        t.install(t.reviews.latest.candidate);
+        await waitFor(() => t.reviews.latest?.status === 'ready', 'its review again');
+        view.installed('creation', 'same');
+        assert.match(t.reviews.improvable(), /^EA_REVIEW_REFUSED /);
+        assert.equal(composer().hidden, true);
+        assert.doesNotMatch(view.el.textContent, /EA_|id\(C\)|[0-9a-f]{12}|muse-|WGSL|module/);
+        // Another world is not that one: whatever else stops it, not this refusal.
+        t.install('another-candidate');
+        await waitFor(() => t.reviews.latest?.candidate === 'another-candidate' && t.reviews.latest.status === 'ready', 'another world\'s review');
+        assert.doesNotMatch(t.reviews.improvable() ?? '', /^EA_REVIEW_REFUSED/);
+    } finally {
+        dom.restore();
+    }
+});
+
+// EA9.4's independent review (2026-11-05): its findings, each held here.
+
+test('EA9.4 review: Stop during a round ends the round alone: its calls counted, the session back on the world on the stage, said stopped, and another round offered', { timeout: 20_000 }, async () => {
+    const t = studio({ reviser: fakeReviser([{ hold: true }, handedOff(world({ size: 0.5 }))]) });
+    const first = await t.s.start(handOff());
+    t.install(first.id);
+    await waitFor(() => t.reviews.latest?.status === 'ready', 'the review');
+    const round = t.reviews.improve(t.reviews.latest.id, 'make the towers taller', []);
+    await waitFor(() => t.reviser.held.length === 1, 'the revision out');
+    t.s.stopRound();
+    assert.deepEqual(await round, { ok: true });
+    const r = t.reviews.latest;
+    assert.deepEqual([r.status, r.sentence], ['not-improved', COPY.review.stopped]);
+    assert.equal(t.s.snapshot?.id, first.id, 'the session is back on the world on the stage');
+    assert.equal(t.s.state.budget.visualRounds, 1, 'the round went out: spent');
+    assert.equal(t.s.state.budget.calls.unknown, Q_C.revisionCalls, 'its revision\'s end unseen: unknown');
+    assert.equal(t.reviews.improvable(), null, 'another round offered: what is left stays');
+    // Outside a round, nothing: the attempt is never closed by it.
+    t.s.stopRound();
+    assert.equal(t.s.snapshot?.id, first.id);
+});
+
+test('EA9.4 review: a round given back only when nothing of it was spent; a later automatic revision\'s refusal is not the creator\'s words nor this world\'s', { timeout: 20_000 }, async () => {
+    // The creator's revision hands off a program the browser refuses; the automatic revision that answers it is refused
+    // for its words. The round's own revision was charged: the round stays spent, and nothing is pinned on this world.
+    const refusedLater = new ForgeError('world-refused', 422, 'This world can\'t be changed here. Try a different idea.');
+    // A program whose batch reads a node that is not there: refused at resolve, which a program revision answers.
+    const dangling = world().map(n => (n.id === 'blocks' ? { ...n, inputs: n.inputs.map(i => (i.port === 'geometry' ? { ...i, nodeId: 'nowhere' } : i)) } : n));
+    const t = studio({ reviser: fakeReviser([handedOff(dangling), { throws: refusedLater }]) });
+    const first = await t.s.start(handOff());
+    t.install(first.id);
+    await waitFor(() => t.reviews.latest?.status === 'ready', 'the review');
+    assert.deepEqual(await t.reviews.improve(t.reviews.latest.id, 'make it taller', []), { ok: true });
+    assert.equal(t.reviser.calls.length, 2, 'the creator\'s revision, then the automatic one');
+    const r = t.reviews.latest;
+    assert.deepEqual([r.status, r.sentence], ['not-improved', COPY.review.notApplied]);
+    assert.equal(t.s.state.budget.visualRounds, 1, 'the round stays spent: its own revision was charged');
+    assert.equal(t.reviews.improvable(), null, 'this world is not refused: another round offered');
+
+    // An expired prompt's revision is an entry the allowance refused (403 account-required): nothing spent, W1's dialog.
+    const a = studio({ reviser: fakeReviser([{ throws: new ForgeError('account-required', 403, 'Sign in to make more worlds.') }]) });
+    const s = await a.s.start(handOff());
+    a.install(s.id);
+    await waitFor(() => a.reviews.latest?.status === 'ready', 'its review');
+    await a.reviews.improve(a.reviews.latest.id, 'add a moat', []);
+    assert.deepEqual([a.reviews.latest.sentence, a.s.state.budget.visualRounds, a.s.state.budget.revisions], [COPY.failures.allowance, 0, 0]);
+    assert.deepEqual(a.st.limits, [{ kind: 'allowance', sentence: COPY.failures.allowance }], 'W1\'s dialog, once');
+});
+
+test('EA9.4 review: the panel drops a round\'s late answer once another world is on the stage; says whose world it is by the controller; offers nothing with no round left', { timeout: 20_000 }, async () => {
+    const dom = fakeDom();
+    try {
+        const { ImproveView } = await import('../src/shell/studio/improve-view.ts');
+        const reviser = fakeReviser([{ hold: true }, handedOff(world({ size: 0.5 }))]);
+        const t = await reviewed({ reviser });
+        const ctl = { state: { phase: 'installed', improves: true, sentence: null }, stageMoved: false, showBlocked: () => null, async show() { return null; } };
+        const view = new ImproveView({ reviews: t.reviews, creation: ctl, lost: () => false });
+        const box = () => dom.byClass(view.el, 'imp-words');
+        const thread = () => dom.byClass(view.el, 'imp-thread').textContent;
+        view.installed('creation');
+        box().value = 'make the towers taller';
+        view.render();
+        [...view.el.all()].find(e => e.className.split(' ').includes('imp-send')).click();
+        await waitFor(() => reviser.held.length === 1, 'the round out');
+        // Another world arrives (a starter, say) while the round runs; then the round's answer comes.
+        view.installed('earlier');
+        reviser.held[0].resolve(handedOff(world({ size: 0.5 })));
+        await waitFor(() => !t.reviews.improving, 'the round answered');
+        await settle();
+        assert.equal(thread(), '', 'nothing of the round in the new world\'s thread');
+        assert.equal(box().value, '', 'nor its words in the box');
+
+        // Another world on its way to the stage (a Run, an example, a starter: the studio's paidBusy): no change paid for now,
+        // said as such, never "capture it again".
+        t.st.paid = 'another world is being tested on this device';
+        view.installed('creation');
+        assert.match(t.reviews.improvable(), /^EA_REVIEW_BUSY another world/);
+        assert.equal(sentenceOf(t.reviews.improvable()), COPY.review.replacing);
+        t.st.paid = null;
+
+        // No session for the world: its maker's account gone (the controller says so), or ended otherwise.
+        const n = await reviewed({ revisable: false });
+        const ended = new ImproveView({ reviews: n.reviews, creation: { ...ctl, stageMoved: false }, lost: () => false });
+        ended.installed('creation');
+        assert.equal(dom.byClass(ended.el, 'imp-status').textContent, COPY.improve.ended);
+        const moved = new ImproveView({ reviews: n.reviews, creation: { ...ctl, stageMoved: true }, lost: () => false });
+        moved.installed('creation');
+        assert.equal(dom.byClass(moved.el, 'imp-status').textContent, COPY.improve.otherAccount);
+
+        // No round left: the limit said, and nothing to send, whatever is typed.
+        const spent = await reviewed({ limits: { ...Q_C, visualRounds: 0 } });
+        const none = new ImproveView({ reviews: spent.reviews, creation: ctl, lost: () => false });
+        none.installed('creation');
+        dom.byClass(none.el, 'imp-words').value = 'one more change';
+        none.render();
+        assert.equal(spent.reviews.roundsLeft(), 0);
+        assert.equal([...none.el.all()].find(e => e.className.split(' ').includes('imp-send')).disabled, true);
+        assert.equal(dom.byClass(none.el, 'imp-status').textContent, COPY.review.budget);
+    } finally {
+        dom.restore();
+    }
 });

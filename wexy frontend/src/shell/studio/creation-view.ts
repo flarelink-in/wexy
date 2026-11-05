@@ -70,6 +70,15 @@ export function spoken(st: CreationState, resized = false): string {
     }
 }
 
+/**
+ * A round on the world on the stage that brought no new world, come back to it (`last` the phase seen before): its panel
+ * says what came of the round (improve-view.ts), so the Journey does not say "on the stage" as if a new world had come
+ * (EA9.4's review). Not an improvement shown, which comes back through its Run.
+ */
+export function roundCameBack(last: { phase: CreationPhase | null; improves: boolean }, st: Pick<CreationState, 'phase' | 'improves'>): boolean {
+    return st.improves && st.phase === 'installed' && last.improves && last.phase === 'writing';
+}
+
 export class CreationView {
     /** A quiet "Create world" beside "Show it", for a new idea while a written world waits for its go. */
     readonly again = h('button', { type: 'button', class: 'btn btn-sm btn-quiet btn-again', hidden: true }, COPY.creation.create);
@@ -82,6 +91,8 @@ export class CreationView {
     private tick: ReturnType<typeof setInterval> | null = null;
     /** What was last said to a screen reader, and of which creation: said again only when it changes. */
     private said: { idea: AgentTurnRequest | null; words: string } = { idea: null, words: '' };
+    /** The phase last seen, and whether it was a round on the world on the stage (EA9.4's review). */
+    private last: { phase: CreationPhase | null; improves: boolean } = { phase: null, improves: false };
 
     /** Owns the primary button's press on the agent path: the studio's own handler leaves it to this view. */
     constructor(controller: CreationController, parts: CreationViewParts) {
@@ -204,6 +215,13 @@ export class CreationView {
     /** One sentence for a screen reader at each change of phase or of its words, never at a count or a tick (E6). */
     private say(st: CreationState): void {
         const words = spoken(st, this.resized());
+        const roundBack = roundCameBack(this.last, st);
+        this.last = { phase: st.phase, improves: st.improves };
+        // Kept as said, so a later change of words is heard; the panel says what came of the round.
+        if (roundBack) {
+            this.said = { idea: st.idea, words };
+            return;
+        }
         if (!words || (st.idea === this.said.idea && words === this.said.words)) return;
         this.said = { idea: st.idea, words };
         this.parts.journey.announce(words);

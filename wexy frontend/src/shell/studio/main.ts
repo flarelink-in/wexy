@@ -38,12 +38,12 @@ import type { DeepReadonly } from '../../contract/engine/frozen';
 import type { SealedCandidate } from '../../loop/snapshot';
 import { assembleModule } from '../../contract/host';
 import { hookHeader } from '../../contract/wgsl';
-import { $, download, h, isTyping } from '../../shared/dom';
+import { $, download, h, isControl, isTyping } from '../../shared/dom';
 import { fmtInt, fmtMs } from '../../shared/format';
 import { highlightWgslLine } from '../../shared/highlight';
 import { icon, loader, logo, wordmark } from '../../shared/icons';
 import { formatJson } from '../../shared/json';
-import { programText, QUALITY_UNIFORM, targetsOf, withProgramText, type ProgramTarget, type SceneSpec, type Style } from '../../contract/spec';
+import { programText, QUALITY_UNIFORM, targetsOf, withProgramText, type CameraKeyframe, type ProgramTarget, type SceneSpec, type Style } from '../../contract/spec';
 import { AccountSession, browserHint } from '../../platform/session';
 import { AccountControl, creationAccount } from './account';
 import { account as accountWorld, EMPTY, install as installWorld, uncounted, type ActiveWorld } from './active-world';
@@ -56,6 +56,7 @@ import { selectCreationPath, worldLink, type CreationPathSelection } from './cre
 import { Journey, type StageId } from './journey';
 import { CREATIONS, SaveView } from './save-view';
 import { SavedOpening } from './saved-opening';
+import { STARTER_WORLDS, starterFile, type StarterWorld } from './starters';
 import { stageTaken, type StageHolders } from './stage-holds';
 import { Timeline } from './timeline';
 import { TracePanel, type TraceStep } from './trace';
@@ -70,6 +71,8 @@ const STYLES: Array<{ value: Style | 'auto'; label: string }> = [
 const LENGTHS = [6, 12, 20, 30];
 /** The backend's cap on an idea (wexy.loop.caps.prompt-chars). */
 const PROMPT_CHARS = 600;
+/** An agent world's keyframes, at most: its saved file's bound (wexy-world.v1's `keyframes`, maxItems 16; Q119 (a)). */
+const AGENT_KEYFRAMES = 16;
 /** Hand-written playground starters; the shrine stays parked until its rendering is fixed. */
 const STARTERS: Array<{ id: string; label: string; prompt: string }> = [
     // Keep the shrine implementation, but park its preset until its rendering is fixed.
@@ -102,6 +105,8 @@ type StageWorld = import('../../loop/review').StageWorld;
 // The agent path's Create (EA9.1), loaded only behind ?create=agent or ?agent=1.
 type CreationControllerT = import('../../loop/creation').CreationController;
 type CreationViewT = import('./creation-view').CreationView;
+// The creator's "Shape it" for an agent world (EA9.4), loaded with the review on the agent path.
+type ImproveViewT = import('./improve-view').ImproveView;
 type RunAbout = import('../../loop/creation').RunAbout;
 // The creator's saved worlds (W3.6), loaded only on the agent path too: saving on install, and opening one by its id.
 type SaveControllerT = import('../../platform/save-controller').SaveController;
@@ -112,7 +117,9 @@ type OpenedWorldT = import('../../platform/open-saved').OpenedWorld;
  * Show it was pressed as), a saved world reopened (with the caller it was read as), or a saved attempt replayed. The
  * caller is the world's owner, whose account alone ever saves it (Q129).
  */
-type RunOrigin = { readonly kind: 'creation'; readonly about: RunAbout; readonly ranAs: string | null } | { readonly kind: 'reopened'; readonly world: OpenedWorldT; readonly ranAs: string } | { readonly kind: 'replay' };
+type RunOrigin = { readonly kind: 'creation'; readonly about: RunAbout; readonly ranAs: string | null } | { readonly kind: 'reopened'; readonly world: OpenedWorldT; readonly ranAs: string } | { readonly kind: 'replay' }
+    /** A starter (EA9.4, Q122 (a)): a world Meta's models made earlier, shipped with the page, its title and camera moves. */
+    | { readonly kind: 'starter'; readonly title: string; readonly keyframes: readonly CameraKeyframe[] };
 /**
  * An agent world on the stage (EA5.3): its runtime, its candidate, the device verdicts it was admitted on, and its
  * install's number, to which each film of it is bound (EA5.5); and what its Run found (its boxes, the probe's report),
@@ -130,6 +137,11 @@ interface AgentWorld {
     title: string | null;
     /** Where it came from (§8 step 6): a creation's turn is Live (its meta says so); a saved attempt replayed, the archive. */
     source: Source;
+    /**
+     * The studio's keyframes for it (Q119 (a), EA9.4): K adds one at the playhead, Space plays them, a film follows them;
+     * with none, the camera holds the view framed on the world, and a film holds it too. The program has no camera.
+     */
+    keyframes: CameraKeyframe[];
 }
 
 /** h1's world on the stage (§5's legacy variant): its runtime, its spec (the Director writes its moves into it), its source. */
@@ -230,8 +242,22 @@ class Studio {
     private markCreationReady: () => void = () => {};
     /** Who is signed in (W1, W2): the creation binds its calls to this session's epoch (§6). */
     private accountSession: AccountSession | null = null;
-    /** ?agent=1 only: the review of the world on the stage (EA6.2), its panel beside the candidate. */
+    /** On the agent path: the review of the world on the stage (EA6.2; EA9.4 for creators), read by the panels below. */
     private reviews: StageReviews | null = null;
+    /** ?agent=1 only: Developer view's review panel (EA6.2). */
+    private reviewPanel: { render(): void; dropped(ids: readonly string[]): void } | null = null;
+    /** On the agent path: the creator's "Shape it" for an agent world (EA9.4, Q121): Looks right, and Improve it. */
+    private improveView: ImproveViewT | null = null;
+    /** The device was lost (EA5): nothing more is shown until a reload. */
+    private deviceLostNow = false;
+    /** This browser offers no WebGPU (showNoWebGPU): the stage never starts, and the empty stage's card says so. */
+    private noWebGpu = false;
+    /** A starter's load under way, numbered: a newer press supersedes it before its Run (EA9.4). */
+    private starterLoads = 0;
+    /** The load of the starter on its way to the stage, from its press to its Run's end; null when none is (EA9.4's review). */
+    private starterOpening: number | null = null;
+    /** The message over the stage is a starter's (say): the next world on the stage clears it. */
+    private starterSaid = false;
     /** ?agent=1 only, with the stage: its engine's port and the review's capture, which draws the Head again offscreen (EA6.1). */
     private stagePort: EnginePortT | null = null;
     private reviewCapture: ReviewCapture | null = null;
@@ -281,6 +307,8 @@ class Studio {
     private readonly hookTabs = h('div', { class: 'hook-tabs', role: 'tablist', 'aria-label': 'Model-written code' });
     private readonly diagList = h('ul', { class: 'diag-list' });
     private readonly headerBox = h('pre', { class: 'host-header' });
+    /** The line beside "Shape it": h1's sliders change the world instantly; an agent world's changes are written (EA9.4). */
+    private readonly controlsSub = h('span', null, 'Changes show up instantly');
     private readonly swapBtn = h('button', { type: 'button', class: 'btn btn-sm', disabled: true, html: `${icon('bolt', 13)}<span>Check &amp; hot-swap</span><kbd>Ctrl S</kbd>` });
     private readonly revertBtn = h('button', { type: 'button', class: 'btn btn-sm btn-quiet', disabled: true, html: `${icon('reset', 13)}<span>Revert</span>` });
     private readonly hud = {
@@ -398,6 +426,7 @@ class Studio {
         vp.onOrbitTakeover = () => this.setMode('orbit', false);
         vp.onDeviceLost = msg => {
             this.deviceGeneration++;
+            this.deviceLostNow = true;
             // Every compile verdict and GPU go is void now (§9): a Run under way stops at its next check.
             this.stage?.goes.clear();
             this.creation?.deviceLost();
@@ -488,6 +517,9 @@ class Studio {
                 this.renderCreate();
             });
         }
+        // The review of the world on the stage, on the agent path (EA9.4): the creator's "Shape it", and Developer view's
+        // panel when ?agent=1 asks for it, over one StageReviews; with no gateway, Developer view's alone (its review).
+        await this.mountReviews(api);
         if (this.path.create === 'agent' && this.creation) {
             this.creationView = new CreationView(this.creation, {
                 primary: this.forgeBtn,
@@ -542,8 +574,11 @@ class Studio {
             }
             return;
         }
-        // h1's Create waits for a Run too (?agent=1), shown whenever this runs, at the latest as the Run ends.
+        // h1's Create waits for a Run too (?agent=1), shown whenever this runs, at the latest as the Run ends. Its words are
+        // said here too, so a switch back from the Playground reads Create again (EA9.4's drive found it left otherwise).
         this.forgeBtn.disabled = this.busy || !this.viewport || !!this.accountControl?.changing || !!this.stage?.busy;
+        this.forgeBtn.classList.toggle('is-busy', this.busy);
+        this.forgeBtn.querySelector('span')!.textContent = this.busy ? 'Creating…' : 'Create world';
     }
 
     /**
@@ -572,12 +607,32 @@ class Studio {
         this.replayPanel = replay;
         replay.el.classList.add('dev-only');
         $('#left').insertBefore(replay.el, this.trace.el);
-        // The review of the world on the stage (EA6.2; Q109: Developer view only): captured after each install, the host's
-        // findings, and the creator's "Looks right" or "Improve it" through the candidate session that holds that world.
-        const [{ ReviewPanel, browserConsent }, { StageReviews }, { createReviewClient }] = await Promise.all([
-            import('./review-view'), import('../../loop/review'), import('../../forge-client/review-client'),
+        // The review of the world on the stage in Developer view (EA6.2; Q109): its frames, the host's findings, a model's
+        // review behind its consent (EA6.4), and the same "Looks right" and "Improve it" as the creator's panel, over the
+        // one StageReviews mountReviews made.
+        if (this.reviews) {
+            const [{ ReviewPanel }] = await Promise.all([import('./review-view')]);
+            const view = new ReviewPanel(this.reviews);
+            this.reviewPanel = view;
+            view.el.classList.add('dev-only');
+            $('#left').insertBefore(view.el, this.trace.el);
+        }
+        const named = new URLSearchParams(location.search).get('replay');
+        if (named !== null) void replay.loadNamed(named);
+    }
+
+    /**
+     * The review of the world on the stage on the agent path (EA6.2, EA9.4; agent-first-studio-design.md §9, Q121): one
+     * StageReviews, captured after each install, read by the creator's "Shape it" (improve-view.ts: "Looks right", and
+     * "Improve it" as a chat-style prompt, the user's Q118 answer) and, behind ?agent=1, by Developer view's panel. Its
+     * paid actions go through the candidate session that holds the world on the stage (I8), and the backend screens a
+     * revision's words before any call (EA9.4).
+     */
+    private async mountReviews(api: Api | null): Promise<void> {
+        const creation = this.creation;
+        const [{ browserConsent }, { StageReviews }, { createReviewClient }, { ImproveView }] = await Promise.all([
+            import('./review-view'), import('../../loop/review'), import('../../forge-client/review-client'), import('./improve-view'),
         ]);
-        let view: InstanceType<typeof ReviewPanel> | null = null;
         // A model's review (EA6.4): its terms read once a review is bound to a live session, its consent kept in this browser.
         const reviewer = api ? createReviewClient(api) : null;
         const reviews = new StageReviews({
@@ -585,34 +640,41 @@ class Studio {
             capture: (world, stale) => this.captureReview(world, stale),
             // The session holding the world on the stage (I8): H's, never a newer idea's; none for a replayed world.
             session: () => this.creation?.sessionFor(this.agentWorld?.candidate ?? null) ?? null,
-            // While a new world is being made or waits for Show it, no paid action on this one (§6), which would strand it.
-            paidBusy: () => (this.creation?.creating ? 'a new world is being made, or waits for Show it' : null),
+            // While a new world is being made or waits for Show it, no paid action on this one (§6), which would strand it;
+            // nor while another world is on its way to the stage, whose install would end a round under way and lose it
+            // (EA9.4's review): a Run of any world, an example's build, a starter opening.
+            paidBusy: () => this.paidBusy(),
             generation: () => this.deviceGeneration,
             busy: () => this.reviewBusy(),
             reviewer: () => reviewer,
             consent: browserConsent(),
+            // A round's refusal by the allowance (an expired prompt's revision is an entry): W1's dialog, as a creation's.
+            limit: (kind, sentence) => this.accountControl?.limit(kind, sentence),
             // Run waits while the stage is captured (runBlocked): every control that offers it is shown again as it ends.
             onChange: () => {
-                view?.render();
+                this.reviewPanel?.render();
                 this.refreshRun();
             },
-            onDrop: ids => view?.dropped(ids),
-        });
-        view = new ReviewPanel(reviews);
-        // Its paid actions read the controller only as the panel renders (paidBusy, the stage's session), so the panel is
-        // shown again whenever either changes: a new world made, waiting or let go, an account change, a device loss.
-        let gate = '';
-        this.creation?.subscribe(() => {
-            const now = `${!!this.creation?.creating}|${!!this.creation?.sessionFor(this.agentWorld?.candidate ?? null)}`;
-            if (now === gate) return;
-            gate = now;
-            view?.render();
+            onDrop: ids => this.reviewPanel?.dropped(ids),
         });
         this.reviews = reviews;
-        view.el.classList.add('dev-only');
-        $('#left').insertBefore(view.el, this.trace.el);
-        const named = new URLSearchParams(location.search).get('replay');
-        if (named !== null) void replay.loadNamed(named);
+        // Without a gateway there is no creation, and no paid action: Developer view's panel still captures and looks.
+        if (!creation) return;
+        const improve = new ImproveView({ reviews, creation, lost: () => this.deviceLostNow });
+        this.improveView = improve;
+        this.panels.director.append(improve.el);
+        // Its paid actions read the controller only as a panel renders (paidBusy, the stage's session), so the panels are
+        // shown again when it changes: the creator's at every word (a round's progress, its Show it), Developer view's when
+        // its gate moves (a new world made, waiting or let go, an account change, a device loss), so its focus stays put.
+        let gate = '';
+        creation.subscribe(() => {
+            improve.render();
+            const now = `${!!creation.creating}|${!!creation.sessionFor(this.agentWorld?.candidate ?? null)}`;
+            if (now === gate) return;
+            gate = now;
+            this.reviewPanel?.render();
+        });
+        this.showControls();
     }
 
     /** The agent world on the stage as its review sees it (EA6); null for an h1 world or none. */
@@ -730,6 +792,9 @@ class Studio {
         if (!this.stage) return 'The stage is starting: its device compiler loads first.';
         // No candidate is admitted beside a world the ledger does not count yet (§8 step 2): a backdrop still building.
         if (uncounted(this.world)) return this.world.kind === 'backdrop' ? 'The stage is starting: its backdrop is still loading.' : 'The stage is starting: the world on it is not counted yet.';
+        // Nor beside a round on the world on the stage, which its install would end with its spend lost (EA9.4's review): a
+        // saved attempt's Run, Developer view's, waits for it. The round's own improvement is shown once the round is done.
+        if (this.reviews?.improving) return 'An improvement of the world on the stage is being written; Run waits until it is done.';
         return stageTaken(this.stageHolders());
     }
 
@@ -753,8 +818,23 @@ class Studio {
         this.renderCreate();
         this.candidatePanel?.refresh();
         this.replayPanel?.refresh();
-        // A saved world waiting for its Show it reads the stage the same way (W3.6).
+        // A saved world waiting for its Show it reads the stage the same way (W3.6), and so do the creator's panel's Show it
+        // and Improve it (EA9.4's review: a film's end left its Show it disabled).
         this.renderOpening();
+        this.improveView?.render();
+    }
+
+    /**
+     * Why the review's paid actions wait (EA9.1 §6; EA9.4's review), or null: a new world is being made or waits for Show
+     * it, which a round would strand; or another world is on its way to the stage, whose install would end a round under
+     * way and lose what it spent. Said "a new world …" and "another world …" (review.ts's sentenceOf).
+     */
+    private paidBusy(): string | null {
+        if (this.creation?.creating) return 'a new world is being made, or waits for Show it';
+        if (this.stage?.busy) return 'another world is being tested on this device';
+        if (this.busy) return 'another world, an example, is being built';
+        if (this.starterOpening !== null) return 'another world, an example, is being opened';
+        return null;
     }
 
     /**
@@ -765,15 +845,22 @@ class Studio {
         const stage = this.stage;
         if (!stage) return { status: 'refused', reason: 'no stage here', numbers: '' };
         stage.press(snapshot);
+        // The creator's panel reads the Run as another world on its way (paidBusy): no change is offered meanwhile.
+        this.improveView?.render();
         const step = this.trace.add('Run on this GPU', 'gate');
         // A creation's Show it names its world and is Live; a saved world reopened is its creation's, and like a saved
         // attempt it was made earlier, so it is From the archive ("made by Meta's models earlier and replayed here").
-        const title = origin.kind === 'creation' ? origin.about.title : origin.kind === 'reopened' ? origin.world.title : null;
+        const title = origin.kind === 'creation' ? origin.about.title : origin.kind === 'reopened' ? origin.world.title : origin.kind === 'starter' ? origin.title : null;
+        // What this world is to the one on the stage now, read before the Run can replace it: a new world, an improved
+        // version of the creation's own, or that very world shown again (past its envelope). Its panel says each its way.
+        const change: 'new' | 'improved' | 'same' = origin.kind !== 'creation' || !origin.about.revises ? 'new'
+            : this.agentWorld?.candidate === snapshot.id ? 'same' : 'improved';
         const r = await stage.run(snapshot, compiled, signal);
         if (r.status === 'installed') {
             // The stage's commit has switched the viewport: H is set first, before anything that could throw, or a throw
-            // would leave the world drawn owned by nobody and the old one counted (EA9.3's reviews).
-            const notes = this.installAgent(r.runtime, r.held, snapshot, compiled, r.report, title, origin.kind === 'creation' ? 'live' : 'archive');
+            // would leave the world drawn owned by nobody and the old one counted (EA9.3's reviews). Its keyframes are read
+            // as that very call's argument (keyframesOf: plain reads, nothing that throws), before H moves.
+            const notes = this.installAgent(r.runtime, r.held, snapshot, compiled, r.report, title, origin.kind === 'creation' ? 'live' : 'archive', this.keyframesOf(origin));
             // The world is on the stage from here: no step after the switch makes this Run a failure, so the controller
             // learns the world the stage shows.
             let said = notes.join(' · ');
@@ -793,6 +880,10 @@ class Studio {
             // Its save (W3.6, F8): a creation's world kept once it is here, the camera as it is now; a reopened one is its
             // saved head; a replay's is nobody's.
             this.afterSwitch('its save', () => this.saveInstalled(snapshot, origin));
+            // The creator's "Shape it" (EA9.4): a creation's world takes its maker's changes there; a starter, a saved world
+            // reopened or a saved attempt replayed was made earlier, with no session to change it. Told before its review's
+            // capture, which it shows.
+            this.afterSwitch('the right panel', () => this.improveView?.installed(origin.kind === 'creation' ? 'creation' : 'earlier', change));
             // Its review (EA6): captured now, as it is, from the framed view and the side.
             this.afterSwitch('its review', () => this.reviews?.installed(this.stageWorld()));
             return { status: 'installed', reason: null, numbers: said };
@@ -854,6 +945,11 @@ class Studio {
             // the history), or it is the one opened.
             if (next.kind !== 'agent') this.afterSwitch('the save line', () => { this.saves?.cleared(); this.saveView?.render(null); });
             if (next.kind === 'agent' || next.kind === 'legacy') this.afterSwitch('the opening', () => this.endOpening());
+            // The right panel by the new world's kind (EA9.4): an agent world's own install tells its panel what it is.
+            if (next.kind !== 'agent') this.afterSwitch('the right panel', () => this.improveView?.installed(null));
+            this.afterSwitch('the right panel', () => this.showControls());
+            // A starter's word over the stage is about a world that is no longer coming: another one is here.
+            if (this.starterSaid && next.kind !== 'backdrop') this.afterSwitch('the starter\'s word', () => this.say(null));
         }
     }
 
@@ -916,17 +1012,21 @@ class Studio {
      * An agent world on the stage (EA5.3; executor-design.md §5), through `put`. The switch was the stage's commit (the
      * viewport's setRuntime); the old world, whatever its kind, is retired after this one is published.
      */
-    private installAgent(runtime: AgentRuntimeT, held: AgentReservation, snapshot: Sealed, compiled: readonly DeepReadonly<CompiledBody>[], report: AgentReport | null, title: string | null, source: Source): string[] {
-        const agent: AgentWorld = { runtime, candidate: snapshot.id, snapshot, compiled, epoch: ++this.installs, bounds: report?.bounds ?? null, report, title, source };
+    private installAgent(runtime: AgentRuntimeT, held: AgentReservation, snapshot: Sealed, compiled: readonly DeepReadonly<CompiledBody>[], report: AgentReport | null, title: string | null, source: Source, keyframes: readonly CameraKeyframe[] = []): string[] {
+        const agent: AgentWorld = {
+            runtime, candidate: snapshot.id, snapshot, compiled, epoch: ++this.installs, bounds: report?.bounds ?? null, report, title, source,
+            keyframes: keyframes.map(k => ({ ...k, target: [k.target[0], k.target[1], k.target[2]] })),
+        };
         let notes: string[] = [];
         this.put({ kind: 'agent', agent, held }, null, () => { notes = this.publishAgent(agent); });
         return notes;
     }
 
     /**
-     * An agent world's page (§8 steps 3 to 7). h1's draft no longer runs, and what an agent world has not got yet is off:
-     * keyframes and the camera path (W has none) and the Director (Q85). Films and photos are on (EA5.5): each made from
-     * its candidate again, from time zero, with the camera where it is. Its framing's notes, for Developer view.
+     * An agent world's page (§8 steps 3 to 7). h1's draft no longer runs, and the Director is off (Q85): the right panel is
+     * its review (EA9.4). Its keyframes are the studio's (Q119 (a)): the timeline and K work on them, and a film follows
+     * them. Films and photos are on (EA5.5): each made from its candidate again, from time zero. Its framing's notes, for
+     * Developer view.
      */
     private publishAgent(w: AgentWorld): string[] {
         const vp = this.viewport!;
@@ -939,8 +1039,16 @@ class Studio {
         const fov = vp.currentView().fov;
         const framing = this.frameWorld?.(bounds, fov, vp.canvas.width / Math.max(1, vp.canvas.height)) ?? null;
         vp.setView(framing?.view ?? { target: [0, 0, 0], distance: 12, azimuth: 0, polar: 1.25, fov });
-        vp.path = null;
-        this.timeline.setKeyframes([]);
+        // Its keyframes, the studio's (Q119 (a), EA9.4): a new world has none and starts on its framed view; a world that
+        // comes with some (a saved world's) starts on them, at the first, playing, as h1's world starts on its path.
+        vp.path = cameraPath(w.keyframes, this.duration);
+        vp.duration = this.duration;
+        this.timeline.setKeyframes(w.keyframes, 0);
+        if (vp.path) {
+            vp.playhead = 0;
+            this.setMode('path', true);
+            this.setPlaying(true);
+        }
         this.director.note(this.agentControlsNote());
         this.exportBtn.disabled = false;
         this.snapBtn.disabled = false;
@@ -981,6 +1089,8 @@ class Studio {
             saveAsNew: () => void this.saves?.saveAsNew(),
             openSaved: worldId => this.openSavedOne(worldId),
             signIn: () => control.signInToSave(),
+            // Its camera views changed since it was saved (EA9.4, Q119): a revision of the saved world with them.
+            save: () => void this.saves?.saveChanges(),
         });
         $('#scene-title').after(view.el);
         control.lineClaim.after(view.line);
@@ -1015,6 +1125,24 @@ class Studio {
         return this.accountSession?.caller()?.uid ?? null;
     }
 
+    /**
+     * The keyframes a world installed by `origin` starts with (Q119 (a), EA9.4): a new version of the world on the stage
+     * (an improvement, or the same world shown again) keeps that world's; a saved world or a starter comes with its own; a
+     * new creation's or a replay's has none. Plain reads, so it runs between a Run's commit and H with nothing to throw.
+     */
+    private keyframesOf(origin: RunOrigin): readonly CameraKeyframe[] {
+        if (origin.kind === 'creation') return origin.about.revises ? this.agentWorld?.keyframes ?? [] : [];
+        if (origin.kind === 'reopened') return origin.world.keyframes;
+        if (origin.kind === 'starter') return origin.keyframes;
+        return [];
+    }
+
+    /** The agent world on the stage's keyframes changed (Q119 (a), EA9.4): its save sends them next, or offers Save. */
+    private keyframesChanged(): void {
+        const w = this.agentWorld;
+        if (w) this.saves?.edited(w.keyframes);
+    }
+
     /** H's save, as its Run installed it (F8): a creation's world from now, a reopened one as saved, a replay's none. */
     private saveInstalled(snapshot: Sealed, origin: RunOrigin): void {
         const saves = this.saves, w = this.agentWorld;
@@ -1023,6 +1151,8 @@ class Studio {
             const { about } = origin;
             saves.installed({
                 stage: w.epoch, source: 'live', snapshot, design: about.design, view: this.viewport?.currentView() ?? null,
+                // Its keyframes: none for a new world; a new version of the world on the stage keeps that world's (EA9.4).
+                keyframes: w.keyframes,
                 title: about.title.trim() || 'Untitled world',
                 // A version of the creation's world on the stage continues its save, under the install the controller
                 // knows that world by (the same world shown again keeps its first install's there).
@@ -1035,12 +1165,15 @@ class Studio {
             saves.installed({
                 // Its camera as it shows now, its saved view applied: kept should the creator save it again (the review).
                 stage: w.epoch, source: 'reopened', snapshot, design: o.design, view: this.viewport?.currentView() ?? null, title: o.title, improves: null,
+                // Its saved keyframes (EA9.4): an edit of them is a revision of this saved world, on its owner's Save.
+                keyframes: w.keyframes,
                 // Its owner, the caller it was read as: under another account it stays here, never saved there (Q129).
                 ranAs: origin.ranAs,
                 saved: { worldId: o.worldId, revisionId: o.revisionId, rowVersion: o.rowVersion },
             });
         } else {
-            saves.installed({ stage: w.epoch, source: 'archive', snapshot, design: null, view: null, title: '', improves: null });
+            // A starter or a saved attempt replayed: nobody's to save (the companion §7).
+            saves.installed({ stage: w.epoch, source: origin.kind === 'starter' ? 'starter' : 'archive', snapshot, design: null, view: null, title: '', improves: null });
         }
     }
 
@@ -1164,11 +1297,7 @@ class Studio {
 
     private mountLeft(): void {
         this.creationModes.hidden = !this.playground;
-        const examples = h('div', { class: 'examples-chips' }, STARTERS.map(s => {
-            const b = h('button', { type: 'button', class: 'chip', title: s.prompt }, s.label);
-            b.addEventListener('click', () => this.starter(s.prompt));
-            return b;
-        }));
+        const examples = h('div', { class: 'examples-chips' }, this.starterChips());
         this.forgeBtn.disabled = true;
         // On the agent path the creation view owns this button's press (creation-view.ts): Create world, Stop or Show it.
         this.forgeBtn.addEventListener('click', () => {
@@ -1229,6 +1358,119 @@ class Studio {
         void this.forge('mock');
     }
 
+    /**
+     * The starters' chips beside the idea (§9; Q122 (a), the user, 11-04: "all three, h1's kept too"; none over the empty
+     * stage since 11-04's presets). On the agent path, the worlds Meta's models made earlier come first (starters.ts), then
+     * h1's hand-written examples, which are the Playground's, but for h1's galaxy, which the spiral galaxy before it is
+     * (`?scene=galaxy` still opens it). h1's page keeps its own. Each chip says its source.
+     */
+    private starterChips(): HTMLButtonElement[] {
+        const agent = this.path.create === 'agent';
+        const made = agent ? STARTER_WORLDS.map(s => {
+            const b = h('button', { type: 'button', class: 'chip', title: `${s.title}. ${COPY.sourceTitle.archive}`, dataset: { source: 'archive', starter: s.id } }, s.label);
+            // A double click is one press: its second lands while the first is opening (gotchas).
+            b.addEventListener('click', e => {
+                if (e.detail > 1) return;
+                void this.openStarter(s);
+            });
+            return b;
+        }) : [];
+        const examples = STARTERS.filter(s => !agent || s.id !== 'galaxy').map(s => {
+            const b = h('button', { type: 'button', class: 'chip', title: s.prompt, dataset: { source: 'mock', example: s.id } }, s.label);
+            b.addEventListener('click', () => this.starter(s.prompt));
+            return b;
+        });
+        return [...made, ...examples];
+    }
+
+    /**
+     * A starter on the agent path (EA9.4, Q122 (a)): a world Meta's models made earlier, shipped with the page
+     * (public/worlds), read, sealed again by this host and compiled on this device (loop/replay.ts), then the stage's Run
+     * as for any world. The chip's press is the host's go for that one candidate (I5): no backend, no model call. It waits
+     * while a creation, an example's build or a Run is under way; a newer press supersedes it before its Run. The world on
+     * the stage stays until this one is installed, and whatever happens it says one sentence. While it is on its way, the
+     * world on the stage takes no paid change (paidBusy: its install would end a round, EA9.4's review).
+     */
+    private async openStarter(starter: StarterWorld): Promise<void> {
+        if (this.creation?.busy || this.busy || this.stage?.busy) return;
+        // No WebGPU here, or the device was lost: the stage already says so, and only another browser or a reload helps; a
+        // starter would wait for a stage that never comes, or say "try another one" over it (EA9.4's review).
+        if (this.noWebGpu || this.deviceLostNow) return;
+        const load = ++this.starterLoads;
+        this.starterOpening = load;
+        this.improveView?.render();
+        try {
+            await this.openingStarter(starter, load);
+        } finally {
+            if (this.starterOpening === load) {
+                this.starterOpening = null;
+                this.improveView?.render();
+            }
+        }
+    }
+
+    private async openingStarter(starter: StarterWorld, load: number): Promise<void> {
+        // Still this press's to finish: no newer press, and the device not lost meanwhile (its own sentence then stands).
+        const current = () => load === this.starterLoads && !this.deviceLostNow;
+        const step = this.trace.add(`A starter: ${starter.id}`, 'gate');
+        this.say(COPY.starter.opening(starter.title), 'busy');
+        const failed = (sentence: string, why: string) => {
+            if (!current()) return;
+            step.error(why);
+            console.warn(`Wexy: the starter ${starter.id} did not open: ${why}`);
+            this.say(sentence, 'error');
+        };
+        let opened: { snapshot: Sealed; compiled: readonly DeepReadonly<CompiledBody>[] };
+        try {
+            const { sealSaved, compileSaved } = await import('../../loop/replay');
+            const res = await fetch(starterFile(starter.id), { cache: 'no-cache' });
+            if (!res.ok) throw new Error(`${starterFile(starter.id)} answered ${res.status}`);
+            const sealed = await sealSaved(await res.text());
+            if (!sealed.ok) throw new Error(`the host does not seal it: ${sealed.reason}`);
+            await this.stageReady;
+            const compiler = this.deviceCompiler;
+            if (!compiler) throw new Error('no device compiler here');
+            const compiled = await compileSaved(sealed.replay.snapshot, compiler);
+            const refused = compiled.filter(c => !c.ok).map(c => c.module);
+            if (refused.length) throw new Error(`L3 refused ${refused.join(', ')} on this device`);
+            opened = { snapshot: sealed.replay.snapshot, compiled };
+        } catch (e) {
+            return failed(COPY.starter.unavailable, (e as Error)?.message ?? String(e));
+        }
+        if (!current()) return;
+        // A backdrop still loading is counted once it is on the viewport (§8 step 2): a Run waits for it, so this does.
+        if (this.backdrop) await this.backdrop.ready;
+        if (!current()) return;
+        const blocked = this.creation?.busy || this.busy ? 'a world is being made' : this.runBlocked();
+        if (blocked) return failed(COPY.starter.busy, `the stage is held: ${blocked}`);
+        // The idea box is left as the creator has it: a starter's own idea was a live creator's words (one names a game),
+        // and its title says what it is.
+        this.say(COPY.starter.testing, 'busy');
+        const summary = await this.runCandidate(opened.snapshot, opened.compiled, { kind: 'starter', title: starter.title, keyframes: [] });
+        if (!current()) return;
+        if (summary.status === 'installed') {
+            step.ok(`installed: ${starter.title}`, `id(C) ${opened.snapshot.id.slice(0, 12)}…`);
+            this.say(null);
+            this.nudgeRecord();
+            return;
+        }
+        // Stopped by a newer world's Run, or refused: the world on the stage stays, said once.
+        if (summary.status === 'stopped') {
+            step.warn(summary.reason ?? 'stopped');
+            this.say(null);
+            return;
+        }
+        // By the code the reason starts with, never its prose (G4's rule): too heavy for this device, or refused here.
+        const code = /^(EA_[A-Z_]+)/.exec(summary.reason ?? '')?.[1];
+        failed(code === 'EA_PROBE' || code === 'EA_ADMIT' ? COPY.starter.heavy : COPY.starter.refused, `${summary.status}: ${summary.reason ?? ''}`);
+    }
+
+    /** A starter's word over the stage (showMessage), its own, so a world reaching the stage clears it and no other's. */
+    private say(text: string | null, kind: 'busy' | 'error' = 'busy'): void {
+        this.starterSaid = text !== null;
+        this.showMessage(text, kind);
+    }
+
     /** The badge beside the idea: what the next Create does, then what the running world is. */
     private showSourceBadge(source: Source): void {
         this.sourceBadge.textContent = COPY.source[source];
@@ -1277,7 +1519,7 @@ class Studio {
         this.wgslView.setEditable(false);
         this.renderTargetTabs();
 
-        const head = h('header', { class: 'controls-head simple-only' }, h('h2', null, 'Shape it'), h('span', null, 'Changes show up instantly'));
+        const head = h('header', { class: 'controls-head simple-only' }, h('h2', null, 'Shape it'), this.controlsSub);
         $('#right').append(nav, head, h('div', { class: 'tab-panels' }, this.panels.director, this.panels.spec, this.panels.wgsl));
         this.selectTab('director');
         this.director.onChange = name => this.syncSpecFromRuntime(name);
@@ -1345,6 +1587,23 @@ class Studio {
         if (this.runtime && this.viewport) this.director.bind(this.runtime, this.viewport);
         else if (this.agentWorld) this.director.note(this.agentControlsNote());
         else this.director.clear();
+        this.showControls();
+    }
+
+    /**
+     * The right panel by H's kind (§9; EA9.4): an agent world's is its review in the creator's words (Q121: Looks right,
+     * Improve it), when the agent path mounted it; any other's the Director's (h1's sliders, or the empty panel's words).
+     * The Spec and WGSL tabs and "Check & hot-swap" are h1's (a SceneSpec, h1's hooks): shown for an h1 world only.
+     */
+    private showControls(): void {
+        const agent = this.world.kind === 'agent' && !!this.improveView;
+        this.director.el.hidden = agent;
+        if (this.improveView) this.improveView.el.hidden = !agent;
+        this.controlsSub.textContent = agent ? COPY.improve.sub : 'Changes show up instantly';
+        const h1 = this.world.kind !== 'agent';
+        this.tabs.spec.hidden = !h1;
+        this.tabs.wgsl.hidden = !h1;
+        if (!h1 && this.tabs.director.getAttribute('aria-selected') !== 'true') this.selectTab('director');
     }
 
     /** What the Controls panel says of an agent world, which has no sliders yet (Q85): plain words, or Developer view's. */
@@ -1370,6 +1629,10 @@ class Studio {
         // ?agent=1: never beside a Run, whose probe times the device and whose ledger would leave this build out; a Run
         // waits for an example's build the same way (stageHolders' `building`; EA9.3's review).
         if (this.stage?.busy) return;
+        // Nor beside the agent path's paid work, a creation or a round on the world on the stage (whose install this build
+        // would end, its spend lost), nor a starter on its way: the Playground's shortcut reaches here past its disabled
+        // button (EA9.4's review).
+        if (this.creation?.busy || this.reviews?.improving || this.starterOpening !== null) return;
         const prompt = this.prompt.value.trim();
         if (!prompt) { this.prompt.focus(); return; }
         const client = source === 'mock' || !this.live ? this.mock : this.live;
@@ -1665,14 +1928,15 @@ class Studio {
         this.draftSpec = structuredClone(spec);
         this.draftIsLive = true;
         this.editedTargets.clear();
+        // Its path first: playing needs one (setPlaying), and the world before may have left none (an agent world's).
+        this.rebuildPath();
         if (!keepCamera) {
             vp.setView(firstView(spec.camera.keyframes));
             vp.playhead = 0;
             this.setMode('path', true);
             this.setPlaying(true);
         }
-        this.rebuildPath();
-        this.timeline.setKeyframes(spec.camera.keyframes);
+        this.timeline.setKeyframes(spec.camera.keyframes, 1);
         this.director.bind(runtime, vp);
         this.renderSpec();
         this.syncTexts(spec);
@@ -1759,16 +2023,14 @@ class Studio {
     private setBusy(busy: boolean): void {
         this.busy = busy;
         this.accountControl?.setBusy(busy || !!this.creation?.busy);
-        if (this.path.create === 'agent') {
-            // The agent path's button is the creation view's: an example being built only blocks its Create.
-            this.renderCreate();
-        } else {
-            this.forgeBtn.disabled = busy || !this.viewport || !!this.accountControl?.changing;
-            this.forgeBtn.classList.toggle('is-busy', busy);
-            this.forgeBtn.querySelector('span')!.textContent = busy ? 'Creating…' : 'Create world';
-        }
+        // The button as renderCreate says it on either path: the agent path's is the creation view's (an example being built
+        // only blocks its Create); the Playground's says its own words, on h1's page too (EA9.4's drive: it read Create
+        // world with the Playground selected); h1's says Create world, or Creating… while it builds.
+        this.renderCreate();
         this.setBuilding(busy || !!this.creation?.busy);
         this.swapBtn.disabled = busy || !this.draftSpec || (this.editedTargets.size === 0 && this.draftIsLive);
+        // An example being built is another world on its way: the creator's panel offers no change meanwhile (paidBusy).
+        this.improveView?.render();
     }
 
     /** While the empty stage waits for a first world, its mark turns and the starters step aside. */
@@ -1922,8 +2184,11 @@ class Studio {
                 return;
             }
             if (isTyping() || e.ctrlKey || e.metaKey || e.altKey || this.exporter.el.open) return;
-            if (e.key === ' ' && this.runtime) { e.preventDefault(); this.setPlaying(!this.timeline.isPlaying); }
-            else if (e.key.toLowerCase() === 'k' && this.runtime) this.addKeyframe();
+            // Space and K work on H's keyframes, whatever its kind (§8 step 4; Q119 (a)): h1's in its spec, an agent
+            // world's the studio's own. Space never in place of a focused control's own (a button's press, a checkbox's
+            // toggle: EA9.4's E6, which EA-VR11 caught on the review's findings).
+            if (e.key === ' ' && this.keys && !isControl(e.target)) { e.preventDefault(); this.setPlaying(!this.timeline.isPlaying); }
+            else if (e.key.toLowerCase() === 'k' && this.keys) this.addKeyframe();
             else if (e.key.toLowerCase() === 'p' && (this.runtime || this.agentWorld)) void this.takeSnapshot();
             else if (e.key.toLowerCase() === 'r' && (this.runtime || this.agentWorld)) this.openExport();
             else if ((e.key === 'Delete' || e.key === 'Backspace') && this.selectedKey >= 0) this.removeKeyframe(this.selectedKey);
@@ -1940,10 +2205,33 @@ class Studio {
         this.rebuildPath();
     }
 
+    /**
+     * H's keyframes (§8 step 4; Q119 (a), EA9.4): h1's world's in its spec, an agent world's the studio's own; null with
+     * no world on the stage (the backdrop's camera is its own).
+     */
+    private get keys(): CameraKeyframe[] | null {
+        if (this.world.kind === 'legacy') return this.world.legacy.spec.camera.keyframes;
+        if (this.world.kind === 'agent') return this.world.agent.keyframes;
+        return null;
+    }
+
+    private setKeys(keys: CameraKeyframe[]): void {
+        if (this.world.kind === 'legacy') this.world.legacy.spec.camera.keyframes = keys;
+        else if (this.world.kind === 'agent') this.world.agent.keyframes = keys;
+    }
+
+    /** The fewest keyframes H keeps: h1's path needs one; an agent world may have none (it holds its framed view). */
+    private get fewestKeys(): number {
+        return this.world.kind === 'legacy' ? 1 : 0;
+    }
+
     private rebuildPath(): void {
-        if (!this.viewport || !this.spec) return;
-        this.viewport.path = cameraPath(this.spec.camera.keyframes, this.duration);
+        const keys = this.keys;
+        if (!this.viewport || !keys) return;
+        this.viewport.path = cameraPath(keys, this.duration);
         this.viewport.duration = this.duration;
+        // An agent world whose last keyframe went: no path to play, so the camera holds where it is, in free look.
+        if (!this.viewport.path && this.viewport.mode === 'path') this.setMode('orbit', true);
     }
 
     private seek(seconds: number): void {
@@ -1954,6 +2242,11 @@ class Studio {
 
     private setPlaying(playing: boolean): void {
         if (!this.viewport) return;
+        // Nothing to play without a path: an agent world with no keyframes holds its view (Q119 (a)).
+        if (playing && !this.viewport.path) {
+            this.timeline.setPlaying(false);
+            return;
+        }
         if (playing && this.viewport.mode !== 'path') this.setMode('path', true);
         this.viewport.playing = playing;
         this.timeline.setPlaying(playing);
@@ -1976,27 +2269,32 @@ class Studio {
     }
 
     private addKeyframe(): void {
-        const vp = this.viewport, spec = this.spec;
-        if (!vp || !spec) return;
+        const vp = this.viewport, current = this.keys;
+        if (!vp || !current) return;
         const t = vp.playhead / this.duration;
         const key = viewToKeyframe(vp.currentView(), t);
         // A key within ~2% of the playhead is replaced rather than stacked.
-        const keys = spec.camera.keyframes.filter(k => Math.abs(k.t - key.t) > 0.02);
+        const keys = current.filter(k => Math.abs(k.t - key.t) > 0.02);
+        // An agent world keeps at most AGENT_KEYFRAMES, its saved file's bound (wexy-world.v1): one more is said, not kept.
+        if (this.world.kind === 'agent' && keys.length >= AGENT_KEYFRAMES) {
+            this.showToast(COPY.save.viewsFull, null);
+            return;
+        }
         keys.push(key);
         keys.sort((a, b) => a.t - b.t);
-        spec.camera.keyframes = keys;
+        this.setKeys(keys);
         this.afterKeysChanged(keys.indexOf(key));
     }
 
     private removeKeyframe(index: number): void {
-        const spec = this.spec;
-        if (!spec || spec.camera.keyframes.length <= 1) return;
-        spec.camera.keyframes.splice(index, 1);
+        const keys = this.keys;
+        if (!keys || index < 0 || index >= keys.length || keys.length <= this.fewestKeys) return;
+        keys.splice(index, 1);
         this.afterKeysChanged(-1);
     }
 
     private selectKeyframe(index: number): void {
-        const vp = this.viewport, key = this.spec?.camera.keyframes[index];
+        const vp = this.viewport, key = this.keys?.[index];
         if (!vp || !key) return;
         this.selectedKey = index;
         this.timeline.select(index);
@@ -2007,9 +2305,11 @@ class Studio {
     private afterKeysChanged(selected: number): void {
         this.rebuildPath();
         this.selectedKey = selected;
-        this.timeline.setKeyframes(this.spec!.camera.keyframes);
+        this.timeline.setKeyframes(this.keys ?? [], this.fewestKeys);
         this.timeline.select(selected);
         this.renderSpec();
+        // An agent world's keyframes are part of what its save keeps (Q119; the platform companion §7): its save hears.
+        if (this.world.kind === 'agent') this.afterSwitch('its keyframes\' save', () => this.keyframesChanged());
     }
 
     /** Matches Viewport.frameAspect's containView: the guide is exactly the exported frame. */
@@ -2062,11 +2362,17 @@ class Studio {
         if (this.stage?.busy || this.busy) return;
         const world = this.agentWorld;
         if (world) {
-            // An agent world's film (EA5.5): from its time zero, with the camera where it is now (W has no path).
+            // An agent world's film (EA5.5): from its time zero, along its keyframes' path (Q119 (a), §8 step 7), or with
+            // none, with the camera where it is now.
             const film = this.agentFilmSource(world);
             if (!film) return;
+            this.setPlaying(false);
+            const keys = world.keyframes.map(k => ({ ...k, target: [k.target[0], k.target[1], k.target[2]] as CameraKeyframe['target'] }));
             const still = vp.currentView();
-            this.exporter.open({ viewport: vp, film, title: agentTitle(world), seconds: this.duration, format: this.format, pathFor: () => () => still });
+            this.exporter.open({
+                viewport: vp, film, title: agentTitle(world), seconds: this.duration, format: this.format,
+                pathFor: seconds => cameraPath(keys, seconds) ?? (() => still),
+            });
             return;
         }
         const rt = this.runtime, spec = this.spec;
@@ -2141,6 +2447,7 @@ class Studio {
     }
 
     private showNoWebGPU(reason: string): void {
+        this.noWebGpu = true;
         $('#gpu-pill').innerHTML = '<i class="bad"></i><span>No WebGPU</span>';
         this.empty.replaceChildren(h('div', { class: 'empty-card' },
             h('span', { class: 'empty-logo warn', html: icon('alert', 28) }),

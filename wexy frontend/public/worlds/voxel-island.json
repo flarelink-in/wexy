@@ -1,0 +1,103 @@
+{
+ "note": "A starter (EA9.4, Q122 (a)): a world Meta's models made earlier, replayed in the studio with no model call. Recorded by dev/starters.mjs from test/fixtures/live-candidates/block-film.json.",
+ "attempt": "starter-voxel-island",
+ "versions": {
+  "bundle": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+  "manifest": "3c7775588fb816ce8ccd3660e16d8ae6bfa9526f83174ecf666f8c66ab4c4c77",
+  "abi": "ea-abi.v2",
+  "checker": "ea4-body.v1"
+ },
+ "request": {
+  "prompt": "make minecraft 1870s film style",
+  "style": "auto",
+  "seconds": 15
+ },
+ "program": {
+  "nodes": [
+   {
+    "adapterId": "ng.buffer.storage",
+    "adapterVersion": 1,
+    "config": "{\"elements\":2048,\"layout\":\"instance14\",\"strideFloats\":14,\"pingPong\":false,\"init\":\"zero\"}",
+    "id": "blocks",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.geometry.primitive",
+    "adapterVersion": 1,
+    "config": "{\"shape\":\"cube\",\"size\":1,\"segments\":3}",
+    "id": "cube",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.material.stock",
+    "adapterVersion": 1,
+    "config": "{\"kind\":\"lambert\",\"baseColor\":[1,1,1,1]}",
+    "id": "clay",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.light.rig",
+    "adapterVersion": 1,
+    "config": "{\"ambient\":[0.3,0.27,0.22],\"directional\":{\"direction\":[0.3,-1,0.2],\"color\":[1,0.9,0.75],\"intensity\":2},\"points\":[]}",
+    "id": "sun",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.render.mesh_batch",
+    "adapterVersion": 1,
+    "config": "{\"maxInstances\":2048}",
+    "id": "terrain",
+    "inputs": [
+     {
+      "nodeId": "cube",
+      "output": "geometry",
+      "port": "geometry"
+     },
+     {
+      "nodeId": "clay",
+      "output": "material",
+      "port": "material"
+     },
+     {
+      "nodeId": "blocks",
+      "output": "buffer",
+      "port": "instances"
+     },
+     {
+      "nodeId": "sun",
+      "output": "lights",
+      "port": "lights"
+     }
+    ]
+   },
+   {
+    "adapterId": "ng.post.chain",
+    "adapterVersion": 1,
+    "config": "{\"effects\":[{\"effect\":\"ColorGrade\",\"intensity\":0.9},{\"effect\":\"Tonemap\",\"intensity\":0.8},{\"effect\":\"Vignette\",\"intensity\":0.9},{\"effect\":\"FilmGrain\",\"intensity\":1.2}]}",
+    "id": "film",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.compute.stage",
+    "adapterVersion": 1,
+    "config": "{\"module\":\"place\",\"entry\":\"placeBlocks\",\"workgroupSize\":64,\"invocations\":2048,\"phase\":\"init\"}",
+    "id": "place",
+    "inputs": [
+     {
+      "nodeId": "blocks",
+      "output": "buffer",
+      "port": "writes"
+     }
+    ]
+   }
+  ]
+ },
+ "modules": [
+  {
+   "module": "place",
+   "interfaceHash": "8a1c8dc2a92af868d94d8fdb09c149c7ed467dae35d156a9223aa6d1cbeff132",
+   "codeHash": "069e283aff7e1a311e906315e31d2d56633f693015abd8d64a9cbbd95be80847",
+   "body": "fn hash01(n: u32) -> f32 { let x = sin(f32(n) * 12.9898) * 43758.5453; return x - floor(x); }\nfn terrainH(ax: u32, az: u32) -> i32 { let xf = f32(ax) - 15.5; let zf = f32(az) - 15.5; let dd = sqrt(xf * xf + zf * zf) / 15.5; let hf = 1.0 + dd * dd * 3.0 + sin(f32(ax) * 0.7) * cos(f32(az) * 0.6) * 0.8 + sin(f32(ax) * 0.23 + 1.7) * cos(f32(az) * 0.31 + 0.5) * 1.0; var hi = i32(floor(hf)); if (hi < 0) { hi = 0; } if (hi > 4) { hi = 4; } return hi; }\nfn putBox(base: u32, px: f32, py: f32, pz: f32, sx: f32, sy: f32, sz: f32, cr: f32, cg: f32, cb: f32) { b_blocks[base + 0u] = 0.0; b_blocks[base + 1u] = px; b_blocks[base + 2u] = py; b_blocks[base + 3u] = pz; b_blocks[base + 4u] = 0.0; b_blocks[base + 5u] = 0.0; b_blocks[base + 6u] = 0.0; b_blocks[base + 7u] = 1.0; b_blocks[base + 8u] = sx; b_blocks[base + 9u] = sy; b_blocks[base + 10u] = sz; b_blocks[base + 11u] = cr; b_blocks[base + 12u] = cg; b_blocks[base + 13u] = cb; }\nfn placeBlocks(index: u32) {\nlet base = index * B_blocks_STRIDE;\nif (index < 1024u) {\nlet ix = index % 32u; let iz = index / 32u; let hh = terrainH(ix, iz);\nlet j = hash01(index * 3u + 11u); var cr = 0.30 + 0.10 * j; var cg = 0.50 + 0.12 * hash01(index * 7u + 5u); var cb = 0.20 + 0.08 * hash01(index * 5u + 3u);\nif (hh >= 4) { cr = 0.48 + 0.06 * j; cg = 0.46 + 0.06 * j; cb = 0.42 + 0.05 * j; }\nif (hh == 0) { cr = cr * 0.92; cg = cg * 0.95; }\nputBox(base, f32(ix) - 15.5, f32(hh), f32(iz) - 15.5, 1.0, 1.0, 1.0, cr, cg, cb);\n} else {\nlet slot = index - 1024u; let sx = slot % 32u; let sz = slot / 32u;\nif (sx >= 11u && sx < 21u && sz >= 11u && sz < 21u) {\nlet rr = (sx - 11u) + (sz - 11u) * 10u;\nif (rr < 78u) {\nlet tidx = rr / 13u; let part = rr % 13u;\nvar ax: u32 = 7u; var az: u32 = 9u;\nif (tidx == 1u) { ax = 23u; az = 10u; } else if (tidx == 2u) { ax = 9u; az = 23u; } else if (tidx == 3u) { ax = 21u; az = 21u; } else if (tidx == 4u) { ax = 14u; az = 8u; } else if (tidx == 5u) { ax = 25u; az = 24u; }\nlet ah = terrainH(ax, az); let bx = f32(ax) - 15.5; let bz = f32(az) - 15.5; let by = f32(ah);\nif (part < 3u) {\nputBox(base, bx, by + 1.0 + f32(part), bz, 0.55, 1.0, 0.55, 0.36, 0.23, 0.12);\n} else {\nvar ox: i32 = 0; var oy: i32 = 3; var oz: i32 = 0;\nif (part == 3u) { ox = 0; oy = 4; oz = 0; } else if (part == 4u) { ox = 1; oy = 3; oz = 0; } else if (part == 5u) { ox = -1; oy = 3; oz = 0; } else if (part == 6u) { ox = 0; oy = 3; oz = 1; } else if (part == 7u) { ox = 0; oy = 3; oz = -1; } else if (part == 8u) { ox = 1; oy = 3; oz = 1; } else if (part == 9u) { ox = -1; oy = 3; oz = -1; } else if (part == 10u) { ox = 1; oy = 3; oz = -1; } else if (part == 11u) { ox = -1; oy = 3; oz = 1; } else { ox = 1; oy = 4; oz = 0; }\nlet vj = hash01(rr * 13u + 77u);\nputBox(base, bx + f32(ox), by + f32(oy), bz + f32(oz), 1.0, 1.0, 1.0, 0.16 + 0.10 * vj, 0.36 + 0.12 * vj, 0.14 + 0.07 * vj);\n}\n} else {\nlet kk = rr - 78u; let rx: u32 = 26u + (kk % 3u); let rz: u32 = 13u + ((kk / 3u) % 7u); let rh = terrainH(rx, rz);\nlet sj = hash01(kk * 17u + 41u); let sc = 0.65 + 0.35 * sj;\nputBox(base, f32(rx) - 15.5, f32(rh) + 1.0, f32(rz) - 15.5, sc, sc, sc, 0.44 + 0.08 * sj, 0.42 + 0.07 * sj, 0.40 + 0.06 * sj);\n}\n} else {\nlet h2 = terrainH(sx, sz); let dj = hash01(slot * 11u + 9u);\nvar dr = 0.40 + 0.07 * dj; var dg = 0.29 + 0.05 * dj; var db = 0.17 + 0.04 * dj;\nif (h2 >= 3) { dr = 0.46 + 0.06 * dj; dg = 0.44 + 0.05 * dj; db = 0.41 + 0.05 * dj; }\nputBox(base, f32(sx) - 15.5, f32(h2) - 1.0, f32(sz) - 15.5, 1.0, 1.0, 1.0, dr, dg, db);\n}\n}\n}\n"
+  }
+ ]
+}
