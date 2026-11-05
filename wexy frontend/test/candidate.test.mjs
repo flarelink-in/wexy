@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { assembleModule, checkBody } from '../src/contract/adapters/bodies.ts';
 import { deriveInterfaces, invalidated } from '../src/contract/adapters/interfaces.ts';
 import { programHash, resolveProgram } from '../src/contract/adapters/resolve.ts';
@@ -237,7 +238,8 @@ test('EA-K3 P3, P7: each row of §8\'s routing goes to its scope; a clean candid
         assert.equal(c.previous, null);
         assert.equal(c.turnId, 'turn-1');
     }
-    assert.deepEqual(modules.calls.find(c => c.module.id === 'motion').nodes.map(n => n.id), ['instances', 'field', 'move']);
+    // A stage's slice carries the batch that draws what it writes, with its geometry and material (2026-11-05).
+    assert.deepEqual(modules.calls.find(c => c.module.id === 'motion').nodes.map(n => n.id), ['instances', 'field', 'move', 'cube', 'stone', 'blocks']);
     assert.deepEqual(modules.calls.find(c => c.module.id === 'water').nodes.map(n => n.id), ['cube', 'water']);
     // id(C), and the sealed snapshot EA5's authority will take.
     const ids = st.modules.map(m => [m.module, m.interfaceHash, m.codeHash]);
@@ -563,7 +565,7 @@ test('EA-K5 P5: each budget at B runs and at B+1 refuses before its call, the ou
     assert.deepEqual([repairs2.end.phase, repairs2.end.stop.diagnostic, repairs2.calls.filter(c => c.purpose === 'repair').length], ['exhausted', 'EA_TURN_BUDGET repairs: 2 of 2', 2]);
 });
 
-const AGENT_TURN = 'D:/orion-realms/wexy/wexy backend/forge-common/src/main/java/ai/wexy/common/AgentTurn.java';
+const AGENT_TURN = fileURLToPath(new URL('../../wexy backend/forge-common/src/main/java/ai/wexy/common/AgentTurn.java', import.meta.url));
 
 test('EA-K5b Q84 in both repositories: the backend holds a turn to Q_C\'s modules and paces the module route at its authors and repairs, when it is on this disk', { skip: !existsSync(AGENT_TURN) && 'the backend repository is not on this disk' }, () => {
     const java = readFileSync(AGENT_TURN, 'utf8');

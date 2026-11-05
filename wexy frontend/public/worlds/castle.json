@@ -3,7 +3,7 @@
  "attempt": "starter-castle",
  "versions": {
   "bundle": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
-  "manifest": "3c7775588fb816ce8ccd3660e16d8ae6bfa9526f83174ecf666f8c66ab4c4c77",
+  "manifest": "8bdd11e8ef2f0ced4b0cabbbac19ca4b6ff0df03fca2d56082005b05b1497220",
   "abi": "ea-abi.v2",
   "checker": "ea4-body.v1"
  },

@@ -30,7 +30,9 @@ import java.util.regex.Pattern;
  * <p>Everything is checked here, before any record or charge: the fields, exactly; the sizes (the request, the
  * interface, the previous body, the findings); the versions the browser was built against, which must be this
  * server's; R within the planner's caps and S against {@code agent-action.v3}; each supplied node against its adapter
- * on its own, since a slice of a program has inputs whose nodes were left out (the browser checks the whole program);
+ * on its own, since a slice of a program has inputs whose nodes were left out (the browser checks the whole program, and
+ * sends the module's node, the nodes wired to it and, for a compute stage, the batches that draw what it writes with
+ * their geometry and material);
  * exactly one of them owning the module, of the kind the interface says, naming the entries it says; and a repair's
  * previous body, whose hash must be its own. The server cannot derive the interface (only the browser has X), so the
  * interface is the client's data, quoted to the model as data; it can spend only the caller's own budget, and the
@@ -58,7 +60,12 @@ public record ModuleRequest(String turnId, String jobId, JsonNode subject, JsonN
     static final int MAX_INTERFACE_BYTES = 16_384;
     /** A body's characters, as the browser's dial counts them (`bodies.ts`, BODY_DIAL.maxChars). */
     public static final int MAX_BODY_CHARS = 48_000;
-    static final int MAX_NODES = 32;
+    /**
+     * A slice's nodes at most: a program's (2026-11-05). Since the browser sends a compute stage's batches with their
+     * geometry and material beside it, a slice can hold more of its program than the stage and its inputs; it is never
+     * more than the program, which {@link NodeCheck#MAX_NODES} bounds.
+     */
+    static final int MAX_NODES = NodeCheck.MAX_NODES;
     static final int MAX_FINDINGS = 32;
     static final int FINDING_CHARS = 400;
     static final int MAX_EVIDENCE_IDS = 32;

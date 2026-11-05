@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { checkGraph, MAX_FINDINGS } from '../src/contract/adapters/checks.ts';
 import { POLICY_V1 } from '../src/contract/adapters/graph.ts';
 import { ADAPTERS } from '../src/contract/adapters/index.ts';
@@ -216,7 +217,7 @@ test('EA-C9 layout: a copy into a batch\'s storage of another stride, or past it
 
 // --- EA-R: the recorded and the paper programs ---------------------------------------------------------------------
 
-const BACKEND_PLANS = 'D:/orion-realms/wexy/wexy backend/forge-service/src/test/resources/agent/plans';
+const BACKEND_PLANS = fileURLToPath(new URL('../../wexy backend/forge-service/src/test/resources/agent/plans', import.meta.url));
 
 /** The `program` event of a recorded turn: the backend's wire (v2), or EA2's v1 recording kept as an incompatible fixture. */
 function recordedProgram(name, folder = 'agent-wire') {

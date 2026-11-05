@@ -6,8 +6,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { canonicalJson } from '../src/contract/adapters/canonical.ts';
 import { ForgeError } from '../src/forge-client/errors.ts';
-import { parseWorld } from '../src/platform/artifact.ts';
+import { parseWorld, pinsOf } from '../src/platform/artifact.ts';
 import { openWorld } from '../src/platform/reopen.ts';
 import { createSaveController } from '../src/platform/save-controller.ts';
 import { createWorld, listWorlds, parseOperation, parseWorldView, readRevision } from '../src/platform/worlds.ts';
@@ -105,7 +106,10 @@ test('PL-FE10 a Live world installed while signed in is saved once, as the canon
     assert.deepEqual([r.method, r.path], ['POST', '/v1/worlds']);
     assert.deepEqual(Object.keys(r.body).sort(), ['artifact', 'sha256', 'title']);
     assert.equal(r.body.title, 'The castle');
-    assert.equal(r.body.artifact, CASTLE, 'the very text the corpus holds: canonical, the same bytes');
+    // The corpus castle as this build writes it: its own text, canonical, but for the pins, X and id(C) of the build that
+    // saves it, which a later contract change moves (2026-11-05, the ground shape).
+    const own = { ...JSON.parse(CASTLE), pins: pinsOf(SNAPSHOT), graph: SNAPSHOT.x.hash, candidate: SNAPSHOT.id };
+    assert.equal(r.body.artifact, canonicalJson(own), 'the very text the corpus holds, with this build\'s pins: canonical, the same bytes');
     assert.match(r.key, /^key-/);
     assert.deepEqual(h.saves.state(), { stage: 1, status: 'saved', worldId: WORLD, revisionId: REV[0], rowVersion: 0, detail: '' });
 });

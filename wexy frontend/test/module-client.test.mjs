@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { BODY_DIAL } from '../src/contract/adapters/bodies.ts';
 import { deriveInterfaces } from '../src/contract/adapters/interfaces.ts';
 import { resolveProgram } from '../src/contract/adapters/resolve.ts';
@@ -20,7 +21,7 @@ import {
 } from '../src/forge-client/module-client.ts';
 import { MODULE_STREAM_LIMITS, ModuleStreamError, readModuleStream } from '../src/forge-client/module-stream.ts';
 
-const BACKEND = 'D:/orion-realms/wexy/wexy backend/forge-service/src';
+const BACKEND = fileURLToPath(new URL('../../wexy backend/forge-service/src', import.meta.url));
 const onDisk = { skip: !existsSync(BACKEND) && 'the backend repository is not on this disk' };
 const enc = new TextEncoder();
 const sha = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
@@ -81,7 +82,7 @@ test('EA-W11 every recorded way a module call ends reads to its outcome: the who
     assert.deepEqual(author.seen.filter(e => e.type === 'delta').map(e => e.chars), [deltas[0].length, deltas[0].length + deltas[1].length, deltas.join('').length]);
     const meta = author.outcome.meta;
     assert.deepEqual({ ...meta, subject: { ...meta.subject }, versions: { ...meta.versions } }, {
-        ...JOB, generationId: 'gen-1', model: 'm-1', source: 'live', role: 'module', promptVersion: 'module.author.v3',
+        ...JOB, generationId: 'gen-1', model: 'm-1', source: 'live', role: 'module', promptVersion: 'module.author.v4',
     });
     assert.ok(Object.isFrozen(author.outcome) && Object.isFrozen(meta) && Object.isFrozen(meta.subject), 'what was checked cannot change after');
 
@@ -299,13 +300,44 @@ test('EA-W16 the wire\'s helpers: this build\'s pins, the interface\'s projectio
     const place = d.interfaces.find(i => i.module === 'place');
     const fixture = JSON.parse(readFileSync(join(BACKEND, 'test/resources/agent/module/place.json'), 'utf8'));
     assert.deepEqual(wireInterface(place), fixture.interface, 'the projection the backend\'s tests send');
-    // The node that names the module and the nodes wired to it, in program order; never the rest of the program.
-    assert.deepEqual(moduleNodes(program, 'place').map(n => n.id), program.nodes.filter(n => n.id === 'place' || n.id === 'blocks').map(n => n.id));
+    // The node that names the module, the nodes wired to it, and the batch that draws what it writes with that batch's
+    // geometry and material (2026-11-05), in program order; never the rest (the rig, the post chain). The backend's
+    // ModuleRoutesTest sends exactly this slice.
+    assert.deepEqual(moduleNodes(program, 'place').map(n => n.id), ['blocks', 'cube', 'clay', 'terrain', 'place']);
+    const java = readFileSync(join(BACKEND, 'test/java/ai/wexy/forge/agent/ModuleRoutesTest.java'), 'utf8');
+    assert.match(java, /Set\.of\("place", "blocks", "terrain", "cube", "clay"\)/, 'the backend\'s request carries the same slice');
     assert.deepEqual(moduleNodes(program, 'place').find(n => n.id === 'place'), program.nodes.find(n => n.id === 'place'));
     assert.throws(() => moduleNodes(program, 'nowhere'), /no node nowhere/);
     // cappedPrevious keeps what is within the caps as it is.
     const small = { body: 'b', codeHash: 'h', evidenceIds: ['ev-1'], findings: [{ id: 'ev-1.f1', rung: 'L1', code: 'call', path: null, line: 6, severity: 'error', message: 'calls noise2' }] };
     assert.deepEqual(cappedPrevious(small), small);
+});
+
+test('EA-W16b a compute stage\'s slice carries every batch drawing a buffer it writes, with its geometry and material; other owners keep their own', () => {
+    const n = (id, adapterId, inputs = []) => ({ id, adapterId, adapterVersion: 1, config: '{}', inputs: inputs.map(([port, nodeId, output]) => ({ port, nodeId, output })) });
+    const program = {
+        nodes: [
+            n('floor', 'ng.buffer.storage'), n('dust', 'ng.buffer.storage'), n('seen', 'ng.buffer.storage'),
+            n('groundgeo', 'ng.geometry.primitive'), n('rockgeo', 'ng.geometry.primitive'), n('mud', 'ng.material.stock'), n('sun', 'ng.light.rig'),
+            n('place', 'ng.compute.stage', [['writes', 'floor', 'buffer'], ['writes', 'dust', 'buffer'], ['reads', 'seen', 'buffer']]),
+            n('floorbatch', 'ng.render.mesh_batch', [['geometry', 'groundgeo', 'geometry'], ['material', 'mud', 'material'], ['instances', 'floor', 'buffer'], ['lights', 'sun', 'lights']]),
+            n('dustbatch', 'ng.render.custom_batch', [['geometry', 'rockgeo', 'geometry'], ['instances', 'dust', 'buffer']]),
+            n('seenbatch', 'ng.render.mesh_batch', [['geometry', 'rockgeo', 'geometry'], ['material', 'mud', 'material'], ['instances', 'seen', 'buffer']]),
+            n('sky', 'ng.render.fullscreen', [['reads', 'dust', 'buffer']]),
+            n('film', 'ng.post.chain'),
+        ],
+    };
+    const ids = owner => moduleNodes(program, owner).map(x => x.id);
+    // Both buffers it writes are drawn: each batch with its geometry and material, in program order. A buffer it only
+    // reads brings no batch, the lights are not the module's, and the backdrop reading `dust` draws no instance of it.
+    assert.deepEqual(ids('place'), ['floor', 'dust', 'seen', 'groundgeo', 'rockgeo', 'mud', 'place', 'floorbatch', 'dustbatch']);
+    // A custom batch's slice is its own node and its inputs, as before: its geometry is one of them.
+    assert.deepEqual(ids('dustbatch'), ['dust', 'rockgeo', 'dustbatch']);
+    assert.deepEqual(ids('sky'), ['dust', 'sky']);
+    // The slice copies: nothing it holds is the program's own object.
+    const slice = moduleNodes(program, 'place');
+    slice[0].inputs.push({ port: 'x', nodeId: 'y', output: 'z' });
+    assert.deepEqual(program.nodes[0].inputs, []);
 });
 
 test('EA-W17 a repair\'s findings past the backend\'s 32 keep a revision\'s note and say how many were cut (the outside review of EA6.3)', () => {

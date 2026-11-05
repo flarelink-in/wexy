@@ -1,5 +1,5 @@
 {
-  "note": "A coverage world of 2026-11-02 (EA-G1, option B): written by hand, not by the model, so that EA-G1 runs every primitive shape (the curved at 128 segments, 32-bit indices) lit by a full rig (4 points, a directional, ambient).",
+  "note": "A coverage world of 2026-11-02 (EA-G1, option B): written by hand, not by the model, so that EA-G1 runs every primitive shape (the curved at 128 segments, 32-bit indices) lit by a full rig (4 points, a directional, ambient). The host's ground (2026-11-05) at 128 cells a side, the largest primitive (16,641 vertices, 98,304 indices).",
   "program": {
     "nodes": [
       {
@@ -122,6 +122,41 @@
           {
             "port": "geometry",
             "nodeId": "planegeo",
+            "output": "geometry"
+          },
+          {
+            "port": "material",
+            "nodeId": "stone",
+            "output": "material"
+          },
+          {
+            "port": "instances",
+            "nodeId": "cells",
+            "output": "buffer"
+          },
+          {
+            "port": "lights",
+            "nodeId": "rig",
+            "output": "lights"
+          }
+        ]
+      },
+      {
+        "id": "groundgeo",
+        "adapterId": "ng.geometry.primitive",
+        "adapterVersion": 1,
+        "config": "{\"shape\":\"ground\",\"size\":0.7,\"segments\":128}",
+        "inputs": []
+      },
+      {
+        "id": "groundbatch",
+        "adapterId": "ng.render.mesh_batch",
+        "adapterVersion": 1,
+        "config": "{\"maxInstances\":16}",
+        "inputs": [
+          {
+            "port": "geometry",
+            "nodeId": "groundgeo",
             "output": "geometry"
           },
           {

@@ -11,6 +11,7 @@
 
 import type { BufferLayout, CheckedNode, ResolveCode } from './index';
 import type { ObjectKind, OperationKind, Phase, Retention, StaticPolicy, XAccess, XModuleRequest, XObject, XOperation, XResource, XWork } from './graph';
+import { GROUND_FACTORY, groundCounts } from './ground';
 
 /** What a node's output hands the nodes wired to it. */
 export type Produced =
@@ -249,11 +250,12 @@ function computeStage(ctx: Context): Contribution | Refusal {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// ng.geometry.primitive: one of Primitives' thirteen shapes in StandardLayout (position, normal, uv: 8 floats, 32
-// bytes a vertex), uploaded by Geometry.upload through BufferManager: the vertex buffer its exact bytes, the index
-// buffer rounded up to 4 (createIndexBuffer). Caller-supplied geometry is the host's to destroy (NullGraph.destroy).
+// ng.geometry.primitive: one of Primitives' thirteen shapes, or the host's ground (ground.ts), in StandardLayout
+// (position, normal, uv: 8 floats, 32 bytes a vertex), uploaded by Geometry.upload through BufferManager: the vertex
+// buffer its exact bytes, the index buffer rounded up to 4 (createIndexBuffer). Caller-supplied geometry is the host's to
+// destroy (NullGraph.destroy).
 
-/** A Primitives call under this adapter's mapping of {shape, size, segments}, and its exact counts. */
+/** A Primitives call (or the host's ground) under this adapter's mapping of {shape, size, segments}, and its exact counts. */
 export interface PrimitiveCall {
     factory: string;
     params: number[];
@@ -263,8 +265,9 @@ export interface PrimitiveCall {
 }
 
 /**
- * `size` is the shape's extent; `segments` its radial count, the other counts derived from it. The counts are
- * Primitives' own, pinned for every shape and every segments from 3 to 128 against the engine (EA-X3).
+ * `size` is the shape's extent; `segments` a round shape's radial count, the other counts derived from it, and the
+ * ground's cells a side. The counts are Primitives' own, pinned for every shape and every segments from 3 to 128 against
+ * the engine, and the ground's against ground.ts (EA-X3).
  */
 export function primitive(shape: string, size: number, segments: number): PrimitiveCall {
     const s = segments;
@@ -273,6 +276,7 @@ export function primitive(shape: string, size: number, segments: number): Primit
         case 'cube': return { factory: 'createCube', params: [size, size, size], vertices: 24, indices: 36, indexBytes: 2 };
         case 'octahedron': return { factory: 'createOctahedron', params: [size, size, size], vertices: 24, indices: 24, indexBytes: 2 };
         case 'plane': return { factory: 'createPlane', params: [size, size], vertices: 8, indices: 12, indexBytes: 2 };
+        case 'ground': return { factory: GROUND_FACTORY, params: [size, s], ...groundCounts(s) };
         case 'pyramid': return { factory: 'createPyramid', params: [size, size, size], vertices: 16, indices: 18, indexBytes: 2 };
         case 'icosahedron': return { factory: 'createIcosahedron', params: [size / 2], vertices: 60, indices: 60, indexBytes: 2 };
         case 'dodecahedron': return { factory: 'createDodecahedron', params: [size / 2], vertices: 108, indices: 108, indexBytes: 2 };

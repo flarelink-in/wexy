@@ -5,11 +5,12 @@
 // forwards anything. A call is never retried or replayed once it may have started (the design §8): every other refusal
 // or failure is the candidate machine's to route.
 //
-// The request is built from what the browser holds: R and S as the turn handed them off, the module's node and the
-// nodes wired to it (a slice, which the server checks node by node, not the whole program), the interface's whole hashed
-// ABI projection, and for a repair the previous body exactly as it was judged, its findings capped as the server caps
-// them. An author may carry a program revision's note to its module (EA6.3, the visual-review design §8.2), written
-// with it once; a repair's note is one of its findings, so a repair's `note` is null.
+// The request is built from what the browser holds: R and S as the turn handed them off, the module's node, the nodes
+// wired to it and, for a compute stage, the batches that draw what it writes with their geometry and material (a slice,
+// which the server checks node by node, not the whole program), the interface's whole hashed ABI projection, and for a
+// repair the previous body exactly as it was judged, its findings capped as the server caps them. An author may carry a
+// program revision's note to its module (EA6.3, the visual-review design §8.2), written with it once; a repair's note
+// is one of its findings, so a repair's `note` is null.
 
 import { ADAPTER_MANIFEST_HASH, type AdapterNode } from '../contract/adapters';
 import { BODY_CHECKER } from '../contract/adapters/bodies';
@@ -108,14 +109,25 @@ export function wireInterface(iface: DeepReadonly<ModuleInterface>): WireInterfa
 }
 
 /**
- * The nodes a module call carries: the node that names the module and the nodes wired to it, in program order (the
- * design §5). The server checks each on its own, so the slice's other inputs are not dangling.
+ * The nodes a module call carries, in program order (the design §5): the node that names the module and the nodes wired
+ * to it; for a compute stage, also each batch whose instances are a buffer the stage writes, with that batch's geometry
+ * and material. The code that writes an instance's position, rotation, scale and color must know the shape it places,
+ * its size and which way it faces (the plane analysis of 2026-11-05: a stage that could not see its batch stood a floor
+ * upright). The server checks each node on its own, so the slice's other inputs are not dangling.
  */
 export function moduleNodes(program: DeepReadonly<WorldProgram>, owner: string): AdapterNode[] {
     const own = program.nodes.find(n => n.id === owner);
     if (!own) throw new Error(`module call: no node ${owner} in the program`);
-    const wired = new Set(own.inputs.map(i => i.nodeId));
-    return program.nodes.filter(n => n.id === owner || wired.has(n.id))
+    const kept = new Set([owner, ...own.inputs.map(i => i.nodeId)]);
+    if (own.adapterId === 'ng.compute.stage') {
+        const written = new Set(own.inputs.filter(i => i.port === 'writes').map(i => i.nodeId));
+        for (const n of program.nodes) {
+            if (!n.inputs.some(i => i.port === 'instances' && written.has(i.nodeId))) continue;
+            kept.add(n.id);
+            for (const i of n.inputs) if (i.port === 'geometry' || i.port === 'material') kept.add(i.nodeId);
+        }
+    }
+    return program.nodes.filter(n => kept.has(n.id))
         .map(n => ({ id: n.id, adapterId: n.adapterId, adapterVersion: n.adapterVersion, config: n.config, inputs: n.inputs.map(i => ({ ...i })) }));
 }
 

@@ -32,7 +32,7 @@ import java.util.Set;
 public final class AdapterManifest {
 
     /** sha256 of descriptors.json with LF line ends; the frontend's EA-A1 pins the same (10-31, after Q80's gates). */
-    public static final String HASH = "3c7775588fb816ce8ccd3660e16d8ae6bfa9526f83174ecf666f8c66ab4c4c77";
+    public static final String HASH = "8bdd11e8ef2f0ced4b0cabbbac19ca4b6ff0df03fca2d56082005b05b1497220";
 
     static final Set<String> PORT_KINDS = Set.of("storage_buffer", "geometry", "material", "lights", "color", "stage");
     /** What the strict subset uses: the frontend's {@code contract/agent} validator implements exactly these. */

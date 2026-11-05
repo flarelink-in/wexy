@@ -169,18 +169,26 @@ class AgentLoopTest {
     /**
      * Q84 revised (2026-11-02): the model reads the module budget the program check holds it to, from the one constant.
      * agent.v6 (EA6.3; Q105): the notes a revision may write, within the schema's cap, and that a primitive's size and an
-     * instance's scale multiply (the castle's hill: size 26 at scale 18 by 4 by 18).
+     * instance's scale multiply (the castle's hill: size 26 at scale 18 by 4 by 18). agent.v7 (2026-11-05, the plane
+     * analysis): which way each shape faces with no rotation, a floor as a ground and never a plane, scale before
+     * rotation, the color rule and the camera's reach; the manifest it quotes names the ground.
      */
     @Test
-    void theAgentTemplateStatesTheModuleBudgetTheNotesAndTheScaleRule() {
+    void theAgentTemplateStatesTheModuleBudgetTheNotesTheScaleRuleAndWhichWayEachShapeFaces() {
         var prompt = PROMPTS.agent(REQUEST.prompt(), REQUEST.style(), REQUEST.seconds(), "6 model calls in all.");
-        assertThat(prompt.templateId()).isEqualTo("agent.v6");
+        assertThat(prompt.templateId()).isEqualTo("agent.v7");
         assertThat(prompt.system()).contains("- A program names at most " + ai.wexy.common.AgentTurn.MAX_MODULES + " modules: one world builds no more.")
                 .contains("- A program names at most 12 modules:");
         int cap = SCHEMAS.schema(JsonSchemas.AGENT_ACTION).at("/properties/revision/anyOf/0/properties/moduleRepairs/maxItems").asInt();
         assertThat(prompt.system()).contains("revision.moduleRepairs").contains("and at most " + cap + " in all.")
                 .contains("A primitive's size and an instance's scale multiply")
                 .contains("Give a primitive that a batch draws size 1, and give each instance its\n  size in world units as its scale");
+        assertThat(prompt.system()).contains("- Y is up. With no rotation, ground lies flat on XZ facing up; plane and ring stand upright in XY")
+                .contains("A floor, the\n  ground or water is a ground, never a plane")
+                .contains("Scale applies in the shape's own axes before its rotation")
+                .contains("so an instance whose color is left at zero draws black; pbr ignores it")
+                .contains("- The host's camera sees 200 units")
+                .contains("or ground, which the host builds as a Geometry");
         // The browser's two findings of its own (the independent review of EA6.3), as it names them.
         assertThat(prompt.system()).contains("A finding coded EA_NOTE_SET_ASIDE is a note an earlier revision wrote")
                 .contains("A finding coded EA_REPAIR_BUDGET says how many notes can still be answered");

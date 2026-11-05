@@ -57,7 +57,7 @@ export interface EnginePort {
     useComputeGroup(stage: Handle, group: number, bindGroup: Handle): void;
     removeComputeStage(stage: Handle): void;
 
-    /** A primitive of null-graph's Primitives in StandardLayout, uploaded. */
+    /** A primitive of null-graph's Primitives, or the host's ground (GROUND_FACTORY), in StandardLayout, uploaded. */
     primitive(factory: string, params: readonly number[]): Handle;
     destroyGeometry(geometry: Handle): void;
     material(className: string, options: Readonly<Record<string, unknown>>): Handle;

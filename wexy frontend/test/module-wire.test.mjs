@@ -17,7 +17,7 @@ import { AGENT_ACTION_VERSION } from '../src/contract/agent/index.ts';
 import { unfence } from '../src/contract/unfence.ts';
 import { ENGINE_BUNDLE_HASH } from '../src/forge-client/agent-client.ts';
 
-const BACKEND = 'D:/orion-realms/wexy/wexy backend/forge-service/src';
+const BACKEND = fileURLToPath(new URL('../../wexy backend/forge-service/src', import.meta.url));
 const FIXTURES = fileURLToPath(new URL('./fixtures/module-wire/', import.meta.url));
 const lf = (s) => s.replace(/\r\n/g, '\n');
 const sha = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
