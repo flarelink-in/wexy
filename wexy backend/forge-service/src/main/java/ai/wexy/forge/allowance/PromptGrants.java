@@ -176,21 +176,43 @@ public class PromptGrants {
             if (grantId == null) {
                 return GrantStore.Join.NONE;
             }
-            long limit = switch (kind) {
-                case DIRECTOR -> properties.directorTurns();
-                case REVISION -> properties.revisions();
-                case MODULE -> properties.moduleCalls();
-                case AUTHOR -> properties.authorCalls();
-                case REPAIR -> properties.repairCalls();
-                case REPLAN -> properties.replans();
-                case REVIEW -> properties.reviewCalls();
-            };
-            GrantStore.Join join = store.join(GRANT + grantId, owner, kind.field, limit, promptHash, newId == null ? null : INDEX + newId, grantId);
+            GrantStore.Join join = store.join(GRANT + grantId, owner, kind.field, limit(kind), promptHash, newId == null ? null : INDEX + newId, grantId);
             log.info("allowance.follow-up kind={} grant={} {}", kind.field, grantId, join.name().toLowerCase());
             return join;
         } catch (RuntimeException e) {
             throw unavailable(e);
         }
+    }
+
+    /**
+     * Whether a `kind` follow-up of `namedId` would run inside its prompt now ({@link #join} would answer true), writing
+     * nothing (the EA9.4 review, its mid): a revision asks it before its costly screening, so a caller who may not revise
+     * spends none, and joins only after, atomically. {@code 503 unavailable} when the store cannot answer.
+     */
+    public boolean canJoin(Caller caller, String namedId, Kind kind, String promptHash) {
+        String owner = uidKey.of(caller.uid());
+        if (owner == null || namedId == null) {
+            return false;
+        }
+        try {
+            String grantId = store.lookup(INDEX + namedId);
+            return grantId != null && store.probe(GRANT + grantId, owner, kind.field, limit(kind), promptHash) == GrantStore.Join.JOINED;
+        } catch (RuntimeException e) {
+            throw unavailable(e);
+        }
+    }
+
+    /** How many follow-ups of `kind` one prompt covers. */
+    private long limit(Kind kind) {
+        return switch (kind) {
+            case DIRECTOR -> properties.directorTurns();
+            case REVISION -> properties.revisions();
+            case MODULE -> properties.moduleCalls();
+            case AUTHOR -> properties.authorCalls();
+            case REPAIR -> properties.repairCalls();
+            case REPLAN -> properties.replans();
+            case REVIEW -> properties.reviewCalls();
+        };
     }
 
     /**

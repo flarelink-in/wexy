@@ -61,6 +61,17 @@ class RedisGrantStore implements GrantStore {
             + "return 'JOINED'\n",
             String.class);
 
+    /** {@link #JOIN}'s checks alone, in the same order, writing nothing. KEYS: the grant's record. ARGV: as JOIN's first four. */
+    static final RedisScript<String> PROBE = new DefaultRedisScript<>(
+            "local record = KEYS[1]\n"
+            + "if redis.call('EXISTS', record) == 0 then return 'NONE' end\n"
+            + "if redis.call('HGET', record, 'owner') ~= ARGV[1] then return 'NONE' end\n"
+            + "if ARGV[4] ~= '' and redis.call('HGET', record, 'prompt') ~= ARGV[4] then return 'NONE' end\n"
+            + "local used = tonumber(redis.call('HGET', record, ARGV[2]) or '0')\n"
+            + "if used >= tonumber(ARGV[3]) then return 'FULL' end\n"
+            + "return 'JOINED'\n",
+            String.class);
+
     /** KEYS: the grant's record. */
     static final RedisScript<String> DISPATCHED = new DefaultRedisScript<>(
             "if redis.call('EXISTS', KEYS[1]) == 0 then return 'GONE' end\n"
@@ -148,6 +159,15 @@ class RedisGrantStore implements GrantStore {
                 owner, field, Long.toString(limit), prompt == null ? "" : prompt, grantId, newIndexKey == null ? "0" : "1");
         if (reply == null) {
             throw new IllegalStateException("The join script answered nothing.");
+        }
+        return Join.valueOf(reply);
+    }
+
+    @Override
+    public Join probe(String grantKey, String owner, String field, long limit, String prompt) {
+        String reply = redis().execute(PROBE, List.of(grantKey), owner, field, Long.toString(limit), prompt == null ? "" : prompt);
+        if (reply == null) {
+            throw new IllegalStateException("The probe script answered nothing.");
         }
         return Join.valueOf(reply);
     }

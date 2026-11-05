@@ -56,7 +56,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * charge (the caller's allowance, the idea's content safety, one grant: {@link PromptAdmission}); a revision naming its
  * turn ({@code base.turnId}) runs inside that turn's prompt when the caller has it, a revision is left and the prompt is
  * the same, and is an entry otherwise. The grant is spent at the turn's first word, its first allowed charge, and given
- * back when the turn never spoke.
+ * back when the turn never spoke. A revision's base words (its findings, whatever they are called, its design and its
+ * program) pass content safety first, before it is joined or granted (EA9.4: a creator's "Improve it" rides there).
  */
 @Component
 public class AgentHandler {
@@ -100,7 +101,7 @@ public class AgentHandler {
                     // meanwhile gets nothing, and its grant goes back (PromptAdmission.offLoop).
                     return PromptAdmission.offLoop(() -> base == null
                                     ? admission.entry(caller, turnId, turn.prompt(), "turn")
-                                    : admission.revision(caller, base.turnId(), turnId, turn.prompt()))
+                                    : admission.revision(caller, base.turnId(), turnId, turn.prompt(), base.creatorWords(), base.worldWords()))
                             .flatMap(grant -> start(caller, body, turn, base, turnId, grant.orElse(null)));
                 });
     }

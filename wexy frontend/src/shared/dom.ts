@@ -32,6 +32,19 @@ export function $(selector: string, root: ParentNode = document): HTMLElement {
     return el;
 }
 
+/**
+ * True when `target` is, or is inside, a control that answers Space or Enter itself (a button, a checkbox, a link, a
+ * tab): a page-wide shortcut on those keys must leave it its own press (EA9.4: the studio's Space, which plays the camera
+ * move, had taken the review's checkboxes' Space). A slider answers its arrows, never Space, so it is none: the page's
+ * Space plays over the timeline's track or a range, as it did before (EA9.4's review).
+ */
+export function isControl(target: EventTarget | null): boolean {
+    const el = target as HTMLElement | null;
+    if (!el || typeof el.closest !== 'function') return false;
+    const control = el.closest('button, a[href], input, select, textarea, summary, [contenteditable="true"], [role="button"], [role="checkbox"], [role="radio"], [role="switch"], [role="tab"], [role="menuitem"], [role="option"]');
+    return control !== null && !control.matches('input[type="range"]');
+}
+
 /** True while focus is in a text field, so single-key shortcuts leave typing alone. */
 export function isTyping(): boolean {
     const el = document.activeElement as HTMLElement | null;

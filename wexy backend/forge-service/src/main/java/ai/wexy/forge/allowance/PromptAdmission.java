@@ -13,10 +13,13 @@ import reactor.core.scheduler.Schedulers;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Pattern;
 
 /**
  * What a request must pass before forge records or charges anything (W1; the creations platform design §11, I6, I11,
@@ -44,14 +47,50 @@ public class PromptAdmission {
         return grants.grant(caller, entryId, sha256(text));
     }
 
+    /** A creator's words refused (a revision's findings): theirs to say another way. */
+    static final String WORDS_REFUSED = "These words can't be used here. Try saying the change another way.";
+    /**
+     * A world's own words refused (a revision's design or program): rephrasing an "Improve it" would not help, so it
+     * travels as its own code, {@code world-refused}, for the studio to offer a new idea (the second EA9.4 review).
+     */
+    static final String WORLD_REFUSED = "This world can't be changed here. Try a different idea.";
+
     /**
      * A turn that revises the one its base names: inside that turn's prompt (null) when the caller has it, a revision is
      * left (three, the candidate's Q_C), and it carries the same prompt, which was checked when it was granted; an entry
      * otherwise.
+     *
+     * <p>Its base's words are screened (EA9.4; the frontend's agent-first studio design §12): every finding's text,
+     * whatever it is called, the design's and the program's ({@code AgentBase.words()}). A creator's "Improve it" rides
+     * there, and a client may send anything there, so they are screened as an idea is, before a revision is joined or
+     * granted and before any model call. A refusal spends nothing: no revision is counted, no prompt granted. No verdict,
+     * no revision.
+     *
+     * <p>Who may revise is read first, writing nothing (the EA9.4 review, its mid): a caller who can neither join the named
+     * turn's prompt nor make an entry is refused as an entry is, at once, so no safety call is spent on a base it could
+     * never send, and it hears the allowance's words, not a safety outage's. The join stays after the screening, atomic,
+     * so a refused base spends no revision; a join lost to a concurrent one meanwhile is an entry, checked again.
+     *
+     * <p>The order (the second EA9.4 review): an entry's idea first, one short call, so an unsafe idea spends none of the
+     * base's; then the creator's words, refused in the creator's terms; then the world's (its design and program),
+     * refused as a world that cannot be changed.
      */
-    public Grant revision(Caller caller, String namedTurnId, String turnId, String prompt) {
-        if (namedTurnId != null && grants.join(caller, namedTurnId, PromptGrants.Kind.REVISION, sha256(prompt), turnId)) {
+    public Grant revision(Caller caller, String namedTurnId, String turnId, String prompt, List<String> creatorWords,
+                          List<String> worldWords) {
+        String hash = sha256(prompt);
+        boolean joinable = namedTurnId != null && grants.canJoin(caller, namedTurnId, PromptGrants.Kind.REVISION, hash);
+        if (!joinable) {
+            grants.check(caller);
+            checkSafety(prompt, "turn");
+        }
+        checkSafety(creatorWords, "revision", ErrorCode.CONTENT_REFUSED, WORDS_REFUSED);
+        checkSafety(worldWords, "revision", ErrorCode.WORLD_REFUSED, WORLD_REFUSED);
+        if (joinable && grants.join(caller, namedTurnId, PromptGrants.Kind.REVISION, hash, turnId)) {
             return null;
+        }
+        if (!joinable) {
+            // Its idea and its base screened above: the grant alone is left.
+            return grants.grant(caller, turnId, hash);
         }
         return entry(caller, turnId, prompt, "turn");
     }
@@ -157,13 +196,126 @@ public class PromptAdmission {
                         Schedulers.boundedElastic().schedule(((Grant) grant)::release)));
     }
 
+    /** One text (an idea, a Director turn), with its joined words spelled out where it has any (the EA9.4 review). */
     private void checkSafety(String text, String route) {
-        ContentSafety.Verdict verdict = safety.check(text);
+        String spelled = JOINED.matcher(text).find() ? spelledOut(text) : "";
+        ContentSafety.Verdict verdict = safety.check(spelled.isEmpty() || spelled.equals(text) ? text : text + "\n" + spelled);
         if (!verdict.allowed()) {
             // Categories and severities only: never the text (§13).
             log.info("safety.refused route={} categories={}", route, verdict.shown());
             throw new ForgeException(ErrorCode.CONTENT_REFUSED, "This idea can't be made here. Try a different one.");
         }
+    }
+
+    /**
+     * Content safety over `words` (a revision's base, EA9.4), one a line, each joined one spelled out on the next (the
+     * second EA9.4 review), in pieces of at most {@link #SAFETY_CHARS} characters, Azure's cap on one text, each reading
+     * {@link #SAFETY_OVERLAP} of the one before again. Any piece refused refuses them all, as `code` with `refused`'s
+     * words; a piece with no verdict is {@code 503}, as for an idea. Nothing to check is nothing refused.
+     */
+    private void checkSafety(List<String> words, String route, ErrorCode code, String refused) {
+        for (String piece : pieces(withSpelled(words), SAFETY_CHARS, SAFETY_OVERLAP)) {
+            ContentSafety.Verdict verdict = safety.check(piece);
+            if (!verdict.allowed()) {
+                log.info("safety.refused route={} categories={}", route, verdict.shown());
+                throw new ForgeException(code, refused);
+            }
+        }
+    }
+
+    /** Azure AI Content Safety's cap on one text, in characters (UTF-16 units, so a surrogate pair counts as two). */
+    static final int SAFETY_CHARS = 10_000;
+    /** How much of a piece's end the next piece reads again, so a phrase across a cut is read whole (the second review). */
+    static final int SAFETY_OVERLAP = 500;
+
+    /** Words joined by anything but a space (snake, kebab, dotted, camel case): screened spelled out too. */
+    static final Pattern JOINED = Pattern.compile("[\\p{L}\\p{N}][^\\p{L}\\p{N}\\s]+[\\p{L}\\p{N}]|[\\p{Ll}\\p{Nd}]\\p{Lu}");
+    private static final Pattern CAPS_THEN_WORD = Pattern.compile("(\\p{Lu}+)(\\p{Lu}\\p{Ll})");
+    private static final Pattern LOWER_THEN_UPPER = Pattern.compile("([\\p{Ll}\\p{Nd}])(\\p{Lu})");
+    private static final Pattern NOT_A_WORD = Pattern.compile("[^\\p{L}\\p{N}]+");
+
+    /**
+     * `text` as words: every run of what is neither a letter nor a digit a space, and a word split where a capital starts
+     * one ({@code _an_explicit-nüde.scene} → "an explicit nüde scene", {@code anEXPLICITNudeScene} → "an EXPLICIT Nude
+     * Scene"). Content safety reads text; a phrase joined into an identifier is read this way too.
+     */
+    static String spelledOut(String text) {
+        String s = CAPS_THEN_WORD.matcher(text).replaceAll("$1 $2");
+        s = LOWER_THEN_UPPER.matcher(s).replaceAll("$1 $2");
+        return NOT_A_WORD.matcher(s).replaceAll(" ").strip();
+    }
+
+    /** Each word, then, where it joins words, the same spelled out (blank words left out). */
+    static List<String> withSpelled(List<String> words) {
+        List<String> out = new ArrayList<>();
+        for (String word : words) {
+            if (word == null || word.isBlank()) {
+                continue;
+            }
+            out.add(word);
+            if (JOINED.matcher(word).find()) {
+                String spelled = spelledOut(word);
+                if (!spelled.isEmpty() && !spelled.equals(word)) {
+                    out.add(spelled);
+                }
+            }
+        }
+        return out;
+    }
+
+    /** As {@link #pieces(List, int, int)}, with nothing read again. */
+    static List<String> pieces(List<String> words, int max) {
+        return pieces(words, max, 0);
+    }
+
+    /**
+     * `words` as one text, a line each (blank ones left out), in pieces of at most `max` characters, in order: a piece ends
+     * at its last line's end where one adds text, else at `max`, never inside a surrogate pair; the next starts `overlap`
+     * characters before it ended (with none, at the next line), so a phrase across the cut is read whole there.
+     *
+     * @throws IllegalArgumentException unless `max` is at least 2 and `overlap` under half of it (each piece moves on)
+     */
+    static List<String> pieces(List<String> words, int max, int overlap) {
+        if (max < 2 || overlap < 0 || 2 * overlap >= max) {
+            throw new IllegalArgumentException("pieces of " + max + " characters cannot read " + overlap + " again");
+        }
+        StringBuilder all = new StringBuilder();
+        for (String word : words) {
+            if (word == null || word.isBlank()) {
+                continue;
+            }
+            if (!all.isEmpty()) {
+                all.append('\n');
+            }
+            all.append(word);
+        }
+        String text = all.toString();
+        List<String> out = new ArrayList<>();
+        int start = 0;
+        int done = 0;
+        while (done < text.length()) {
+            int limit = Math.min(text.length(), start + max);
+            int end = limit;
+            if (limit < text.length()) {
+                int line = text.lastIndexOf('\n', limit);
+                if (line > done) {
+                    end = line;
+                } else if (Character.isHighSurrogate(text.charAt(limit - 1))) {
+                    end = limit - 1;
+                }
+            }
+            out.add(text.substring(start, end));
+            done = end;
+            if (end >= text.length()) {
+                break;
+            }
+            int next = overlap > 0 ? Math.max(start + 1, end - overlap) : end + (text.charAt(end) == '\n' ? 1 : 0);
+            if (next < text.length() && Character.isLowSurrogate(text.charAt(next))) {
+                next++;
+            }
+            start = next;
+        }
+        return out;
     }
 
     static String sha256(String text) {

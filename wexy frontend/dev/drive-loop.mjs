@@ -9,7 +9,10 @@
 //
 //   node dev/drive-loop.mjs [--gpu nvidia] [--label mock|live] [--ideas galaxy,storm] [--prompt "an idea"]...
 //                           [--repairs 0|1|any] [--gateway http://localhost:8400] [--service-log path]
-//                           [--no-cancel] [--timeout 300] [--out dir] [--chrome path]
+//                           [--no-cancel] [--timeout 300] [--out dir] [--chrome path] [--legacy]
+//
+// --legacy is EA9-E3 (agent-first-studio-design.md §9, §10): every page as `?legacy=1`, h1's page kept for the rollback
+// from the agent path's switch (EA9.5). It must pass as it does without the flag, and load none of the agent path.
 //
 // The gateway runs under the local profile with no Firebase credentials (dev tokens), the service under local,mock
 // (no key, no spend) or local (live: every world spends credit, on the user's go only). The label is the caller's
@@ -38,6 +41,9 @@ const timeoutMs = Number(opt('timeout', '300')) * 1000;
 const withCancel = !argv.includes('--no-cancel');
 /** The creator's sentence (loop/copy.ts) a scenario is expected to end in; set, no world is expected. */
 const expectFailure = opt('expect-failure', null);
+/** EA9-E3: h1's page as the rollback selects it, `?legacy=1` (agent-first-studio-design.md §9). */
+const legacy = argv.includes('--legacy');
+const pageQuery = legacy ? '&legacy=1' : '';
 
 /** The studio's own starter ideas: the mock's planner answers the galaxy to one and the storm to the other. */
 const IDEAS = {
@@ -57,7 +63,7 @@ const CHROME = [opt('chrome'), process.env.CHROME_PATH,
     .filter(Boolean).find(p => existsSync(p));
 if (!CHROME) { console.error('drive-loop: no Chrome found; pass --chrome <path>.'); process.exit(2); }
 
-const OUT = resolve(opt('out', join(ROOT, 'dev', 'out', 'drive-loop', `${label}-${gpu}-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`)));
+const OUT = resolve(opt('out', join(ROOT, 'dev', 'out', 'drive-loop', `${legacy ? 'legacy-' : ''}${label}-${gpu}-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`)));
 mkdirSync(OUT, { recursive: true });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const steps = [];
@@ -198,7 +204,7 @@ try {
     for (const [i, { name, idea }] of ideas.entries()) {
         const since = consoleLines.length;
         const t0 = Date.now();
-        await page.send('Page.navigate', { url: `${origin}/studio.html?dev=1&autorun=1&prompt=${encodeURIComponent(idea)}` });
+        await page.send('Page.navigate', { url: `${origin}/studio.html?dev=1&autorun=1${pageQuery}&prompt=${encodeURIComponent(idea)}` });
         // Before Create: this build knows the gateway, and says so.
         const badge = await waitFor(`document.querySelector('#source-badge')?.classList.contains('badge-live')`, 30000, `${name}: the Live badge`);
         step(`${name}: the studio knows the gateway, and the badge says Live before Create`, badge, await evaluate(`document.querySelector('#source-badge')?.textContent`).catch(() => null));
@@ -239,6 +245,12 @@ try {
         step(`${name}: the outcome was recorded by the backend (202)`, report?.state === 'ok' && /202/.test(report.detail), report ? `${report.state}: ${report.detail}` : 'no report step');
         const errors = errorsOf(lines);
         step(`${name}: no console error or exception`, errors.length === 0, errors.slice(0, 5));
+        if (legacy) {
+            // EA9-E3: the rollback is h1's page as it is, none of the agent path loaded (no creation, turn, module or review code).
+            const agentCode = await evaluate(`performance.getEntriesByType('resource').map(e => new URL(e.name).pathname)
+                .filter(n => /loop\\/creation|creation-view|improve-view|agent-(view|stream|client|turn)|module-client|loop\\/review|contract\\/agent/.test(n))`);
+            step(`${name}: ?legacy=1 loaded none of the agent path`, agentCode.length === 0, agentCode);
+        }
         results.push({ name, idea, loopMs, built: b, calls, trace, hud, console: lines, errors });
     }
 
@@ -247,7 +259,7 @@ try {
     if (withCancel) {
         const since = consoleLines.length;
         const t0 = Date.now();
-        await page.send('Page.navigate', { url: `${origin}/studio.html?dev=1&autorun=1&prompt=${encodeURIComponent(IDEAS.galaxy)}` });
+        await page.send('Page.navigate', { url: `${origin}/studio.html?dev=1&autorun=1${pageQuery}&prompt=${encodeURIComponent(IDEAS.galaxy)}` });
         const streaming = await waitFor(`/^Streaming the plan/.test(document.querySelector('.trace-list .step .step-detail')?.textContent ?? '')`, 60000, 'the plan to start streaming');
         const leftAt = Date.now();
         await page.send('Page.navigate', { url: 'about:blank' });
@@ -266,7 +278,7 @@ try {
         results.push({ name: 'cancel', idea: IDEAS.galaxy, loopMs: Date.now() - t0, console: consoleLines.slice(since), logged });
     }
 } finally {
-    writeFileSync(join(OUT, 'steps.json'), JSON.stringify({ label, gpu: gpuLabel, gpuFlag: gpu, browser: browserVersion, gateway, readiness, ideas: results, steps }, null, 1));
+    writeFileSync(join(OUT, 'steps.json'), JSON.stringify({ label, legacy, gpu: gpuLabel, gpuFlag: gpu, browser: browserVersion, gateway, readiness, ideas: results, steps }, null, 1));
     page.close();
     for (let i = 0; i < 30 && chrome.exitCode === null; i++) await sleep(100);
     if (chrome.exitCode === null) spawnSync('taskkill', ['/PID', String(chrome.pid), '/T', '/F']);

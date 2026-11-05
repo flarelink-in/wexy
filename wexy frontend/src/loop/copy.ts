@@ -145,7 +145,18 @@ export const COPY = {
         improving: 'An improvement is already under way; this world stays on the stage.',
         /** EA9.1: a new world is being made, so this one waits (agent-first-studio-design.md §6). */
         making: 'A new world is being made; this one stays on the stage. Improve it once that is done.',
+        /** EA9.4's review: an example, a starter or another Run is about to take the stage, so no change is paid for now. */
+        replacing: 'Another world is on its way to the stage; this one waits until that is settled.',
+        /** The creator's Stop during a round (EA9.4's review): the round ends, and the world keeps what is left of its improvements. */
+        stopped: 'Stopped. Your world is still on the stage as it was.',
         notApplied: 'This improvement could not be applied; the previous world is still on the stage.',
+        /** Words content safety refused (EA9.4: the backend screens a revision's words); nothing was spent. */
+        refused: 'Those words can\'t be used here. Say the change another way; your world is still on the stage.',
+        /**
+         * The world's own words refused (EA9.4, `world-refused`: content safety refused its design or program, not the
+         * creator's change): no way of saying the change helps, so no change is offered for it again; nothing was spent.
+         */
+        worldRefused: 'This world can\'t be changed here; it is still on the stage. Describe a different idea to make a new world.',
         /** A model's review (EA6.4, visual-review-design.md §9.1, §11): never offered before Q62's gates and the creator's consent. */
         aiUnavailable: 'AI review is not available; tell us what to improve.',
         aiConsent: 'AI review needs your go-ahead to send these frames first.',
@@ -229,9 +240,57 @@ export const COPY = {
         /** A new idea that did not start (Q126 (b)): why, then the world written before it, given back. */
         kept: (why: string) => `${why} Your last world is still ready: press Show it to test it.`,
         keptStopped: 'Stopped. Your last world is still ready: press Show it to test it.',
+        /** An improvement of the world on the stage, waiting for its go, after a newer idea ended without a world (EA9.4's review). */
+        keptImproved: (why: string) => `${why} Your improved world is still ready: press Show it to test it.`,
+        keptImprovedStopped: 'Stopped. Your improved world is still ready: press Show it to test it.',
         noGateway: 'Making a new world needs the Wexy service, which this page can\'t reach. Try one of the examples instead.',
         invalid: 'This link asks for a way of making worlds this page doesn\'t have, so nothing was started.',
         noControls: 'This world has no sliders. Drag to look around, then take a photo or make a video.',
+    },
+    /**
+     * "Shape it" for an agent world (EA9.4; agent-first-studio-design.md §9; Q121, and the user's Q118 answer of 11-03: "a
+     * chat window style new prompt to ask them to improve if any missed and then show again"): the review in the creator's
+     * words. "Looks right" spends nothing; "Improve it" sends their words as one round, and Show it puts the new version
+     * on the stage, the world before it drawing until then. Nothing here names a code, a count of calls or a model.
+     */
+    improve: {
+        /** The panel's line beside "Shape it": no "instantly", since an improvement is written by a model (guidelines §3). */
+        sub: 'Say what to change',
+        ask: 'How does it look? If something is missing or not right, tell me what to change.',
+        label: 'What should change?',
+        placeholder: 'For example: make the towers taller, add a moat',
+        send: 'Improve it',
+        sending: 'Improving…',
+        looksRight: 'Looks right',
+        glad: 'Glad it looks right. Drag to look around, then take a photo or make a video.',
+        working: 'Rewriting your world with that change. Your current world stays on the stage.',
+        ready: 'Your improved world is ready. Press Show it to test it on your graphics card; your current world stays until then.',
+        show: 'Show it',
+        shown: 'Here it is. Anything else to change?',
+        left: (n: number) => (n === 1 ? 'One more improvement for this world.' : `${n} more improvements for this world.`),
+        looking: 'Taking a look at your world…',
+        lookAgain: 'Look again',
+        /** A world with no session to improve it: a starter, a saved world reopened, a saved attempt replayed. */
+        madeEarlier: 'This world was made earlier, so it can\'t be changed here. Describe your own idea and press Create world.',
+        /** Its account signed out, or another signed in (I8, Q129): the world stays, and its improvements go with its maker. */
+        otherAccount: 'This world was made with another account, so it can\'t be improved here. You can still film it and take photos.',
+        /** Its session ended otherwise (its improvement discarded with an account change, say): said as it is, no account blamed. */
+        ended: 'This world can\'t be improved here any more. You can still film it and take photos, or describe a new idea.',
+        deviceLost: 'Your graphics card stopped responding. Reload the page to carry on.',
+        /** The words the creator sent, as the thread shows them. */
+        you: 'You',
+    },
+    /**
+     * The starters on the agent path (EA9.4, Q122 (a), the user, 2026-11-04: "all three, h1's kept too"): worlds Meta's
+     * models made earlier, replayed here with no model call, and h1's hand-written examples after them.
+     */
+    starter: {
+        opening: (title: string) => `Opening “${title}”…`,
+        testing: 'Testing it on your graphics card…',
+        refused: 'This example world didn\'t pass its test on your graphics card; your current world is unchanged. Try another one.',
+        unavailable: 'This example world couldn\'t be opened here. Try another one.',
+        heavy: 'This example world is too heavy for your graphics card; your current world is unchanged. Try another one.',
+        busy: 'The stage is busy right now; tap the example again in a moment.',
     },
     /**
      * The world on the stage's save, beside its title (W3.6; the creations platform companion §7, §9 and §12): what its
@@ -265,6 +324,11 @@ export const COPY = {
         fullWhy: 'Your saved worlds are full. Delete one you no longer need in Your worlds, then press Try again.',
         tooLarge: 'Not saved: too large',
         tooLargeWhy: 'This world is too large to save. It stays here: you can still film it and take photos.',
+        /** Its saved views changed since it was saved (EA9.4, Q119): Save keeps them with it. */
+        changed: 'Views not saved',
+        changedWhy: 'You changed this world\'s saved camera views since it was saved. Press Save to keep them with it.',
+        /** An agent world keeps at most 16 saved views (wexy-world.v1's bound). */
+        viewsFull: 'A world keeps at most 16 saved views. Remove one to add another.',
     },
     /**
      * A saved world opened in the studio (W3.6; the companion §8 and §12): one sentence a step. Show it is the GPU go,

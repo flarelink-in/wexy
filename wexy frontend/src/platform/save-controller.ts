@@ -21,6 +21,7 @@ import { canonicalJson, sha256Hex } from '../contract/adapters/canonical';
 import type { SolutionDesign } from '../contract/agent';
 import type { DeepReadonly } from '../contract/engine/frozen';
 import { boundTo, type Api, type Caller } from '../forge-client/http';
+import type { CameraKeyframe } from '../contract/spec';
 import type { SealedCandidate } from '../loop/snapshot';
 import type { CameraView } from '../runtime/camera-path';
 import { worldArtifact } from './artifact';
@@ -49,6 +50,8 @@ export interface InstalledWorld {
     readonly ranAs?: string | null;
     /** A reopened world's saved head, its owner's (`ranAs`): its improvement is that world's revision, for its owner alone. */
     readonly saved?: { readonly worldId: string; readonly revisionId: string; readonly rowVersion: number };
+    /** The studio's keyframes for it when installed (Q119 (a), EA9.4): a reopened world's saved ones; none for a new one. */
+    readonly keyframes?: readonly CameraKeyframe[];
 }
 
 /** Who is signed in, as the session says it now: its epoch (E_auth), whether its account can save, and its caller. */
@@ -76,9 +79,10 @@ export interface SavePorts {
  * (or its read failed); `not-allowed`: its owner's account, read, cannot save (not active); `offline` and `failed`:
  * "Not saved", with "Try again" on the same key; `elsewhere`: the
  * account that made it is not the one signed in (Q129), so nothing is saved here, by itself or by a press; its state's
- * `worldId` says whether its owner has it saved.
+ * `worldId` says whether its owner has it saved. `changed`: saved, but its keyframes moved since (EA9.4, Q119): its
+ * owner's Save keeps them, as a revision of that saved world (the companion §7's explicit Save).
  */
-export type SaveStatus = 'idle' | 'sign-in' | 'saving' | 'saved' | 'conflict' | 'storage-full' | 'too-large' | 'not-saved' | 'not-allowed' | 'offline' | 'failed' | 'elsewhere';
+export type SaveStatus = 'idle' | 'sign-in' | 'saving' | 'saved' | 'conflict' | 'storage-full' | 'too-large' | 'not-saved' | 'not-allowed' | 'offline' | 'failed' | 'elsewhere' | 'changed';
 
 export interface SaveState {
     readonly stage: number;
@@ -108,6 +112,13 @@ export interface SaveController {
     retry(): Promise<void>;
     /** After a conflict: the world on the stage as a new world, under a fresh key. */
     saveAsNew(): Promise<void>;
+    /**
+     * The world on the stage's keyframes changed (EA9.4, Q119 (a)): what its next save sends. A world saved already reads
+     * `changed` until its owner's {@link saveChanges}; a save under way that sent the older ones ends `changed` too.
+     */
+    edited(keyframes: readonly CameraKeyframe[]): void;
+    /** The creator's Save after `changed`: the world with its keyframes now, a revision of its saved head, its owner's alone. */
+    saveChanges(): Promise<void>;
     /** The session's epoch moved (a sign-in, a switch, a sign-out), or its account's standing did (read, set up). */
     accountChanged(): void;
     /** The world on the stage's save, or null before any install. */
@@ -171,7 +182,19 @@ interface Binding {
     readonly owner: string | null;
     /** Its status before its owner signed out or another account signed in, given back when its owner returns. */
     away: SaveStatus | null;
+    /** Its keyframes now (EA9.4, Q119 (a)): what its next save sends; the studio's edits replace them, never change them. */
+    keyframes: readonly CameraKeyframe[];
+    /**
+     * The keyframes its saved head holds: a reopened world's as read, a live one's as its last save sent them; null before
+     * its first save. `changed` is a difference from these, never a count of edits: K then Remove changes nothing, and an
+     * edit made under another account is said when its owner returns (EA9.4's review).
+     */
+    savedKeys: readonly CameraKeyframe[] | null;
 }
+
+/** Two sets of keyframes the same, as a world's save would hold them. */
+const sameKeys = (a: readonly CameraKeyframe[], b: readonly CameraKeyframe[]): boolean => JSON.stringify(a) === JSON.stringify(b);
+const copyKeys = (keys: readonly CameraKeyframe[]): CameraKeyframe[] => keys.map(k => ({ ...k, target: [k.target[0], k.target[1], k.target[2]] }));
 
 /** What one request came to, or `stale`: the account changed, so nothing more was sent and nothing is applied. */
 type Outcome = SaveAnswer | 'stale';
@@ -324,7 +347,9 @@ export function createSaveController(ports: SavePorts): SaveController {
             }
         }
         if (!b.world.design) return set(b, 'failed', 'the world has no design to save');
-        const built = await worldArtifact({ snapshot: b.world.snapshot, design: b.world.design, view: b.world.view });
+        // Its keyframes as they are now (EA9.4): an edit after this point leaves it `changed`, for its owner's Save.
+        const sent = b.keyframes;
+        const built = await worldArtifact({ snapshot: b.world.snapshot, design: b.world.design, view: b.world.view, keyframes: sent });
         if (!built.ok) return set(b, built.code === 'too-large' ? 'too-large' : 'failed', built.reason);
         const base = !asNew && l.worldId && l.revisionId && l.rowVersion !== null
             ? { worldId: l.worldId, revisionId: l.revisionId, rowVersion: l.rowVersion } : null;
@@ -339,6 +364,12 @@ export function createSaveController(ports: SavePorts): SaveController {
         if (outcome === 'stale') return stopped(b, 'the account changed while it was saved');
         settle(l, r, outcome);
         const [status, detail] = statusOf(outcome);
+        // Saved with the keyframes it had when sent: those are its saved head's now. An edit since that left them otherwise
+        // is not saved, and Save is offered for it (EA9.4).
+        if (status === 'saved') {
+            b.savedKeys = sent;
+            if (!sameKeys(b.keyframes, sent)) return set(b, 'changed', 'its keyframes changed while it was saved');
+        }
         return set(b, status, detail);
     };
 
@@ -366,7 +397,12 @@ export function createSaveController(ports: SavePorts): SaveController {
             } else {
                 lineage = fresh();
             }
-            const b: Binding = { world, lineage, status: 'idle', detail: '', superseded: false, waitingForAccount: false, owner, away: null };
+            const b: Binding = {
+                world, lineage, status: 'idle', detail: '', superseded: false, waitingForAccount: false, owner, away: null,
+                keyframes: copyKeys(world.keyframes ?? []),
+                // A reopened world is its saved head, its keyframes as read; a new one has none saved yet.
+                savedKeys: world.source === 'reopened' ? copyKeys(world.keyframes ?? []) : null,
+            };
             current = b;
             if (world.source === 'reopened') {
                 if (!ownerHere(b)) {
@@ -403,6 +439,25 @@ export function createSaveController(ports: SavePorts): SaveController {
             const epoch = ports.account().epoch;
             return enqueue(() => save(b, epoch, true));
         },
+        edited(keyframes) {
+            const b = current;
+            if (!b || disposed) return;
+            b.keyframes = copyKeys(keyframes);
+            // Saved already: its owner's Save keeps a change from what is saved, and one undone is saved again. Under way,
+            // or not saved yet: its next save sends them. Any other's world stays as it is (Q129), its owner's return says
+            // it; a starter or a replay is nobody's to save.
+            if (!ownerHere(b) || (b.world.source !== 'live' && b.world.source !== 'reopened')) return;
+            const differs = b.savedKeys !== null && !sameKeys(b.keyframes, b.savedKeys);
+            if (b.status === 'saved' && differs) set(b, 'changed');
+            else if (b.status === 'changed' && !differs) set(b, 'saved', 'its views are as saved again');
+        },
+        saveChanges() {
+            const b = current;
+            if (!b || b.status !== 'changed' || !ownerHere(b)) return Promise.resolve();
+            const epoch = ports.account().epoch;
+            set(b, 'saving');
+            return enqueue(() => save(b, epoch));
+        },
         accountChanged() {
             const b = current;
             if (!b || disposed || (b.world.source !== 'live' && b.world.source !== 'reopened')) return;
@@ -432,6 +487,13 @@ export function createSaveController(ports: SavePorts): SaveController {
                         b.waitingForAccount = true;
                         set(b, account.kind === 'anonymous' ? 'sign-in' : 'not-saved', `the account is ${account.kind}`);
                     }
+                    return;
+                }
+                // Saved, its views said as they stand against the saved head: edited meanwhile, `changed`, for its Save
+                // (EA9.4's review: it said Saved over views that differed).
+                if (was === 'saved' || was === 'changed') {
+                    const differs = b.savedKeys !== null && !sameKeys(b.keyframes, b.savedKeys);
+                    set(b, differs ? 'changed' : 'saved', 'its owner signed in again');
                     return;
                 }
                 set(b, was, 'its owner signed in again');

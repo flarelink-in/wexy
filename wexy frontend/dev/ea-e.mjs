@@ -183,6 +183,8 @@ try {
     };
     const click = label => evaluate(`(() => { const b = [...document.querySelectorAll('button')].find(b => !b.hidden && (b.textContent ?? '').trim().startsWith(${JSON.stringify(label)})); if (!b || b.disabled) return false; b.click(); return true; })()`);
     const text = sel => evaluate(`document.querySelector(${JSON.stringify(sel)})?.textContent ?? null`);
+    // An h1 example is pressed as 'Storm': since 11-04's switch ?agent=1 is the agent path's Developer view, whose chips
+    // give h1's Galaxy up to the Spiral galaxy starter (EA9.4).
     const starter = label => evaluate(`(() => { const b = [...document.querySelectorAll('.examples-chips .chip')].find(b => b.textContent === ${JSON.stringify(label)}); if (!b) return false; b.click(); return true; })()`);
     const studio = `${studioOrigin}/studio.html?agent=1&dev=1`;
 
@@ -192,7 +194,7 @@ try {
     step('the studio starts under ?agent=1: its GPU, the agent panel, the candidate panel with Run on this GPU', started, { gpu: gpuLabel });
 
     // h1 first: a starter world on the stage (the playground's example: no backend).
-    await starter('Galaxy');
+    await starter('Storm');
     const h1 = await until(`document.querySelector('#empty')?.hidden && /\\S/.test(document.querySelector('#hud-title')?.textContent ?? '') && !document.querySelector('#btn-export')?.disabled`, 60_000);
     const h1Title = await text('#hud-title');
     step('h1 first: a starter world on the stage, Film and Photo offered', h1, { title: h1Title });
@@ -275,7 +277,7 @@ try {
     await shot('agent-world');
 
     // Back to h1: a starter retires the agent world.
-    await starter('Galaxy');
+    await starter('Storm');
     const back = await until(`document.querySelector('#hud-title')?.textContent === ${JSON.stringify(h1Title)} && !document.querySelector('#btn-export')?.disabled && !document.querySelector('#capture-bar')?.hidden`, 60_000);
     step('back to h1: a starter world replaces the agent world, Film and Photo offered again', back, { title: await text('#hud-title') });
     await shot('back-to-h1');
@@ -299,7 +301,7 @@ try {
     await page.send('Page.reload');
     // The GPU pill says "Starting WebGPU…" until the device exists; its mark once the viewport runs.
     const restarted = await until(`!!document.querySelector('#gpu-pill i.ok') && !!document.querySelector('.examples-chips .chip')`, 30_000);
-    await starter('Galaxy');
+    await starter('Storm');
     const recovered = restarted && await until(`document.querySelector('#empty')?.hidden && document.querySelector('#hud-title')?.textContent === ${JSON.stringify(h1Title)}`, 60_000);
     step('recovered: after a reload, a starter world on the stage again (the known-good fallback)', recovered, {
         title: await text('#hud-title'),

@@ -2,9 +2,11 @@
 // itself behind ?create=agent, the creator's view, end to end with no paid call. A local stand-in gateway answers the agent
 // routes in the backend's recorded shapes (EA-VR11's): the turn hands off the castle as the agent wrote it, each module
 // call is answered with the castle's own body, and the allowance read after the turn says the free world is made.
-//   - without the flag the studio is h1's, unchanged: a starter built by h1's loop over the mock, no creation code loaded;
-//   - ?create=agent&scene=galaxy: the creator's view (no Developer view, no agent panel), Create offered once the stage
-//     (its device compiler) is ready, the named example loaded by h1's loop with no model called;
+//   - ?legacy=1, the rollback: the studio is h1's, unchanged: a starter built by h1's loop over the mock, no creation code
+//     loaded;
+//   - with no flag (the agent path, the default since 11-04) and ?scene=galaxy: the creator's view (no Developer view, no
+//     agent panel), the named example loaded by h1's loop with no model called, so the Playground is selected; "Live
+//     creation" then offers Create once the stage (its device compiler) is ready;
 //   - Create: Stop offered while the turn runs and the modules are written (L3 on this device), then "Show it", nothing
 //     on the stage yet; the steps say so in plain words;
 //   - "Show it": the GPU go, the Run (the gate, the probe, the first frame), the castle on the stage titled from the idea
@@ -72,6 +74,22 @@ function moduleStream(call, answer) {
 const calls = [];
 /** While set, every module answer waits for it: a creation held in its writing (EA9-E1d). */
 let moduleGate = null;
+/** The drive's section a call belongs to: EA9.4's own are counted apart from the castles before it. */
+let section = 'ea91';
+/**
+ * EA9.4's "Improve it": a revision (a turn with a base) answered with the castle at unit sizes, as EA-VR11's stand-in
+ * answers one, in the backend's recorded revision (`repairs` after its program, none here); a base whose words hold the
+ * recorded unsafe phrase is refused before any stream, 422 content-refused, as the backend screens a base since EA9.4.
+ */
+const unitNodes = castle.program.nodes.map(n => (['geohill', 'geocyl', 'geocone'].includes(n.id) ? { ...n, config: JSON.stringify({ ...JSON.parse(n.config), size: 1 }) } : n));
+const revisedCastle = edit(edit(fixture('test/fixtures/agent-wire/revised.sse'), 'design', () => ({ design: castle.design })), 'program', () => ({ program: { nodes: unitNodes } }));
+const UNSAFE = 'a bloody massacre of villagers';
+/**
+ * 'world': the next revisions are refused for the world's own words, 422 world-refused, before any stream, whatever the
+ * creator asked (the backend screens the base's design and program since EA9.4's second review; the drive cannot make the
+ * castle's own words unsafe, so the stand-in is told to).
+ */
+let revisionPlan = 'castle';
 
 // EA9-E2 (EA9.3): each end of P2 that does not install, in the backend's recorded shapes. The next turns' answers, in order
 // (the hand-off once the queue is empty), and how the module calls are answered meanwhile.
@@ -116,6 +134,18 @@ const gateway = createServer((req, res) => {
     req.on('end', () => {
         const sse = text => { res.writeHead(200, { ...cors, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' }); res.end(text); };
         const json = (status, value) => { res.writeHead(status, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify(value)); };
+        if (req.method === 'POST' && req.url === '/v1/agent/turn' && JSON.parse(body).base) {
+            // EA9.4: a revision of the world on the stage, its creator's words among its base's findings.
+            const base = JSON.parse(body).base;
+            const words = JSON.stringify(base).toLowerCase();
+            const refused = words.includes(UNSAFE);
+            const world = !refused && revisionPlan === 'world';
+            calls.push({ route: 'revision', section, refused, world, creator: base.findings.filter(f => f.code === 'creator').map(f => f.message), turnId: base.turnId ?? null });
+            if (refused) json(422, { code: 'content-refused', message: 'These words can\'t be used here. Try saying the change another way.' });
+            else if (world) json(422, { code: 'world-refused', message: 'This world can\'t be changed here. Try a different idea.' });
+            else sse(revisedCastle);
+            return;
+        }
         if (req.method === 'POST' && req.url === '/v1/agent/turn') {
             const plan = turnPlan.shift() ?? 'handoff';
             calls.push({ route: 'turn', base: !!JSON.parse(body).base, plan });
@@ -129,11 +159,19 @@ const gateway = createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/v1/agent/module') {
             const call = JSON.parse(body);
             const answer = modulePlan === 'nan' && call.module?.id === 'flagPlace' ? NAN_BODY : bodyOf(call.module?.id);
-            calls.push({ route: 'module', module: call.module?.id, purpose: call.purpose, plan: modulePlan });
+            calls.push({ route: 'module', module: call.module?.id, purpose: call.purpose, plan: modulePlan, section });
             if (modulePlan === 'budget') { json(503, { code: 'budget', message: 'Live creation has reached its spending limit for now.' }); return; }
             if (answer === null) { res.writeHead(404, cors); res.end('{}'); return; }
             if (moduleGate) void moduleGate.then(() => sse(moduleStream(call, answer)));
             else sse(moduleStream(call, answer));
+            return;
+        }
+        // EA6.4, on the creator's path since EA9.4: the review's terms, read once a review reaches the session; the
+        // backend's recording, every gate shut, so no model's review is ever sent (as production stands today).
+        if (req.method === 'GET' && req.url === '/v1/agent/review') {
+            calls.push({ route: 'review-terms' });
+            res.writeHead(200, { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+            res.end(fixture('test/fixtures/review-wire/terms-shut.json'));
             return;
         }
         // W1: the chip is read again after an entry; the backend's DTO, the anonymous caller's one world made.
@@ -244,23 +282,29 @@ try {
     const starter = name => evaluate(`(() => { const b = [...document.querySelectorAll('.examples-chips .chip')].find(c => c.textContent === ${JSON.stringify(name)}); if (!b || b.disabled) return false; b.click(); return true; })()`);
     const h1Installed = () => `document.querySelector('#hud-source')?.textContent === 'Playground example' && !!document.querySelector('#hud-title')?.textContent && document.querySelector('.journey-step:last-child')?.classList.contains('is-done')`;
 
-    // The page without the flag: h1's, unchanged (EA9.1's exit): a starter built by h1's loop over the mock, and none of
-    // the agent path loaded.
-    await page.send('Page.navigate', { url: `${studioOrigin}/studio.html?scene=galaxy` });
+    // The rollback, ?legacy=1: h1's page (EA9.1's exit): a starter built by h1's loop over the mock, so the Playground is
+    // the next action (the 11-04 mode switch, on either path), and none of the agent path loaded.
+    const modes = () => evaluate(`(() => { const m = document.querySelector('.creation-modes'); return m && !m.hidden ? [...m.querySelectorAll('button')].map(b => b.dataset.mode + (b.getAttribute('aria-pressed') === 'true' ? '*' : '')) : null; })()`);
+    await page.send('Page.navigate', { url: `${studioOrigin}/studio.html?legacy=1&scene=galaxy` });
     const plain = await until(h1Installed(), 60_000);
-    const plainLook = { ...(await look()), creationCode: await loaded() };
-    step('without the flag the studio is h1\'s: a starter built by h1\'s loop, labelled Playground example; no creation code loaded',
-        plain && plainLook.label === 'Create world' && plainLook.creationCode.length === 0 && !plainLook.dev, plainLook);
+    const plainLook = { ...(await look()), creationCode: await loaded(), modes: await modes() };
+    step('?legacy=1 the studio is h1\'s: a starter built by h1\'s loop, labelled Playground example, the Playground selected; no creation code loaded',
+        plain && plainLook.label === 'Playground example' && JSON.stringify(plainLook.modes) === '["live","playground*"]' && plainLook.creationCode.length === 0 && !plainLook.dev, plainLook);
 
-    // ?create=agent with a loader: h1's hand-written example, no model called; then the agent's Create replaces it.
-    await page.send('Page.navigate', { url: `${studioOrigin}/studio.html?create=agent&scene=galaxy` });
+    // No flag, the agent path (the default since 11-04), with a loader: h1's hand-written example, no model called, so the
+    // Playground is the next action; "Live creation" gives the agent's Create, which replaces it.
+    await page.send('Page.navigate', { url: `${studioOrigin}/studio.html?scene=galaxy` });
     const started = await until(`!!document.querySelector('#gpu-pill i.ok') && !document.querySelector('.btn-forge')?.disabled && (${h1Installed()})`, 60_000);
     const gpuLabel = await evaluate(`document.querySelector('#gpu-pill')?.textContent ?? null`);
+    const asLoaded = { ...(await look()), modes: await modes() };
+    await evaluate(`document.querySelector('.creation-modes button[data-mode="live"]')?.click()`);
+    const liveOffered = await until(`document.querySelector('.btn-forge span')?.textContent === 'Create world' && !document.querySelector('.btn-forge').disabled`, 10_000);
     const first = await look();
     const firstCalls = calls.length;
-    step('?create=agent: the creator\'s view (no Developer view, no agent panel), Create offered once the stage is ready; ?scene= loads h1\'s example and calls no model',
-        started && !first.dev && !first.agentPanel && first.label === 'Create world' && !first.disabled && first.source === 'Playground example' && firstCalls === 0,
-        { gpu: gpuLabel, first, calls: firstCalls });
+    step('no flag: the creator\'s agent view (no Developer view, no agent panel); ?scene= loads h1\'s example in the Playground and calls no model; Live creation offers Create once the stage is ready',
+        started && !first.dev && !first.agentPanel && asLoaded.label === 'Playground example' && JSON.stringify(asLoaded.modes) === '["live","playground*"]'
+        && liveOffered && first.label === 'Create world' && !first.disabled && first.source === 'Playground example' && firstCalls === 0,
+        { gpu: gpuLabel, asLoaded, first, calls: firstCalls });
 
     await evaluate(`(() => { const p = document.querySelector('#prompt'); p.value = ${JSON.stringify(IDEA)}; p.dispatchEvent(new Event('input')); })()`);
     await evaluate(`document.querySelector('.btn-forge').click()`);
@@ -392,7 +436,9 @@ try {
     // to test it again at this size; pressed, the world runs again, with no paid call. Emulated by a window twice the
     // screen it reports, which no real display allows: a page zoom or a larger second display can come close.
     const screenNow = await evaluate(`({ width: screen.width, height: screen.height })`);
-    const callsBefore = calls.length;
+    // Paid calls only: since EA9.4 the creator's review reads its terms (a free GET) after each install, this one's too.
+    const paidCalls = () => calls.filter(c => ['turn', 'revision', 'module'].includes(c.route));
+    const callsBefore = paidCalls().length;
     await page.send('Emulation.setDeviceMetricsOverride', {
         width: screenNow.width * 2, height: screenNow.height * 2, deviceScaleFactor: 1, mobile: false, screenWidth: screenNow.width, screenHeight: screenNow.height,
     });
@@ -408,7 +454,7 @@ try {
     await sleep(700);
     step('EA9-E1e a world grown past what it was tested at pauses, Show it is offered, and pressed it runs again at this size with no paid call',
         pausedOffer && pausedLook.rows[3] === `pending: ${RESIZED}` && rerun && rerunLook.title === TITLE_D && rerunLook.rows.every(r => r.startsWith('done: '))
-        && calls.length === callsBefore, { screen: screenNow, pausedLook, rerunLook, calls: calls.slice(callsBefore) });
+        && paidCalls().length === callsBefore, { screen: screenNow, pausedLook, rerunLook, paid: paidCalls().slice(callsBefore) });
 
     // EA9-E2 (EA9.3; P2): every end that does not install, forced through the stand-in, the castle at dusk on the stage.
     // After each one: the HUD's title as it was, no world put on the stage (the studio says each change in its console),
@@ -472,14 +518,152 @@ try {
     step('EA9-E2 every end that does not install (P2), forced through the stand-in: the world on the stage and its title unchanged after each, one sentence each',
         e2.every(e => e.ok) && e2.length === E2.length, e2);
 
+    // ---- EA9.4 (agent-first-studio-design.md §9; Q121, and the user's Q118 answer; Q119 (a); Q122 (a)) ----------------
+    // "Shape it" for the castle at dusk, the creation's world on the stage: its review in the creator's words.
+    section = 'ea94';
+    const panel = () => evaluate(`(() => {
+        const p = document.querySelector('.imp');
+        const q = s => p?.querySelector(s);
+        const shown = e => !!e && !e.hidden;
+        return {
+            shown: shown(p), director: shown(document.querySelector('.director')), sub: document.querySelector('.controls-head span')?.textContent ?? null,
+            status: shown(q('.imp-status')) ? q('.imp-status').textContent : '', thread: [...(p?.querySelectorAll('.imp-msg') ?? [])].map(m => m.textContent),
+            send: q('.imp-send') ? { label: q('.imp-send').textContent, disabled: q('.imp-send').disabled } : null,
+            show: shown(q('.imp-show')) ? { disabled: q('.imp-show').disabled } : null, looks: shown(q('.imp-looks')), composer: shown(q('.imp-composer')),
+            left: shown(q('.imp-left')) ? q('.imp-left').textContent : '', words: q('.imp-words')?.value ?? null,
+            tabs: { spec: shown(document.querySelector('#tab-spec')), wgsl: shown(document.querySelector('#tab-wgsl')) },
+        };
+    })()`);
+    const panelReady = await until(`(() => { const l = document.querySelector('.imp .imp-looks'); return !!l && !l.hidden && !document.querySelector('.imp').hidden; })()`, 30_000);
+    const p0 = await panel();
+    await shot('ea94-panel');
+    step('EA9.4 an agent world\'s right panel is its review in the creator\'s words: the ask, Looks right, the improvements left; the Director and h1\'s Spec and WGSL tabs gone',
+        panelReady && p0.shown && !p0.director && p0.sub === 'Say what to change' && p0.left === '2 more improvements for this world.' && p0.send?.disabled === true
+        && !p0.tabs.spec && !p0.tabs.wgsl, p0);
+
+    // "Improve it": the creator's words, one round (a turn with a base), the world on the stage drawing until Show it.
+    const stagedBefore = onStage();
+    const WORDS = 'Make the towers taller, and let the castle stand on its hill.';
+    await evaluate(`(() => { const w = document.querySelector('.imp-words'); w.value = ${JSON.stringify(WORDS)}; w.dispatchEvent(new Event('input')); })()`);
+    await evaluate(`document.querySelector('.imp-send').click()`);
+    const improvedReady = await until(`(() => { const s = document.querySelector('.imp-show'); return !!s && !s.hidden && !s.disabled; })()`, 90_000);
+    const p1 = await panel();
+    const lookImproved = await look();
+    await shot('ea94-improve-ready');
+    const revisions = calls.filter(c => c.route === 'revision');
+    step('EA9.4 "Improve it": the words in the thread, one revision carrying them as the creator\'s finding (Q118, Q121); then Show it, in the panel and the idea box; the world on the stage drawing',
+        improvedReady && revisions.length === 1 && revisions[0].creator.length === 1 && revisions[0].creator[0] === WORDS && !revisions[0].refused
+        && p1.thread[0] === `You${WORDS}` && p1.thread.some(t => /Your improved world is ready/.test(t)) && lookImproved.label === 'Show it'
+        && lookImproved.title === TITLE_D && onStage() === stagedBefore, { p1, revisions, look: lookImproved });
+    await evaluate(`document.querySelector('.imp-show').click()`);
+    const improvedOn = await until(`[...document.querySelectorAll('.imp-msg')].some(m => /Here it is/.test(m.textContent)) && (${settled('Create world')})`, 90_000);
+    await sleep(500);
+    const p2 = await panel();
+    const lookOn = await look();
+    await shot('ea94-improved');
+    step('EA9.4 its Show it puts the new version on the stage: the same title, Live, every step done; the thread goes on, one improvement left',
+        improvedOn && onStage() === stagedBefore + 1 && lookOn.title === TITLE_D && lookOn.source === 'Live' && lookOn.rows.every(r => r.startsWith('done: '))
+        && p2.left === 'One more improvement for this world.', { p2, look: lookOn });
+
+    // E6's review half, by the keyboard: the words typed, Ctrl+Enter in the box sends them. Content safety refuses them (the
+    // backend's 422, before any call): said as such, the words back in the box, the improvement still left, the world kept.
+    await evaluate(`document.querySelector('.imp-words').focus()`);
+    await page.send('Input.insertText', { text: `Add ${UNSAFE} at the gate.` });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: 2 });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: 2 });
+    const refusedSaid = await until(`[...document.querySelectorAll('.imp-msg')].some(m => /Those words can't be used here/.test(m.textContent))`, 30_000);
+    await sleep(300);
+    const p3 = await panel();
+    const lookRefused = await look();
+    const refusedRevision = calls.filter(c => c.route === 'revision').at(-1);
+    step('EA9.4 a change content safety refuses (by the keyboard: Ctrl+Enter in the box): said in the creator\'s words, the words back, the improvement still left, the world unchanged',
+        refusedSaid && refusedRevision?.refused === true && p3.words === `Add ${UNSAFE} at the gate.` && p3.left === 'One more improvement for this world.'
+        && lookRefused.title === TITLE_D && onStage() === stagedBefore + 1 && lookRefused.label === 'Create world', { p3, refusedRevision });
+
+    // The world's own words refused (the backend's 422 world-refused, before any call), whatever the creator asked: said as
+    // the world's, and no change offered for it again; the world on the stage as it was.
+    revisionPlan = 'world';
+    await evaluate(`(() => { const w = document.querySelector('.imp-words'); w.value = 'Give the towers red roofs.'; w.dispatchEvent(new Event('input')); })()`);
+    await evaluate(`document.querySelector('.imp-send').click()`);
+    const worldSaid = await until(`[...document.querySelectorAll('.imp-msg')].some(m => /This world can't be changed here/.test(m.textContent))`, 30_000);
+    await sleep(300);
+    const p4 = await panel();
+    const lookWorld = await look();
+    const worldRevision = calls.filter(c => c.route === 'revision').at(-1);
+    revisionPlan = 'castle';
+    await shot('ea94-world-refused');
+    step('EA9.4 a world whose own words content safety refuses (422 world-refused): said as the world\'s, no change offered for it again, the world unchanged',
+        // No composer (Looks right is inside it), no Show it.
+        worldSaid && worldRevision?.world === true && worldRevision.creator[0] === 'Give the towers red roofs.' && !p4.composer && p4.show === null
+        && lookWorld.title === TITLE_D && onStage() === stagedBefore + 1 && lookWorld.label === 'Create world', { p4, worldRevision });
+    // P5 in the panel: none of Developer view's words.
+    const panelWords = [...p4.thread, p4.status, p4.left].join('\n');
+    step('EA9.4 the panel holds none of Developer view\'s words (P5)', developerWords.every(re => !re.test(panelWords)), { panelWords });
+    await evaluate(`(() => { const w = document.querySelector('.imp-words'); w.value = ''; w.dispatchEvent(new Event('input')); w.blur(); })()`);
+
+    // Q119 (a): its keyframes are the studio's: K saves the view at the playhead, the timeline shows each, Space plays them,
+    // and with none the camera holds its view.
+    const keysNow = () => evaluate(`({ n: document.querySelectorAll('.tl-key').length, hint: document.querySelector('.tl-hint')?.textContent ?? '', playing: !!document.querySelector('.tl-play.on'),
+        remove: !document.querySelector('.tl-remove')?.disabled })`);
+    const press = async (key, code, vk, text = key) => {
+        await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode: vk, text });
+        await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: vk });
+    };
+    const k0 = await keysNow();
+    await press('k', 'KeyK', 75);
+    await sleep(200);
+    const k1 = await keysNow();
+    await evaluate(`document.querySelector('.tl-track').focus()`);
+    for (let i = 0; i < 12; i++) await press('ArrowRight', 'ArrowRight', 39, '');
+    await evaluate(`document.querySelector('.tl-track').blur()`);
+    await press('k', 'KeyK', 75);
+    await sleep(200);
+    const k2 = await keysNow();
+    await press(' ', 'Space', 32);
+    await sleep(300);
+    const k3 = await keysNow();
+    await press(' ', 'Space', 32);
+    await evaluate(`document.querySelectorAll('.tl-key')[1]?.click()`);
+    await evaluate(`document.querySelector('.tl-remove')?.click()`);
+    await evaluate(`document.querySelectorAll('.tl-key')[0]?.click()`);
+    await evaluate(`document.querySelector('.tl-remove')?.click()`);
+    await sleep(200);
+    const k4 = await keysNow();
+    await shot('ea94-keyframes');
+    step('EA9.4 an agent world\'s keyframes (Q119 (a)): none at first; K saves a view, a second at 6 s; Space plays them; both removed, none left',
+        k0.n === 0 && /no saved views/.test(k0.hint) && k1.n === 1 && k2.n === 2 && /^2 saved views/.test(k2.hint) && k3.playing && k4.n === 0 && /no saved views/.test(k4.hint),
+        { k0, k1, k2, k3, k4 });
+
+    // Q122 (a): the starters, worlds Meta's models made earlier, replayed here with no model call: each installs on this GPU,
+    // From the archive, titled for the creator; the panel says it was made earlier.
+    const starters94 = [];
+    const ideaBefore = await evaluate(`document.querySelector('#prompt').value`);
+    for (const [label, title] of [['Castle', 'A fairytale castle on a hill'], ['Voxel island', 'A voxel island in old film'], ['Spiral galaxy', 'A spiral galaxy']]) {
+        const callsAt = calls.length;
+        const pressed = await starter(label);
+        const ok = await until(`document.querySelector('#hud-title')?.textContent === ${JSON.stringify(title)} && document.querySelector('#hud-source')?.textContent === 'From the archive' && !document.querySelector('#viewport-msg:not([hidden])')`, 90_000);
+        await sleep(300);
+        const p = await panel();
+        const lk = await look();
+        await shot(`ea94-starter-${label.toLowerCase().replace(/\s+/g, '-')}`);
+        starters94.push({ label, pressed, ok, calls: calls.length - callsAt, status: p.status, header: lk.header, badge: lk.badge, composer: p.composer,
+            idea: (await evaluate(`document.querySelector('#prompt').value`)) === ideaBefore });
+    }
+    step('EA9.4 the starters (Q122 (a)) each install on this GPU: From the archive, titled for the creator, no call to the stand-in; the panel says it was made earlier; the idea box left as it was',
+        starters94.every(s => s.pressed && s.ok && s.calls === 0 && s.badge === 'From the archive' && s.header === s.label.replace(/.*/, m => ({ 'Castle': 'A fairytale castle on a hill', 'Voxel island': 'A voxel island in old film', 'Spiral galaxy': 'A spiral galaxy' })[m])
+            && /made earlier/.test(s.status) && !s.composer && s.idea), starters94);
+    section = 'after';
+
     // A starter after the agent's world: h1's example replaces it (no model called), and the creation lets it go.
     const before = calls.length;
     const pressed = await starter('Storm');
     const storm = await until(`${h1Installed()} && document.querySelector('#hud-title')?.textContent !== ${JSON.stringify(TITLE)}`, 60_000);
     const stormLook = await look();
     await shot('starter-after');
-    step('a starter replaces the agent\'s world: h1\'s example on the stage, labelled Playground example, no model called, Create offered',
-        pressed && storm && stormLook.source === 'Playground example' && stormLook.label === 'Create world' && calls.length === before, { stormLook, calls: calls.length - before });
+    const stormModes = await modes();
+    step('a starter replaces the agent\'s world: h1\'s example on the stage, labelled Playground example, no model called; the Playground is the next action, Live creation one press away',
+        pressed && storm && stormLook.source === 'Playground example' && stormLook.label === 'Playground example' && JSON.stringify(stormModes) === '["live","playground*"]'
+        && calls.length === before, { stormLook, stormModes, calls: calls.length - before });
 
     // EA9.3, the backdrop in the ledger: on the agent path with no example named, the backdrop is the world on the stage,
     // counted once it is on the viewport; the first world is admitted beside it, and after its install the ledger holds
@@ -544,7 +728,12 @@ try {
     const errors = consoleLines.filter(l => /^(error|exception)/.test(l));
     step('no console error', errors.length === 0, errors.slice(0, 5));
     const unexpected = calls.filter(c => c.unexpected);
-    const modules = calls.filter(c => c.route === 'module');
+    // EA9.4's round wrote no module (its revision kept every interface, so each body was kept): counted apart from the castles.
+    const modules = calls.filter(c => c.route === 'module' && c.section !== 'ea94');
+    step('EA9.4: three revisions, the second (the creator\'s words) and the third (the world\'s) refused before any call; no module written for the round (its bodies kept); the review\'s terms read, shut',
+        calls.filter(c => c.route === 'revision').length === 3 && calls.filter(c => c.route === 'revision' && (c.refused || c.world)).length === 2
+        && calls.filter(c => c.route === 'module' && c.section === 'ea94').length === 0
+        && calls.some(c => c.route === 'review-terms'), { revisions: calls.filter(c => c.route === 'revision'), ea94Modules: calls.filter(c => c.route === 'module' && c.section === 'ea94').length });
     const written = modules.filter(c => c.plan !== 'budget');
     const stopped = modules.filter(c => c.plan === 'budget');
     // Five castles written (the first, its three replacements, the one over the backdrop; EA9-E1e ran the one at dusk

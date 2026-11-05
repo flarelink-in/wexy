@@ -1,0 +1,128 @@
+{
+ "note": "A starter (EA9.4, Q122 (a)): a world Meta's models made earlier, replayed in the studio with no model call. Recorded by dev/starters.mjs from test/fixtures/live-candidates/galaxy.json.",
+ "attempt": "starter-spiral-galaxy",
+ "versions": {
+  "bundle": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
+  "manifest": "3c7775588fb816ce8ccd3660e16d8ae6bfa9526f83174ecf666f8c66ab4c4c77",
+  "abi": "ea-abi.v2",
+  "checker": "ea4-body.v1"
+ },
+ "request": {
+  "prompt": "a spiral galaxy, gold at the core and blue along the arms",
+  "style": "auto",
+  "seconds": 15
+ },
+ "program": {
+  "nodes": [
+   {
+    "adapterId": "ng.buffer.storage",
+    "adapterVersion": 1,
+    "config": "{\"elements\":12000,\"layout\":\"instance14\",\"strideFloats\":14,\"pingPong\":false,\"init\":\"zero\"}",
+    "id": "stars",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.geometry.primitive",
+    "adapterVersion": 1,
+    "config": "{\"shape\":\"sphere\",\"size\":0.22,\"segments\":12}",
+    "id": "starGeo",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.material.stock",
+    "adapterVersion": 1,
+    "config": "{\"kind\":\"emissive\",\"baseColor\":[1,1,1,1]}",
+    "id": "starMat",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.render.mesh_batch",
+    "adapterVersion": 1,
+    "config": "{\"maxInstances\":12000}",
+    "id": "galaxy",
+    "inputs": [
+     {
+      "nodeId": "starGeo",
+      "output": "geometry",
+      "port": "geometry"
+     },
+     {
+      "nodeId": "starMat",
+      "output": "material",
+      "port": "material"
+     },
+     {
+      "nodeId": "stars",
+      "output": "buffer",
+      "port": "instances"
+     }
+    ]
+   },
+   {
+    "adapterId": "ng.render.fullscreen",
+    "adapterVersion": 1,
+    "config": "{\"module\":\"backdropSky\",\"fragmentEntry\":\"skyFragment\"}",
+    "id": "backdrop",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.post.chain",
+    "adapterVersion": 1,
+    "config": "{\"effects\":[{\"effect\":\"Bloom\",\"intensity\":1.2},{\"effect\":\"ColorGrade\",\"intensity\":0.6},{\"effect\":\"Tonemap\",\"intensity\":1},{\"effect\":\"Vignette\",\"intensity\":0.7}]}",
+    "id": "glow",
+    "inputs": []
+   },
+   {
+    "adapterId": "ng.compute.stage",
+    "adapterVersion": 1,
+    "config": "{\"module\":\"galaxyInit\",\"entry\":\"seedGalaxy\",\"workgroupSize\":64,\"invocations\":12000,\"phase\":\"init\"}",
+    "id": "seed",
+    "inputs": [
+     {
+      "nodeId": "stars",
+      "output": "buffer",
+      "port": "writes"
+     }
+    ]
+   },
+   {
+    "adapterId": "ng.compute.stage",
+    "adapterVersion": 1,
+    "config": "{\"module\":\"galaxySpin\",\"entry\":\"spinGalaxy\",\"workgroupSize\":64,\"invocations\":12000,\"phase\":\"fixedStep\"}",
+    "id": "spin",
+    "inputs": [
+     {
+      "nodeId": "stars",
+      "output": "buffer",
+      "port": "reads"
+     },
+     {
+      "nodeId": "stars",
+      "output": "buffer",
+      "port": "writes"
+     }
+    ]
+   }
+  ]
+ },
+ "modules": [
+  {
+   "module": "backdropSky",
+   "interfaceHash": "18b73941fc35630cc809aead0a5e0859e87c87e045139715f3f2f79421c22424",
+   "codeHash": "04332f9bf640bed3ebe0040d5b0e72bd947cd1c702dce2fdfa032a88ea3afe87",
+   "body": "fn skyFragment(uv: vec2<f32>) -> vec4<f32> {\n    let cen = uv - vec2<f32>(0.5, 0.5);\n    let corr = vec2<f32>(camera.aspect, 1.0);\n    let rad = length(cen * corr);\n    let topCol = vec3<f32>(0.0015, 0.0025, 0.0075);\n    let botCol = vec3<f32>(0.009, 0.012, 0.028);\n    let grad = mix(botCol, topCol, clamp(uv.y, 0.0, 1.0));\n    let glowAmt = exp(-rad * rad * 5.5);\n    let glowCol = vec3<f32>(0.016, 0.026, 0.062) * glowAmt;\n    let faintBand = exp(-rad * rad * 18.0) * vec3<f32>(0.012, 0.016, 0.038);\n    var col = grad + glowCol + faintBand;\n    let vig = 1.0 - 0.62 * smoothstep(0.32, 1.05, rad);\n    col = col * vig;\n    let dith = fract(sin(dot(uv * 913.0, vec2<f32>(12.9898, 78.233))) * 43758.5453);\n    col = col + (dith - 0.5) * 0.004;\n    col = max(col, vec3<f32>(0.0, 0.0, 0.0));\n    return vec4<f32>(col, 1.0);\n}\n"
+  },
+  {
+   "module": "galaxyInit",
+   "interfaceHash": "b453f4c4582007a632702596c71266b7ba907ec424e537a199ac16b8b452d3a6",
+   "codeHash": "f3152ac9f70678d8c695746fe227ee978874b69b9ce880cc5f3026710326d620",
+   "body": "fn h01(idx: u32, salt: u32) -> f32 {\n    var h = idx + salt * 374761393u;\n    h = (h ^ 61u) ^ (h >> 16u);\n    h = h + (h << 3u);\n    h = h ^ (h >> 4u);\n    h = h * 668265263u;\n    h = h ^ (h >> 15u);\n    return f32(h & 65535u) / 65535.0;\n}\nfn seedGalaxy(index: u32) {\n    let base = index * B_stars_STRIDE;\n    let r1 = h01(index, 11u);\n    let r2 = h01(index, 23u);\n    let r3 = h01(index, 37u);\n    let r4 = h01(index, 53u);\n    let r5 = h01(index, 71u);\n    let r6 = h01(index, 97u);\n    var px = 0.0;\n    var py = 0.0;\n    var pz = 0.0;\n    var sc = 0.05;\n    var cr = 1.0;\n    var cg = 1.0;\n    var cb = 1.0;\n    if (index < 3500u) {\n        let theta = r2 * 6.2831853;\n        let ca = 2.0 * r3 - 1.0;\n        let cac = clamp(ca, -1.0, 1.0);\n        let phi = acos(cac);\n        let sp = sin(phi);\n        let rr = 2.6 * pow(r1, 1.6);\n        px = sp * cos(theta) * rr;\n        pz = sp * sin(theta) * rr;\n        py = cos(phi) * rr * 0.42 + (r4 - 0.5) * 0.12;\n        sc = 0.035 + 0.05 * r4;\n        let innerF = clamp(rr / 2.6, 0.0, 1.0);\n        let bright = 0.85 + 0.55 * r5;\n        cr = mix(1.0, 1.0, innerF) * bright;\n        cg = mix(0.96, 0.68, innerF) * bright;\n        cb = mix(0.88, 0.30, innerF) * bright;\n    } else {\n        let a = index - 3500u;\n        let arm = a % 2u;\n        let q = a / 2u;\n        let tt = (f32(q) + 0.5) / 4250.0;\n        let r0 = 2.1 + tt * 7.9;\n        let dr = (r4 - 0.5) * (0.5 + tt * 1.4);\n        let dAng = (r5 - 0.5) * (0.55 / (0.6 + tt * 1.8));\n        let angBase = f32(arm) * 3.14159265 + tt * 3.9 + (r1 - 0.5) * 0.25;\n        let rr2 = r0 + dr;\n        let ang = angBase + dAng;\n        var xx = cos(ang) * rr2;\n        var zz = sin(ang) * rr2;\n        let barBoost = 1.0 + 0.4 * max(0.0, 1.0 - tt * 4.0);\n        xx = xx * barBoost;\n        px = xx;\n        pz = zz;\n        let thick = 0.35 * (1.0 - tt * 0.7) + 0.08;\n        py = (r6 - 0.5) * 2.0 * thick + (r2 - 0.5) * 0.06;\n        sc = 0.032 + 0.038 * r2 + 0.012 * (1.0 - tt);\n        let coreBlend = max(0.0, 1.0 - tt * 5.0);\n        var br = mix(0.78, 0.45, tt);\n        var bg = mix(0.86, 0.62, tt);\n        var bb = mix(1.0, 1.0, tt);\n        let tw = 0.85 + 0.3 * r3;\n        br = br * tw;\n        bg = bg * tw;\n        bb = bb * tw;\n        let gr = 1.0;\n        let gg = 0.78;\n        let gb = 0.45;\n        cr = mix(br, gr, coreBlend * 0.85);\n        cg = mix(bg, gg, coreBlend * 0.85);\n        cb = mix(bb, gb, coreBlend * 0.85);\n    }\n    b_stars[base + 0u] = 0.0;\n    b_stars[base + 1u] = px;\n    b_stars[base + 2u] = py;\n    b_stars[base + 3u] = pz;\n    b_stars[base + 4u] = 0.0;\n    b_stars[base + 5u] = 0.0;\n    b_stars[base + 6u] = 0.0;\n    b_stars[base + 7u] = 1.0;\n    b_stars[base + 8u] = sc;\n    b_stars[base + 9u] = sc;\n    b_stars[base + 10u] = sc;\n    b_stars[base + 11u] = cr;\n    b_stars[base + 12u] = cg;\n    b_stars[base + 13u] = cb;\n}\n"
+  },
+  {
+   "module": "galaxySpin",
+   "interfaceHash": "9d7765f849d7161fb4b60635b648e49f9d348c0b569caa0311ae3b9d79422e0c",
+   "codeHash": "d4f007cf2ec0365619732cb9bf2b90990efb5063d245089f77d93cffb2e809ce",
+   "body": "fn spinGalaxy(index: u32) {\n    let base = index * B_stars_STRIDE;\n    let px = b_stars[base + 1u];\n    let py = b_stars[base + 2u];\n    let pz = b_stars[base + 3u];\n    let rad = sqrt(px * px + pz * pz);\n    let omega = 0.052 + 0.06 * exp(-rad * 0.5);\n    let ang = omega * sim.dt;\n    let ca = cos(ang);\n    let sa = sin(ang);\n    let nx = px * ca + pz * sa;\n    let nz = -px * sa + pz * ca;\n    b_stars[base + 1u] = nx;\n    b_stars[base + 2u] = py;\n    b_stars[base + 3u] = nz;\n    let armMix = clamp((rad - 1.5) / 3.0, 0.0, 1.0);\n    let amp = 0.03 + 0.05 * armMix;\n    let phase = f32(index) * 1.7 + rad * 2.0;\n    let currS = sin(sim.time * 2.5 + phase);\n    let prevS = sin((sim.time - sim.dt) * 2.5 + phase);\n    let currF = 1.0 + amp * currS;\n    let prevF = 1.0 + amp * prevS;\n    let ratio = currF / prevF;\n    let sx = b_stars[base + 8u];\n    let sy = b_stars[base + 9u];\n    let sz = b_stars[base + 10u];\n    b_stars[base + 8u] = sx * ratio;\n    b_stars[base + 9u] = sy * ratio;\n    b_stars[base + 10u] = sz * ratio;\n}\n"
+  }
+ ]
+}

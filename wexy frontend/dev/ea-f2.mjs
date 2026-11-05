@@ -243,6 +243,9 @@ try {
         await click('Write the modules');
         const sealed = await until(`['static-verified', 'failed', 'exhausted'].includes(document.querySelector('.cand')?.dataset.phase)`, 90_000);
         const cand = await evaluate(`({ phase: document.querySelector('.cand')?.dataset.phase, l3: document.querySelector('.cand')?.dataset.l3 })`);
+        // Pressed once it is offered, as a creator presses it: Run waits for the stage (the backdrop counted, any hold
+        // over). A press while it waited did nothing, and the GTX 1650's first page once left the world idle (11-05).
+        await until(`[...document.querySelectorAll('.cand button')].some(b => b.textContent === 'Run on this GPU' && !b.hidden && !b.disabled)`, 30_000);
         await click('Run on this GPU');
         await until(`!['running', 'idle'].includes(document.querySelector('.cand')?.dataset.run)`, 120_000);
         const run = await evaluate(`({ run: document.querySelector('.cand')?.dataset.run, line: document.querySelector('.cand-run')?.textContent })`);

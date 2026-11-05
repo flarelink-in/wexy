@@ -155,6 +155,11 @@ export interface CreationState {
     readonly run: RunSummary | null;
     /** A world this controller made is on the stage. */
     readonly onStage: boolean;
+    /**
+     * The creation shown is the world on the stage's own (EA9.4): a round of "Improve it" on it, under way or written and
+     * waiting for Show it, whose go shows a new version of that world. False for a new idea's creation.
+     */
+    readonly improves: boolean;
 }
 
 export interface CreationController {
@@ -165,16 +170,21 @@ export interface CreationController {
     readonly session: CandidateSession | null;
     /**
      * The session whose candidate is on the stage (H's, I8): the review's. Null when none of this controller's worlds is
-     * there, once the account it was made under is no longer signed in (its paid actions go with it, §6), and after a
-     * device loss.
+     * there, once another account than the one that made it is signed in, or none (its paid actions go with it, §6; a
+     * Google link is the same account, Q128 (b)), and after a device loss.
      */
     readonly installedSession: CandidateSession | null;
     /**
      * The session holding `candidate`, the one on the stage, for the review's paid actions (I8): H's, or the current
      * creation's while its install settles; null when none of this controller's does, its account is no longer the one
-     * signed in, or the device was lost.
+     * signed in (for H, another uid: a link keeps it, Q128 (b)), or the device was lost.
      */
     sessionFor(candidate: string | null): CandidateSession | null;
+    /**
+     * The world on the stage is one of this controller's and its paid actions went with an account no longer signed in
+     * (another uid, or none; a link keeps them, Q128 (b)): its panel says so, and not when its session ended otherwise.
+     */
+    readonly stageMoved: boolean;
     /** Paid work or a Run is under way: Create reads Stop, and the account waits. */
     readonly busy: boolean;
     /**
@@ -208,7 +218,8 @@ export interface CreationController {
     showBlocked(): string | null;
     /**
      * Stop: ends the turn or the attempt under way at its next check, and nothing is applied. A Run stops the same way,
-     * and its world, written and checked, waits for Show it again (a new go).
+     * and its world, written and checked, waits for Show it again (a new go). A round on the world on the stage stops
+     * alone: that world keeps its session and what is left of its improvements (EA9.4's review).
      */
     cancel(): void;
     /**
@@ -461,6 +472,7 @@ export function createCreationController(deps: CreationDeps): CreationController
             candidate: c?.candidate ?? null,
             run: c?.run && shown !== null && c.run.candidate === shown ? c.run.summary : null,
             onStage: installed !== null,
+            improves: !!c && c === installed,
         });
     }
 
@@ -474,6 +486,12 @@ export function createCreationController(deps: CreationDeps): CreationController
     const accountMovedFor = (c: Creation) => !!deps.account && c.authEpoch !== null && deps.account.epoch() !== c.authEpoch;
     /** Another uid is signed in than the one `c` was made by, or none is: an account change (a link is none). */
     const uidMovedFor = (c: Creation) => !!deps.account && c.authEpoch !== null && deps.account.uid() !== c.authUid;
+    /**
+     * `c`'s paid actions went with an account no longer signed in (I8, I9). The world on the stage's follow its uid (Q128
+     * (b), the user, 2026-11-04: "a link keeps it"): a Google link keeps the uid, and the backend joins that world's grant
+     * by its uid, so its "Improve it" stays; another uid, or none, takes them. Any other creation's follow E_auth.
+     */
+    const paidMovedFor = (c: Creation) => (c === installed ? uidMovedFor(c) : accountMovedFor(c));
     const improving = (c: Creation | null) => !!c && c === installed && WRITING.has(c.candidate?.phase ?? '');
     /**
      * A creation other than H's is under way or waits for its go (handed off, or written and checked): a round on H would
@@ -563,16 +581,33 @@ export function createCreationController(deps: CreationDeps): CreationController
      */
     function decide(c: Creation, admitted: boolean): void {
         const w = kept;
-        if (!w || current !== c) return;
-        kept = null;
-        if (admitted) {
-            release(w);
-            return;
+        if (w && current === c) {
+            kept = null;
+            if (admitted) release(w);
+            else {
+                const why = c.end && c.end.phase !== 'cancelled' ? c.end.sentence : null;
+                w.notice = { sentence: why ? COPY.creation.kept(why) : COPY.creation.keptStopped, failed: false, limit: c.end?.limit ?? null };
+                current = w;
+                publish(w);
+                return;
+            }
         }
-        const why = c.end && c.end.phase !== 'cancelled' ? c.end.sentence : null;
-        w.notice = { sentence: why ? COPY.creation.kept(why) : COPY.creation.keptStopped, failed: false, limit: c.end?.limit ?? null };
-        current = w;
-        publish(w);
+        backToStage(c);
+    }
+
+    /**
+     * An improvement of the world on the stage, written and waiting for its go, stays in H's session until H is replaced
+     * (§9, as built). So when a newer creation ends without a world, admitted or not, the views go back to it: its Show it
+     * offered again, with the newer one's sentence (EA9.4's review: it was left out of reach, paid for, and its review
+     * held, so H took no other change). Not once H's paid actions went with another account, nor after a device loss.
+     */
+    function backToStage(c: Creation): void {
+        const h = installed;
+        if (current !== c || !c.end || !h || h === c || h.closed || lost || paidMovedFor(h) || phaseOf(h) !== 'ready') return;
+        const why = c.end.phase !== 'cancelled' ? c.end.sentence : null;
+        h.notice = { sentence: why ? COPY.creation.keptImproved(why) : COPY.creation.keptImprovedStopped, failed: false, limit: c.end.limit ?? null };
+        current = h;
+        publish(h);
     }
 
     function createBlocked(): string | null {
@@ -675,21 +710,26 @@ export function createCreationController(deps: CreationDeps): CreationController
         if (c.closed || c.end) return state;
         if (accountMovedFor(c)) {
             finish(c, 'stopped', COPY.creation.accountChanged);
+            backToStage(c);
             return state;
         }
         if (st.phase === 'static-verified') {
             // Show it needs this device's verdict on every body (EA5.1); without one this device cannot test it.
-            if (!session.snapshot || !session.compiled) finish(c, 'stopped', COPY.creation.notHere);
-            else publish(c);
+            if (!session.snapshot || !session.compiled) {
+                finish(c, 'stopped', COPY.creation.notHere);
+                backToStage(c);
+            } else publish(c);
             return state;
         }
         if (st.phase === 'cancelled' || st.phase === 'superseded') {
             finish(c, 'cancelled', COPY.creation.cancelled);
+            backToStage(c);
             return state;
         }
         const stop = st.stop;
         const limit: LimitKind | null = stop?.code === 'quota' ? 'quota' : stop?.code === 'account-required' ? 'allowance' : null;
         finish(c, 'stopped', stop?.sentence ?? COPY.candidate.refused, { limit });
+        backToStage(c);
         return state;
     }
 
@@ -776,8 +816,9 @@ export function createCreationController(deps: CreationDeps): CreationController
         if (!BUSY.has(phase)) return;
         n++;
         if (c === installed) {
-            // A round on the world on the stage: it stops, and the world stays, as its review says.
-            if (WRITING.has(c.candidate?.phase ?? '')) c.session?.cancel();
+            // A round on the world on the stage: the round stops, and the world stays with its session, as its review says,
+            // so what is left of its improvements stays too (closing the session lost them: EA9.4's review).
+            if (WRITING.has(c.candidate?.phase ?? '')) c.session?.stopRound();
             publish(c);
             return;
         }
@@ -822,7 +863,9 @@ export function createCreationController(deps: CreationDeps): CreationController
 
     /**
      * Who is signed in changed (I9): paid work under the account before stops, and H's paid actions go with that account
-     * (installedSession). A candidate already written and waiting for "Show it" is kept: showing it spends nothing.
+     * (installedSession). A Google link is the same account (its uid stays): it stops a new idea's turn or writing, as
+     * any move of E_auth does, but H's round goes on and H keeps its paid actions (Q128 (b)), and a world waiting for its
+     * go stays (Q127 (a) reversed).
      */
     function accountMoved(): void {
         if (disposed) return;
@@ -839,8 +882,13 @@ export function createCreationController(deps: CreationDeps): CreationController
             const phase = phaseOf(c);
             const other = uidMovedFor(c);
             if (c === installed) {
-                // A round on the world on the stage stops; its improvement, written or being shown, goes unshown.
-                if (WRITING.has(c.candidate?.phase ?? '') || (other && (phase === 'ready' || phase === 'running'))) {
+                // Another account: a round on the world on the stage stops (the round alone, so its maker, signed in again,
+                // finds the world's improvements left: EA9.4's review), and its improvement, written or being shown, goes
+                // unshown (Q129). A link is the same creator, whose grant the round joins by uid (Q128 (b)): it goes on.
+                if (other && WRITING.has(c.candidate?.phase ?? '')) {
+                    n++;
+                    c.session?.stopRound();
+                } else if (other && (phase === 'ready' || phase === 'running')) {
                     n++;
                     c.session?.cancel();
                 }
@@ -892,15 +940,18 @@ export function createCreationController(deps: CreationDeps): CreationController
         get session() { return current?.session ?? null; },
         get installedSession() {
             const h = installed;
-            if (lost || !h || h.closed || !h.session || accountMovedFor(h)) return null;
+            if (lost || !h || h.closed || !h.session || paidMovedFor(h)) return null;
             return h.session;
         },
         sessionFor(candidate) {
             if (lost || candidate === null) return null;
             for (const c of [installed, current]) {
-                if (c && !c.closed && c.session?.snapshot?.id === candidate && !accountMovedFor(c)) return c.session;
+                if (c && !c.closed && c.session?.snapshot?.id === candidate && !paidMovedFor(c)) return c.session;
             }
             return null;
+        },
+        get stageMoved() {
+            return !!installed && paidMovedFor(installed);
         },
         get busy() {
             return (!!current && BUSY.has(phaseOf(current))) || improving(installed);

@@ -36,6 +36,13 @@ interface GrantStore {
      */
     Join join(String grantKey, String owner, String field, long limit, String prompt, String newIndexKey, String grantId);
 
+    /**
+     * What {@link #join} would answer now, writing nothing (the EA9.4 review): JOINED when the grant is `owner`'s, alive,
+     * its `field` under `limit` and (when `prompt` is not null) its prompt's hash `prompt`; FULL and NONE as join's. A
+     * check before costly work, never a reservation: the join itself may still answer otherwise after it.
+     */
+    Join probe(String grantKey, String owner, String field, long limit, String prompt);
+
     /** Marks a grant spent: its first model call was dispatched. */
     void dispatched(String grantKey);
 

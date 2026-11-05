@@ -263,6 +263,13 @@ export interface CandidateStop {
      * dialog on `quota` and `account-required` from this, never from the words. Absent for every other stop.
      */
     code?: ErrorCode;
+    /**
+     * False when the backend refused the request at its admission, before any record or charge, so nothing was spent
+     * (EA9.4: a revision whose words content safety refused). Absent for every other stop, whose charge may be unknown.
+     */
+    charged?: false;
+    /** The creator stopped a round on the world on the stage (`stopRound`, EA9.4's review): the round only, not the attempt. */
+    stopped?: true;
 }
 
 export interface CandidateState {
@@ -306,6 +313,11 @@ export interface Round {
     /** Why the round ended with no candidate; null when it improved. */
     stop: CandidateStop | null;
     restored: boolean;
+    /**
+     * Nothing of the round was spent: every revision it sent was refused at admission, its own first among them, so the
+     * round was given back too (EA9.4). False once any revision of it may have been charged, whatever stopped it later.
+     */
+    givenBack: boolean;
 }
 
 export type Corrected = { ok: true; state: DeepReadonly<CandidateState>; round?: Round } | { ok: false; diagnostic: string };
@@ -409,6 +421,12 @@ export interface CandidateSession {
     start(handOff: HandOff): Promise<DeepReadonly<CandidateState>>;
     /** Cancels the current attempt: shown cancelled at once, no call after, nothing applied. */
     cancel(): void;
+    /**
+     * The creator's Stop during a round on the world on the stage (`improve`; EA9.4's review): the round's work is aborted
+     * and it ends with no new candidate, its calls counted, and the session goes back to the candidate on the stage, so the
+     * world keeps what is left of its improvements. Nothing outside a round.
+     */
+    stopRound(): void;
     /** A correction on a settled candidate: refused before any call when stale or out of scope; run otherwise. */
     correct(envelope: Envelope): Promise<Corrected>;
     /** A visual verdict (EA6): recorded as its own evidence; it never moves a technical verdict (P4). */
@@ -435,6 +453,23 @@ export interface CandidateSession {
 }
 
 /**
+ * The backend's refusals at admission, each answered as an HTTP status before the turn's stream begins, so before any model
+ * call or charge (EA9.4 and its review): the request itself, the caller (sign-in, App Check, a suspension, the allowance,
+ * a rate), content safety (the creator's words, `content-refused`; the world's own, `world-refused`), the spending guard
+ * and a service that could not take it. A gateway's timeout, a broken upstream or an internal error may come after work
+ * began, so they stay unknown. A refusal in the stream arrives with status 200, never as one of these.
+ */
+const BEFORE_ANY_CALL: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
+    'bad-request', 'auth', 'appcheck', 'account-required', 'forbidden', 'too-large', 'content-refused', 'world-refused', 'rate', 'quota',
+    'budget', 'paused', 'unavailable',
+]);
+
+/** Refused at admission, in the backend's own envelope (never an edge's page), before any stream: nothing was spent. */
+export function refusedBeforeAnyCall(error: unknown): boolean {
+    return error instanceof ForgeError && !error.bare && error.status >= 400 && BEFORE_ANY_CALL.has(error.code);
+}
+
+/**
  * The creator's sentence for a refusal or failure the backend reported. `bare`: the code is the HTTP status's alone, no
  * envelope of ours with it (an edge's or a proxy's page, ForgeError.bare), so a 403 is no word on the account (the
  * account-guards review). Exported for the tests.
@@ -449,7 +484,10 @@ export function sentenceFor(code: ErrorCode, bare = false): string {
         // safety as a first turn does, and is said as one.
         case 'account-required': return COPY.failures.allowance;
         case 'quota': return COPY.failures.quota;
-        case 'content-refused': return COPY.failures.refused;
+        // EA9.4: only a revision meets `world-refused`. Create's own revisions say it as an idea refused (no world was shown
+        // yet); a round on the world on the stage says it in the review's words (review.ts's roundSentence).
+        case 'content-refused':
+        case 'world-refused': return COPY.failures.refused;
         case 'auth':
         case 'appcheck': return COPY.failures['sign-in'];
         case 'forbidden': return bare ? COPY.failures['sign-in'] : COPY.failures.suspended;
@@ -522,6 +560,8 @@ class Attempt {
     phase: CandidatePhase | null = 'resolving';
     revising = false;
     running = false;
+    /** A visual round's revision and its modules are under way (`improve`): the creator's Stop ends them alone. */
+    rounding = false;
     stop: CandidateStop | null = null;
     snapshot: Snapshot | null = null;
     /** The snapshot's L3 verdicts, one a body, when L3 judged every one; set with each snapshot, read only beside it. */
@@ -811,8 +851,12 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
             }, AbortSignal.any([a.controller.signal, a.work.signal]), observe);
         } catch (error) {
             // A revision whose end was not seen keeps its whole reservation, unknown (the design §8); its turn's charge
-            // stays unknown too, whatever its calls reported.
-            a.ledger.settle(reservation, null);
+            // stays unknown too, whatever its calls reported. One the backend refused at admission (EA9.4: content safety
+            // screens a revision's base before any join or call; the allowance, a rate, the spending guard come first)
+            // spent nothing, and is given back.
+            const nothing = refusedBeforeAnyCall(error);
+            if (nothing) a.ledger.refusedAtAdmission(reservation);
+            else a.ledger.settle(reservation, null);
             a.revising = false;
             if (!a.live()) {
                 record.status = 'cancelled';
@@ -821,8 +865,12 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
             record.error = message(error);
             // Refused before any stream (an HTTP status), or broken once it ran (an error event, a cut, another contract).
             record.status = error instanceof ForgeError && error.status >= 400 ? 'refused' : 'broken';
+            if (nothing) record.charge = 'known';
             const code = error instanceof ForgeError ? error.code : 'internal';
-            a.halt({ scope: 'host', diagnostic: `revision: ${message(error)}; charge unknown`, sentence: sentenceFor(code, error instanceof ForgeError && error.bare), ...(error instanceof ForgeError ? { code } : {}) }, 'failed', now());
+            a.halt({
+                scope: 'host', diagnostic: `revision: ${message(error)}; ${nothing ? 'nothing charged' : 'charge unknown'}`, sentence: sentenceFor(code, error instanceof ForgeError && error.bare),
+                ...(error instanceof ForgeError ? { code } : {}), ...(nothing ? { charged: false as const } : {}),
+            }, 'failed', now());
             return 'stop';
         }
         a.revising = false;
@@ -1444,6 +1492,8 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
             }
             // The round and the revision's allowance, both at once and synchronously: a duplicate press finds the attempt
             // running, and a refusal changes nothing (§8.3). A round whose revision never went out is given back.
+            // The revisions counted before this round's: the round is given back only if it ends with no more of them.
+            const revisionsBefore = a.ledger.state.revisions;
             const round = a.ledger.reserveVisualRound();
             if (!round.ok) return { ok: false, diagnostic: `EA_REVIEW_BUDGET visual rounds ${round.used} of ${round.limit}` };
             const r = a.ledger.reserveRevision();
@@ -1484,16 +1534,27 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
             a.endedMs = null;
             a.snapshot = null;
             const first = held[0].finding;
-            await drive(a, { revise: held.map(h => h.finding), said: `${first.code}: ${first.message}`, reserved: r.reservation });
+            // Its revisions and their modules are the round's: the creator's Stop ends them alone (stopRound).
+            a.rounding = true;
+            try {
+                await drive(a, { revise: held.map(h => h.finding), said: `${first.code}: ${first.message}`, reserved: r.reservation });
+            } finally {
+                a.rounding = false;
+            }
             // Read fresh: the round reassigned them (flow analysis still holds the nulls set above).
             const now = () => ({ snapshot: a.snapshot as Snapshot | null, stop: a.stop as CandidateStop | null, verified: a.verified as Snapshot | null });
             const after = now();
-            if (after.snapshot && a.phase === 'static-verified' && after.snapshot.id !== sealed.id) return { ok: true, state: a.view(), round: { improved: true, stop: null, restored: false } };
-            // No new candidate (the revision asked or declined, a budget refused, a stream broke): the session goes back to
-            // the candidate the round started from, the one on the stage, with its own bodies and no call, so the creator
-            // may try again within what is left (the outside review of 11-02 night). Every call and the round stay spent.
-            // A cancel is the creator's own stop, and stays one.
+            if (after.snapshot && a.phase === 'static-verified' && after.snapshot.id !== sealed.id) return { ok: true, state: a.view(), round: { improved: true, stop: null, restored: false, givenBack: false } };
+            // No new candidate (the revision asked or declined, a budget refused, a stream broke, the creator stopped it):
+            // the session goes back to the candidate the round started from, the one on the stage, with its own bodies and
+            // no call, so the creator may try again within what is left (the outside review of 11-02 night). Every call and
+            // the round stay spent, but when every revision the round sent was refused at admission (EA9.4), which spent
+            // nothing: then the round is given back too, so the creator may say it another way. Read from the ledger, never
+            // from the last stop alone, which may be a later automatic revision's after the round's own was charged (its
+            // review). A cancel of the attempt is the creator's own stop of it, and stays one.
             const stop = after.stop;
+            const givenBack = a.ledger.state.revisions === revisionsBefore;
+            if (givenBack) a.ledger.returnVisualRound();
             let restored = false;
             if (!a.closed && after.verified?.id === sealed.id && kept.every(([, entry]) => entry !== undefined)) {
                 for (const [key, entry] of kept) a.reuse.set(key, entry!);
@@ -1504,7 +1565,15 @@ export function createCandidateSession(deps: CandidateDeps, onChange: (state: De
                 await drive(a, 'resolve');
                 restored = !a.closed && now().snapshot?.id === sealed.id;
             }
-            return { ok: true, state: a.view(), round: { improved: false, stop, restored } };
+            return { ok: true, state: a.view(), round: { improved: false, stop, restored, givenBack } };
+        },
+        stopRound() {
+            const a = current;
+            if (!a || a.closed || !a.rounding) return;
+            // Its calls stay counted, their charge unknown (each settles as its end was not seen); the attempt stays open,
+            // and improve() takes it back to the candidate on the stage, as after any round that brought nothing.
+            a.halt({ scope: 'host', diagnostic: 'EA_ROUND_STOPPED the creator stopped the round: its calls stay counted, their charge unknown', sentence: COPY.review.stopped, stopped: true }, 'failed', now());
+            publish(a);
         },
         async modelReview(input) {
             const a = current;

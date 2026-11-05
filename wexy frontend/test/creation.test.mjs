@@ -17,7 +17,7 @@ import { createAgentSession } from '../src/loop/agent-turn.ts';
 import { createCandidateSession } from '../src/loop/candidate.ts';
 import { COPY } from '../src/loop/copy.ts';
 import { createCreationController, handOffFrom, runSentence, TITLE_CHARS, titleOf } from '../src/loop/creation.ts';
-import { elapsed, spoken, timed } from '../src/shell/studio/creation-view.ts';
+import { elapsed, roundCameBack, spoken, timed } from '../src/shell/studio/creation-view.ts';
 import { AccountSession } from '../src/platform/session.ts';
 import { Viewport } from '../src/runtime/viewport.ts';
 import { creationAccount } from '../src/shell/studio/account.ts';
@@ -718,8 +718,12 @@ test('EA9-U18 one owner of the stage: a photo\'s or a film\'s hold keeps Show it
         'a photo\'s, a measurement\'s or a capture\'s hold, start and end (a Run\'s own probe windows aside)');
     const onBusy = init.slice(init.indexOf('this.exporter.onBusy'), init.indexOf('};', init.indexOf('this.exporter.onBusy')));
     assert.match(onBusy, /this\.refreshRun\(\);/, 'a film\'s recording, start and end (the second mid finding)');
-    const reviews = methodOf(main, 'private async mountAgent(');
-    assert.match(reviews.slice(reviews.indexOf('onChange: () =>')), /^onChange: \(\) => \{\s*view\?\.render\(\);\s*this\.refreshRun\(\);/, 'a review capture\'s start and end');
+    // The review's one StageReviews, on the agent path since EA9.4 (mountReviews): Developer view's panel drawn, then every
+    // control that offers a Run again, the creator's panel among them (EA9.4's review: its Show it after a film's end).
+    const reviews = methodOf(main, 'private async mountReviews(');
+    assert.match(reviews.slice(reviews.indexOf('onChange: () =>')), /^onChange: \(\) => \{\s*this\.reviewPanel\?\.render\(\);\s*this\.refreshRun\(\);/,
+        'a review capture\'s start and end');
+    assert.match(methodOf(main, 'private refreshRun()'), /this\.renderOpening\(\);\s*this\.improveView\?\.render\(\);/, 'the creator\'s panel with them');
     const run = methodOf(main, 'private async runCandidate(');
     // Any Run's end, a saved attempt's too. An installed one's after H is set, through afterSwitch (EA9.3's reviews: a
     // refresh that threw between the stage's commit and the install left the world drawn owned by nobody).
@@ -787,10 +791,11 @@ test('EA9-U19 a world written for Show it is never stranded: the review\'s paid 
     assert.deepEqual([c.phase, controller.creating], ['handed-off', true]);
     const d = await controller.create({ ...IDEA, prompt: 'declined: something this studio cannot make' });
     assert.deepEqual([d.phase, controller.creating], ['stopped', false]);
-    // The review's panel reads `creating` only as it renders, so the studio shows it again whenever that (or the stage's
-    // session) changes: its "Improve it" is offered again once the waiting world is gone.
-    const panel = methodOf(readFileSync(join(ROOT, 'src/shell/studio/main.ts'), 'utf8'), 'private async mountAgent(');
-    assert.match(panel, /this\.creation\?\.subscribe\(\(\) => \{\s*const now = `\$\{!!this\.creation\?\.creating\}\|\$\{!!this\.creation\?\.sessionFor\(this\.agentWorld\?\.candidate \?\? null\)\}`;\s*if \(now === gate\) return;\s*gate = now;\s*view\?\.render\(\);/);
+    // The review's panels read `creating` only as they render, so the studio shows them again whenever that (or the stage's
+    // session) changes: "Improve it" is offered again once the waiting world is gone. Since EA9.4 one subscription draws
+    // both (mountReviews): the creator's at every word, Developer view's when its gate moves.
+    const panel = methodOf(readFileSync(join(ROOT, 'src/shell/studio/main.ts'), 'utf8'), 'private async mountReviews(');
+    assert.match(panel, /creation\.subscribe\(\(\) => \{\s*improve\.render\(\);\s*const now = `\$\{!!creation\.creating\}\|\$\{!!creation\.sessionFor\(this\.agentWorld\?\.candidate \?\? null\)\}`;\s*if \(now === gate\) return;\s*gate = now;\s*this\.reviewPanel\?\.render\(\);/);
 });
 
 test('W3.6 the go says what a save needs: its design, and whether it revises the world on the stage (a round, or the same world shown again), never another creation\'s', async () => {
@@ -1241,21 +1246,25 @@ test('account-guards review: a first visit\'s own caller then its link to Google
  * The fakes of EA9-U19 over this file's stage and account: a turn that hands off at once; sessions that seal at once,
  * run the review's "Improve it" on demand, and say a cancel as a candidate's does (its phase `cancelled`).
  */
-function roundRig() {
+function roundRig({ ends = [] } = {}) {
     const handedOff = request => ({
         seq: 1, request, phase: 'handed-off', meta: { turnId: 'turn-1', model: 'm', promptVersion: 'p' }, calls: [], findings: [],
         design: {}, program: { nodes: [] }, question: null, reason: null, code: null, httpStatus: null, retryAfterSeconds: null,
         bare: false, costMicroUsd: 0, unreported: 0, startedMs: 0, endedMs: 0,
     });
+    // The turns after the first, as `ends` names them: 'declined' (admitted, no world), 'quota' (refused at entry, no stream).
+    const endOf = (kind, request) => (kind === 'declined' ? { ...handedOff(request), phase: 'declined', design: null, program: null, reason: 'no' }
+        : { ...handedOff(request), phase: 'failed', meta: null, design: null, program: null, code: 'quota', httpStatus: 429, reason: 'today\'s world is made' });
+    let turns = 0;
     const sessions = [];
     const acct = account();
     const ref = {};
     const stage = stagePort(ref, null);
     const controller = createCreationController({
-        turnSession: () => ({ state: null, cancel() {}, start: async request => handedOff(request) }),
+        turnSession: () => ({ state: null, cancel() {}, start: async request => (turns++ > 0 && ends.length ? endOf(ends.shift(), request) : handedOff(request)) }),
         candidateSession: onChange => {
             const s = {
-                k: sessions.length, cancels: 0, snapshot: null, compiled: null,
+                k: sessions.length, cancels: 0, roundStops: 0, snapshot: null, compiled: null,
                 async start() {
                     s.snapshot = { id: `world-${s.k}` };
                     s.compiled = [];
@@ -1264,8 +1273,16 @@ function roundRig() {
                 },
                 // As a candidate session's close does: its sealed world goes with it (candidate.ts's close).
                 cancel() { s.cancels++; s.snapshot = null; s.compiled = null; onChange({ phase: 'cancelled', modules: [] }); },
+                // As its stopRound does (EA9.4's review): the round ends, and the session is back on the world on the stage.
+                stopRound() { s.roundStops++; onChange({ phase: 'static-verified', modules: [] }); },
                 improve() {
                     onChange({ phase: 'correcting', modules: [] });
+                    s.snapshot = { id: `world-${s.k}-improved` };
+                    onChange({ phase: 'static-verified', modules: [] });
+                },
+                // A round held under way, then let go to its improvement (Q128 (b)).
+                hold() { onChange({ phase: 'correcting', modules: [] }); },
+                letGo() {
                     s.snapshot = { id: `world-${s.k}-improved` };
                     onChange({ phase: 'static-verified', modules: [] });
                 },
@@ -1323,6 +1340,74 @@ test('account-guards review: an improvement of the world on the stage, written o
     assert.equal(l.stage.onStage, 'world-0-improved');
 });
 
+test('EA9-U21b Q128 (b): a Google link keeps the world on the stage\'s paid actions and its round under way; another account takes both', async () => {
+    // The world on the stage, then a link (the same uid, a new epoch): its session stays the review's, so Improve it stays.
+    const l = roundRig();
+    await onStage(l);
+    const held = l.controller.installedSession;
+    assert.ok(held, 'the world on the stage holds its session');
+    l.acct.link();
+    assert.equal(l.controller.installedSession, held, 'a link keeps it: the same uid, whose grant the backend joins');
+    assert.equal(l.controller.sessionFor('world-0'), held);
+
+    // A round under way when a link lands goes on, and its improvement shows; the world stays the creator's after.
+    const r = roundRig();
+    await onStage(r);
+    r.sessions[0].hold();
+    assert.equal(r.controller.busy, true, 'a round is under way');
+    const n = r.controller.n;
+    r.acct.link();
+    assert.deepEqual([r.sessions[0].cancels, r.controller.n], [0, n], 'the round goes on, κ unmoved');
+    r.sessions[0].letGo();
+    assert.equal(r.controller.state.phase, 'ready');
+    const showing = r.controller.show();
+    r.stage.gos.at(-1).answer(INSTALLED);
+    assert.equal((await showing).status, 'installed');
+    assert.equal(r.controller.installedSession, r.sessions[0], 'still the creator\'s after its improvement\'s install');
+
+    // Another account signed in: the round stops, and the world's paid actions go with the account that made it. The round
+    // alone stops (EA9.4's review): its maker, signed in again, finds the world's session and what is left of it.
+    const m = roundRig();
+    await onStage(m);
+    m.sessions[0].hold();
+    m.acct.move();
+    assert.deepEqual([m.sessions[0].roundStops, m.sessions[0].cancels], [1, 0], 'the round stopped, the session kept');
+    assert.deepEqual([m.controller.installedSession, m.controller.sessionFor('world-0'), m.controller.stageMoved], [null, null, true]);
+    m.acct.e++;
+    m.acct.u = 'uid-0';
+    for (const l of [...m.acct.listeners]) l();
+    assert.deepEqual([m.controller.installedSession, m.controller.stageMoved], [m.sessions[0], false], 'its maker again: its improvements again');
+});
+
+test('EA9.4 review: Stop during a round on the world on the stage ends the round alone; the world keeps its session and what is left of it', async () => {
+    const r = roundRig();
+    await onStage(r);
+    const held = r.controller.installedSession;
+    r.sessions[0].hold();
+    assert.deepEqual([r.controller.busy, r.controller.state.phase], [true, 'writing']);
+    r.controller.cancel();
+    assert.deepEqual([r.sessions[0].roundStops, r.sessions[0].cancels], [1, 0], 'the round stopped, never the session');
+    assert.deepEqual([r.controller.state.phase, r.controller.busy, r.controller.installedSession, r.controller.stageMoved], ['installed', false, held, false]);
+});
+
+test('EA9.4 review: an improvement written for its go comes back when a newer idea ends without a world, admitted or refused at entry; its Show it installs it', async () => {
+    for (const end of ['declined', 'quota']) {
+        const r = roundRig({ ends: [end] });
+        await onStage(r);
+        r.sessions[0].improve();
+        assert.deepEqual([r.controller.state.phase, r.controller.state.improves], ['ready', true]);
+        await r.controller.create({ ...IDEA, prompt: 'a reef of glowing coral' });
+        const st = r.controller.state;
+        const why = end === 'declined' ? COPY.creation.declined : COPY.failures.quota;
+        assert.deepEqual([st.phase, st.improves, st.sentence], ['ready', true, COPY.creation.keptImproved(why)], end);
+        assert.equal(r.controller.showBlocked(), null, `${end}: its Show it offered again`);
+        const showing = r.controller.show();
+        r.stage.gos.at(-1).answer(INSTALLED);
+        assert.equal((await showing).status, 'installed', end);
+        assert.equal(r.stage.onStage, 'world-0-improved', end);
+    }
+});
+
 test('account-guards review: a Run whose commit beat the account change installs: the world is on the stage, said installed, not discarded', async () => {
     const r = rig({ answer: null });
     await r.controller.create(IDEA);
@@ -1342,4 +1427,30 @@ test('account-guards review: after a device loss nothing waits to be shown first
     assert.deepEqual([r.controller.state.phase, r.controller.unshown], ['ready', true]);
     r.controller.deviceLost();
     assert.deepEqual([r.controller.unshown, r.controller.showBlocked() !== null], [false, true]);
+});
+
+test('EA9.4 review: a round that brought no new world comes back to the world on the stage unannounced as one; an improvement shown is announced', async () => {
+    const r = roundRig();
+    await onStage(r);
+    let last = { phase: r.controller.state.phase, improves: r.controller.state.improves };
+    const seen = [];
+    const off = r.controller.subscribe(st => {
+        seen.push(roundCameBack(last, st));
+        last = { phase: st.phase, improves: st.improves };
+    });
+    r.sessions[0].hold();
+    r.controller.cancel();
+    assert.equal(r.controller.state.phase, 'installed');
+    // The first word after the round's is its coming back (the controller publishes again after, which the Journey hears as said).
+    assert.equal(seen[seen.indexOf(true)], true, 'the Journey leaves it to the panel');
+    assert.equal(seen.filter(Boolean).length, 1, 'once');
+    // A round that brings an improvement, then its Show it: the new version is on the stage, said so.
+    seen.length = 0;
+    r.sessions[0].improve();
+    const showing = r.controller.show();
+    r.stage.gos.at(-1).answer(INSTALLED);
+    await showing;
+    assert.equal(r.controller.state.phase, 'installed');
+    assert.ok(seen.length > 0 && seen.every(b => b === false), 'every step said, its install too');
+    off();
 });

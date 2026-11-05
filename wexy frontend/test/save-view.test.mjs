@@ -67,6 +67,11 @@ test('W3.6 every save state in the creator\'s words, its one thing to do; nothin
     assert.ok(!Object.values(lines).some(l => l.actions.includes('save')), 'no Save that would put a world into another account');
     // A new world's conflict (its key used for another body) has no saved world: no "Open the saved one" for nothing.
     assert.deepEqual(saveLine(state('conflict', { worldId: null })).actions, ['save-as-new']);
+    // EA9.4 (Q119): saved, then its camera views changed. Its one Save is its owner's: the controller says `changed` only
+    // while the account that made it is signed in, and its saveChanges sends for that account alone (save-controller tests).
+    const changed = saveLine(state('changed'));
+    assert.deepEqual([changed.tone, changed.text, changed.actions, changed.why], ['warn', COPY.save.changed, ['save'], COPY.save.changedWhy]);
+    assert.doesNotMatch(`${changed.text} ${changed.why}`, /\d{3}|_|PL_|EA_|developer/);
     for (const [s, l] of Object.entries(lines)) {
         // Plain words (guidelines §2): no code, status number, id or the developer's detail in what a creator reads.
         assert.doesNotMatch(`${l.text} ${l.why}`, /\d{3}|_|PL_|EA_|developer|conflict:|storage-full/, s);

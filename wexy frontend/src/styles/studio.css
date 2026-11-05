@@ -803,7 +803,7 @@
     .studio-page .segmented button { min-height: 34px; }
     .studio-page .segmented-sm button { min-height: 32px; }
     .studio-page select { height: 40px; font-size: 16px; }
-    .prompt-box textarea { font-size: 16px; }
+    .prompt-box textarea, .imp-words { font-size: 16px; }
     .tl-play { width: 40px; height: 40px; }
     .studio-page input[type='range'] { height: 28px; }
     .studio-page input[type='range']::-webkit-slider-thumb { width: 22px; height: 22px; margin-top: -9.5px; }
@@ -813,3 +813,29 @@
 .rev-saved { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .rev-saved h4 { margin: 0; font-size: 12px; font-weight: 600; color: var(--text); }
 .rev-saved-review { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid var(--line); min-width: 0; }
+
+/* "Shape it" for an agent world (EA9.4, Q121; the user's Q118 answer: a chat window style prompt): the ask, the thread of
+   what was asked and what came of it, one status line, and the composer. No accent here: that stays on Create and the
+   export (design guidelines §1). */
+.imp { display: flex; flex-direction: column; gap: 12px; padding: 12px 16px 18px; min-width: 0; }
+.imp-ask { margin: 0; font-size: 13px; line-height: 1.55; color: var(--text-2); }
+.imp-thread { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.imp-msg { max-width: 92%; padding: 8px 11px; border-radius: var(--radius-sm); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.imp-msg p { margin: 0; }
+.imp-creator { align-self: flex-end; background: var(--panel-3); border: 1px solid var(--line-2); color: var(--text); }
+.imp-studio { align-self: flex-start; background: var(--panel-2); border: 1px solid var(--line); color: var(--text-2); }
+.imp-who { display: block; margin-bottom: 2px; font: 600 10.5px/1.2 var(--font); color: var(--text-3-strong); }
+.imp-now { display: flex; flex-direction: column; gap: 8px; }
+.imp-status { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-2); }
+.imp-composer { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.imp-label { font-size: 12px; font-weight: 600; color: var(--text-3-strong); }
+.imp-words {
+    width: 100%; min-width: 0; resize: vertical; min-height: 64px; max-height: 200px; padding: 8px 10px;
+    border: 1px solid var(--line-2); border-radius: var(--radius-sm); background: var(--bg-2);
+    font-size: 13px; line-height: 1.5; color: var(--text);
+}
+.imp-words::placeholder { color: var(--text-3-strong); }
+.imp-words:disabled { opacity: 0.6; }
+.imp-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.imp-actions:not(:has(button:not([hidden]))) { display: none; }
+.imp-left { margin: 0; font-size: 11.5px; color: var(--text-3-strong); }

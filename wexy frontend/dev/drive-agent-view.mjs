@@ -81,12 +81,13 @@ try {
     writeFileSync(join(OUT, 'agent-view.png'), Buffer.from(shot.data, 'base64'));
 
     // EA-V6, the studio itself, its GPU still off: the panel mounts only behind ?agent=1, before WebGPU is asked for,
-    // above h1's trace in Developer view, with h1's Create as it was; without the flag, none of the agent path loads.
+    // above h1's trace in Developer view; h1's page (?legacy=1, the rollback) loads none of the agent path.
     // EA9-E1b (EA9.1): ?create=agent loads the creation controller and the creator's controls, not Developer view; with
-    // no backend to reach (?source=mock) its Create stays off and the steps say why; the plain page loads none of it.
+    // no backend to reach (?source=mock) its Create stays off and the steps say why. Since 11-04's switch the plain page
+    // is the agent path too, and ?source=mock selects the Playground (master's switch), whose button the idea box shows.
     const evaluate = async expression => (await page.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })).result?.value;
     const studio = {};
-    for (const [label, query] of [['agent', '?agent=1&source=mock'], ['create', '?create=agent&source=mock'], ['plain', '?source=mock']]) {
+    for (const [label, query] of [['agent', '?agent=1&source=mock'], ['create', '?create=agent&source=mock'], ['plain', '?source=mock'], ['legacy', '?legacy=1&source=mock']]) {
         await page.send('Page.navigate', { url: `${origin}/studio.html${query}` });
         let seen = null;
         for (let i = 0; i < 50 && !seen?.settled; i++) {
@@ -97,7 +98,7 @@ try {
                 const forge = document.querySelector('.btn-forge');
                 const loaded = performance.getEntriesByType('resource').map(e => new URL(e.name).pathname);
                 return {
-                    settled: !!forge && (${label === 'agent'} ? !!panel : ${label === 'create'} ? loaded.some(n => n.endsWith('/src/shell/studio/creation-view.ts')) && document.readyState === 'complete' : document.readyState === 'complete'),
+                    settled: !!forge && (${label === 'agent'} ? !!panel : ${label === 'create' || label === 'plain'} ? loaded.some(n => n.endsWith('/src/shell/studio/creation-view.ts')) && document.readyState === 'complete' : document.readyState === 'complete'),
                     panel: !!panel,
                     aboveTrace: !!(panel && trace && (panel.compareDocumentPosition(trace) & Node.DOCUMENT_POSITION_FOLLOWING)),
                     dev: document.body.classList.contains('dev'),
@@ -113,23 +114,27 @@ try {
         }
         studio[label] = seen;
     }
-    await sleep(1000); // a late-loading agent chunk would show on the plain page now
-    studio.plainLate = await evaluate(`performance.getEntriesByType('resource').map(e => new URL(e.name).pathname).filter(n => /agent-(view|stream|client|turn)|contract\\/agent|loop\\/creation|creation-view/.test(n))`);
+    await sleep(1000); // a late-loading agent chunk would show on h1's page now
+    studio.legacyLate = await evaluate(`performance.getEntriesByType('resource').map(e => new URL(e.name).pathname).filter(n => /agent-(view|stream|client|turn)|contract\\/agent|loop\\/creation|creation-view/.test(n))`);
     const a = studio.agent ?? {};
     const c = studio.create ?? {};
     const p = studio.plain ?? {};
+    const l = studio.legacy ?? {};
     result.checks.push({
-        name: 'EA-V6 the studio mounts the panel only behind ?agent=1: above h1\'s trace, in Developer view, h1\'s Create as it was',
-        ok: !!(a.panel && a.aboveTrace && a.dev && /^(No backend|No turn yet)$/.test(a.status ?? '') && /Create world/.test(a.forge ?? '')
-            && !p.panel && !p.dev && p.agentCode?.length === 0 && studio.plainLate?.length === 0 && /Create world/.test(p.forge ?? '')),
+        name: 'EA-V6 the studio mounts the panel only behind ?agent=1: above h1\'s trace, in Developer view; h1\'s page (?legacy=1) loads none of the agent path',
+        // With the GPU off the studio stops at its "no WebGPU" card part way through its start, so the button's words are
+        // whatever was said before it (11-05: they varied run to run); that nothing can be pressed is what holds.
+        ok: !!(a.panel && a.aboveTrace && a.dev && /^(No backend|No turn yet)$/.test(a.status ?? '') && a.forgeDisabled
+            && !p.panel && !p.dev && !l.panel && !l.dev && l.agentCode?.length === 0 && studio.legacyLate?.length === 0 && l.forgeDisabled),
         detail: studio,
     });
     result.ok = result.ok && result.checks.at(-1).ok;
     result.checks.push({
-        name: 'EA9-E1b ?create=agent loads the creation controller and the creator\'s controls, not Developer view; with no backend its Create stays off and says why; the plain page loads none of it',
-        ok: !!(c.creationCode?.length >= 2 && !c.panel && !c.dev && /Create world/.test(c.forge ?? '') && c.forgeDisabled
-            && /^Making a new world needs the Wexy service/.test(c.idle ?? '') && p.creationCode?.length === 0 && a.creationCode?.length >= 1),
-        detail: { create: c, plainCreation: p.creationCode, agentCreation: a.creationCode },
+        name: 'EA9-E1b ?create=agent and the plain page (the default since 11-04) load the creation controller and the creator\'s controls, not Developer view; with no backend its Create stays off and says why; h1\'s page loads none of it',
+        ok: !!(c.creationCode?.length >= 2 && !c.panel && !c.dev && c.forgeDisabled && p.forgeDisabled
+            && /^Making a new world needs the Wexy service/.test(c.idle ?? '') && p.creationCode?.length >= 2 && /^Making a new world needs the Wexy service/.test(p.idle ?? '')
+            && l.creationCode?.length === 0 && a.creationCode?.length >= 1),
+        detail: { create: c, plain: p, legacyCreation: l.creationCode, agentCreation: a.creationCode },
     });
     result.ok = result.ok && result.checks.at(-1).ok;
 

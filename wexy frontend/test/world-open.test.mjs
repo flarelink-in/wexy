@@ -175,7 +175,8 @@ test('W3.6 the studio saves what its Run installed, by where it came from: a cre
     assert.match(creation, /improves: about\.revises \? saves\.state\(\)\?\.stage \?\? null : null,/, 'a revision of the creation\'s world on the stage, under the install the controller knows it by');
     assert.match(reopened, /source: 'reopened'[\s\S]*ranAs: origin\.ranAs,\s*saved: \{ worldId: o\.worldId, revisionId: o\.revisionId, rowVersion: o\.rowVersion \}/,
         'its saved head, so it is not saved again, for its owner, the caller it was read as (Q129)');
-    assert.match(replay, /source: 'archive'/);
+    // A starter (EA9.4) or a saved attempt replayed: nobody's to save, each by its own source.
+    assert.match(replay, /source: origin\.kind === 'starter' \? 'starter' : 'archive'/);
     // Every Run that installs hands its world over, after the switch, by its origin.
     assert.match(method('private async runCandidate('), /this\.afterSwitch\('its save', \(\) => this\.saveInstalled\(snapshot, origin\)\);/);
     // The creation's go is the creation's; the replay panel's a replay's.

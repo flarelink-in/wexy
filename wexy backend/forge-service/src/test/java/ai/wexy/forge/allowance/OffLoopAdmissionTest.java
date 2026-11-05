@@ -149,6 +149,11 @@ class OffLoopAdmissionTest {
         }
 
         @Override
+        public Join probe(String grantKey, String owner, String field, long limit, String prompt) {
+            return inner.probe(grantKey, owner, field, limit, prompt);
+        }
+
+        @Override
         public void dispatched(String grantKey) {
             inner.dispatched(grantKey);
         }

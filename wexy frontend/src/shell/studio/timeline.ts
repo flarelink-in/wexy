@@ -31,6 +31,8 @@ export class Timeline {
     private readonly gateBtn: HTMLButtonElement;
     private duration = 12;
     private keys: CameraKeyframe[] = [];
+    /** How many saved views the world keeps: Remove is off at that many. */
+    private fewest = 1;
     private selected = -1;
     private playing = false;
 
@@ -92,8 +94,13 @@ export class Timeline {
         this.renderKeys();
     }
 
-    setKeyframes(keys: CameraKeyframe[]): void {
+    /**
+     * The world's saved views. `fewest` is how many it keeps (Remove is off at that many): h1's path needs one; an agent
+     * world's keyframes are the studio's, and it may have none (Q119 (a), EA9.4).
+     */
+    setKeyframes(keys: CameraKeyframe[], fewest = 1): void {
         this.keys = keys;
+        this.fewest = fewest;
         if (this.selected >= keys.length) this.selected = -1;
         this.renderKeys();
     }
@@ -144,7 +151,7 @@ export class Timeline {
             b.addEventListener('click', () => this.onSelectKey?.(i));
             return b;
         }));
-        this.removeBtn.disabled = this.selected < 0 || this.keys.length <= 1;
+        this.removeBtn.disabled = this.selected < 0 || this.keys.length <= this.fewest;
         this.keyInfo.textContent = this.keys.length
             ? `${this.keys.length} saved view${this.keys.length === 1 ? '' : 's'} · the camera glides between them`
             : 'no saved views';

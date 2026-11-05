@@ -55,8 +55,11 @@ public final class NodeCheck {
     private final AdapterManifest manifest;
     private final EngineBundle bundle;
     // JSON.parse refuses text after the value, and Jackson ignores it unless told: without this, "{…} junk" passed here
-    // and failed in the browser.
-    private final ObjectMapper json = new ObjectMapper().enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+    // and failed in the browser. A key twice is refused too (the EA9.4 review, its high): Jackson, as JSON.parse, keeps
+    // the later value, so a config's text could hold words its parsed tree, which is checked and screened, does not.
+    private final ObjectMapper json = com.fasterxml.jackson.databind.json.JsonMapper.builder()
+            .enable(com.fasterxml.jackson.core.StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
 
     public NodeCheck(AdapterManifest manifest, EngineBundle bundle) {
         this.manifest = manifest;
@@ -162,7 +165,7 @@ public final class NodeCheck {
             try {
                 config = json.readTree(configText.asText());
             } catch (JsonProcessingException e) {
-                out.add(Finding.fail("config", at + "/config", "config is not JSON: " + shown(configText)));
+                out.add(Finding.fail("config", at + "/config", "config is not JSON with each key once: " + shown(configText)));
                 continue;
             }
             if (config == null || config.isMissingNode()) {

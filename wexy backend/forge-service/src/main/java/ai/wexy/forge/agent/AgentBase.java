@@ -31,6 +31,14 @@ import java.util.Map;
  * that turn's meta gave it. Only its shape is checked here; whether the caller has that turn, and its prompt a revision
  * left, is the allowance's to judge. A base without it, or naming a turn the caller does not have, spends a new prompt.
  *
+ * <p>EA9.4 (2026-11-04; the frontend's agent-first studio design §12, the user: "build screening now"): a base's words
+ * are a caller's to write, whatever they are called. A creator's "Improve it" rides as a finding ({@code code: "creator"}),
+ * a model's review issue as another, and a client may send any finding under any code, or any design it likes back,
+ * or a program whose ids and names say anything a valid identifier can (the EA9.4 reviews). {@link #creatorWords()} and
+ * {@link #worldWords()} name them all, and content safety screens them before a grant is joined or a model called
+ * ({@code PromptAdmission.revision}). A config is quoted to the model as the canonical text of the tree that was checked
+ * and screened, never as the caller sent it (the second EA9.4 review, its high: a key named twice hid its first value).
+ *
  * @param turnId the turn this one revises, or null when the base names none
  */
 public record AgentBase(String turnId, JsonNode design, JsonNode program, List<BaseFinding> findings) {
@@ -119,7 +127,117 @@ public record AgentBase(String turnId, JsonNode design, JsonNode program, List<B
             throw ModuleRequest.bad("base.program does not pass the host's check, so no turn could have handed it off: " + f.code() + " at "
                     + f.path() + ": " + ModuleRequest.clip(f.message()));
         }
-        return new AgentBase(turnId, design.deepCopy(), program.deepCopy(), findings(base.path("findings")));
+        return new AgentBase(turnId, design.deepCopy(), canonical(program), findings(base.path("findings")));
+    }
+
+    /**
+     * The program with each node's config as the canonical text of its tree: what the host's check judged and content
+     * safety screens is what the model reads, with no escape, spacing or repeated key between them.
+     */
+    private static JsonNode canonical(JsonNode program) {
+        JsonNode copy = program.deepCopy();
+        for (JsonNode node : copy.path("nodes")) {
+            JsonNode config = config(node.path("config"));
+            if (config != null && node.isObject()) {
+                ((ObjectNode) node).put("config", config.toString());
+            }
+        }
+        return copy;
+    }
+
+    /**
+     * The creator's words, one a line, for content safety (EA9.4): each finding's id, code, path and message, whatever
+     * its code (never only {@code creator}: a renamed finding is screened the same). Screened first, and refused in the
+     * creator's terms (PromptAdmission.revision).
+     */
+    public List<String> creatorWords() {
+        List<String> out = new ArrayList<>();
+        for (BaseFinding f : findings) {
+            out.add(f.id());
+            out.add(f.code());
+            if (f.path() != null) {
+                out.add(f.path());
+            }
+            out.add(f.message());
+        }
+        out.removeIf(String::isBlank);
+        return List.copyOf(out);
+    }
+
+    /**
+     * The world's words, one a line, for content safety (EA9.4 and its reviews): every string the design holds, then
+     * each node's id and every key and string its config holds. A closed shape is not a closed vocabulary: an id is any
+     * lower-case identifier of up to 40 characters, a module or an entry any name, and the revision's prompt quotes them
+     * all. Screening reads each joined identifier spelled out too (PromptAdmission.spelledOut). A client may send any
+     * design or program back, so they are screened as a creator's words are, and refused as a world that cannot be
+     * changed, since rephrasing an "Improve it" would not help.
+     */
+    public List<String> worldWords() {
+        List<String> out = new ArrayList<>();
+        strings(design, out);
+        for (JsonNode node : program.path("nodes")) {
+            out.add(node.path("id").asText(""));
+            JsonNode config = config(node.path("config"));
+            if (config == null) {
+                out.add(node.path("config").asText(""));
+            } else {
+                configStrings(config, out);
+            }
+        }
+        out.removeIf(String::isBlank);
+        return List.copyOf(out);
+    }
+
+    /** All of the base's words: the creator's, then the world's. */
+    public List<String> words() {
+        List<String> out = new ArrayList<>(creatorWords());
+        out.addAll(worldWords());
+        return List.copyOf(out);
+    }
+
+    /**
+     * Config text read as NodeCheck reads it: a key twice is no config, nor is text after the value (the second EA9.4
+     * review, its high).
+     */
+    private static final ObjectMapper CONFIG = com.fasterxml.jackson.databind.json.JsonMapper.builder()
+            .enable(com.fasterxml.jackson.core.StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .enable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
+
+    /** A node's config as JSON (the schema holds it as JSON text), or null when it is not JSON: then its text is screened. */
+    private static JsonNode config(JsonNode text) {
+        if (!text.isTextual()) {
+            return text.isContainerNode() ? text : null;
+        }
+        try {
+            return CONFIG.readTree(text.asText());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Every key and string value under a config, in document order. */
+    private static void configStrings(JsonNode node, List<String> out) {
+        if (node.isTextual()) {
+            out.add(node.asText());
+        } else if (node.isObject()) {
+            node.fields().forEachRemaining(e -> {
+                out.add(e.getKey());
+                configStrings(e.getValue(), out);
+            });
+        } else if (node.isArray()) {
+            node.forEach(child -> configStrings(child, out));
+        }
+    }
+
+    /** Every string value under `node`, in document order; an object's keys are the schema's, never the caller's. */
+    private static void strings(JsonNode node, List<String> out) {
+        if (node.isTextual()) {
+            if (!node.asText().isBlank()) {
+                out.add(node.asText());
+            }
+        } else if (node.isContainerNode()) {
+            node.forEach(child -> strings(child, out));
+        }
     }
 
     /** The browser's findings: 1 to 32, each exactly an id, a code, a path or null, and a message, each within its cap. */

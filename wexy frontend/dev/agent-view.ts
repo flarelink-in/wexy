@@ -460,7 +460,7 @@ async function candidates(): Promise<void> {
         && v.modules.length === 1 && place.module === 'place' && place.phase === 'passed' && /^place · compute · passed · 1 call · body [0-9a-f]{12}…$/.test(place.head)
         && place.body === RECORDED_BODY && place.verdicts.length === 1 && place.verdicts[0].startsWith('lint pass (host, current)')
         && v.budget === 'Q_C: 4 of 34 calls · authors 1/12 · repairs 0/10 · revisions 0/3' && v.jobs.length === 1
-        && /^job-1 place author: ok · \$0\.01\d\d · [^·]+ · module\.author\.v2$/.test(v.jobs[0])
+        && /^job-1 place author: ok · \$0\.01\d\d · [^·]+ · module\.author\.v3$/.test(v.jobs[0])
         && v.evidence === 'Evidence 5 records' && requests.length === 1 && requests[0].purpose === 'author', v);
     candidateButton(p, 'Download bundle').click();
     const bundle = saved.length === 1 ? JSON.parse(saved[0].text) : null;
