@@ -207,7 +207,7 @@ class AgentRoutesTest {
 
         assertThat(names(events)).containsExactly("meta", "call", "usage", "tools", "call", "usage", "check", "design", "program", "done");
         JsonNode meta = data(events, "meta");
-        assertThat(meta.path("promptVersion").asText()).isEqualTo("agent.v6");
+        assertThat(meta.path("promptVersion").asText()).isEqualTo("agent.v7");
         // EA3.6: the action's contract and the adapter manifest its program was checked against (v3 since EA6.3).
         assertThat(meta.path("actionSchema").asText()).isEqualTo("agent-action.v3");
         assertThat(meta.path("manifestHash").asText()).isEqualTo(AdapterManifest.HASH);
@@ -223,7 +223,7 @@ class AgentRoutesTest {
         List<Generation> calls = agentCalls();
         assertThat(calls).hasSize(2).allMatch(g -> g.status() == Generation.Status.OK && g.role().equals("agent")
                 && g.parentId().equals(meta.path("turnId").asText()) && g.uid().equals("uid-agent"));
-        assertThat(calls).extracting(Generation::promptVersion).containsOnly("agent.v6");
+        assertThat(calls).extracting(Generation::promptVersion).containsOnly("agent.v7");
         assertThat(ledger.reservations()).isEqualTo(2);
     }
 
@@ -393,7 +393,7 @@ class AgentRoutesTest {
         assertThat(names(events)).containsExactly("meta", "call", "usage", "check", "design", "program", "repairs", "done");
         assertThat(data(events, "repairs").path("repairs").isArray()).isTrue();
         assertThat(data(events, "repairs").path("repairs")).isEmpty();
-        assertThat(data(events, "meta").path("promptVersion").asText()).isEqualTo("agent.v6");
+        assertThat(data(events, "meta").path("promptVersion").asText()).isEqualTo("agent.v7");
         assertThat(data(events, "call").path("purpose").asText()).isEqualTo("revise");
         assertThat(data(events, "design").path("design")).isEqualTo(AgentLoopTest.baseJson().path("design"));
         assertThat(data(events, "done").path("status").asText()).isEqualTo("handed-off");
@@ -402,7 +402,7 @@ class AgentRoutesTest {
                 .matches(r -> r.body().contains("This turn revises a program an earlier turn handed off.") && r.body().contains("step cannot be an entry"));
         // One record, the turn's request with its base as the input.
         assertThat(agentCalls()).singleElement().matches(g -> g.status() == Generation.Status.OK && g.input().contains("\"base\"")
-                && g.promptVersion().equals("agent.v6"));
+                && g.promptVersion().equals("agent.v7"));
     }
 
     /** W1 (the creations platform design §10): a base may name the turn it revises; the revision runs as before. */

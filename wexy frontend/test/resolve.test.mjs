@@ -90,7 +90,7 @@ test('EA-X1 X is canonical and deterministic: the same program gives the same by
     assert.ok(Object.isFrozen(a) && Object.isFrozen(a.resources[0]) && Object.isFrozen(a.schedule.frame) && Object.isFrozen(a.operations[0].args));
     assert.deepEqual(a.identity, {
         graph: 'ea-x.v1', resolver: 'ea3.2-resolver.3', engine: 'null-graph@1.2.1', bundleHash: ENGINE.bundle.bundleHash, supportStatusHash: a.identity.supportStatusHash,
-        manifest: 'ea-adapters.v1', manifestHash: '3c7775588fb816ce8ccd3660e16d8ae6bfa9526f83174ecf666f8c66ab4c4c77',
+        manifest: 'ea-adapters.v1', manifestHash: '8bdd11e8ef2f0ced4b0cabbbac19ca4b6ff0df03fca2d56082005b05b1497220',
         gatesHash: await canonicalHash([]), programHash: a.identity.programHash, policyHash: await canonicalHash(POLICY_V1),
     });
 

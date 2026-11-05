@@ -13,6 +13,8 @@ globalThis.GPUShaderStage ??= { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 };
 globalThis.GPUMapMode ??= { READ: 1, WRITE: 2 };
 const post = await import('null-graph/post');
 const { EFFECT_STRENGTH, createNullGraphPort, makeEffect } = await import('../src/exec/null-graph-port.ts');
+const { Geometry, StandardLayout } = await import('null-graph/geometry');
+const { GROUND_FACTORY, groundGeometry } = await import('../src/contract/adapters/ground.ts');
 
 test('EA-D1b every effect the adapter offers is one the port makes; its intensity multiplies the effect\'s own default strength', () => {
     const manifest = JSON.parse(readFileSync(new URL('../src/contract/adapters/descriptors.json', import.meta.url), 'utf8'));
@@ -62,6 +64,26 @@ test('EA-D1c the main pass clears as X says through a chain, colour and depth (t
     port.updateCamera(camera, { ...view, fov: 30 }, 3 / 60, 16 / 9);
     port.updateCamera(camera, { ...view, fov: 30 }, 4 / 60, 4 / 3);
     assert.deepEqual([projections, camera.fovDegrees, cameras.length], [3, 30, 5], 'and again when each moved; every frame written');
+});
+
+test('EA-D1d the ground (Q130) is the host\'s arrays as a null-graph Geometry, uploaded as a Primitives shape is; its box lies flat', () => {
+    const uploaded = [];
+    const engine = {
+        device: {}, width: 640, height: 360, ctx: { format: 'bgra8unorm', cameraUniformBuffer: {} },
+        bufferManager: { createVertexBuffer: v => { uploaded.push(['vertex', v]); return { destroy() {} }; }, createIndexBuffer: i => { uploaded.push(['index', i]); return { destroy() {} }; } },
+    };
+    const port = createNullGraphPort(engine);
+    const ground = port.primitive(GROUND_FACTORY, [4, 8]);
+    const want = groundGeometry(4, 8);
+    assert.ok(ground instanceof Geometry);
+    assert.equal(ground.layout, StandardLayout);
+    assert.deepEqual([[...ground.vertices], [...ground.indices], ground.indexFormat], [[...want.vertices], [...want.indices], 'uint16']);
+    assert.deepEqual(uploaded.map(([kind, data]) => [kind, data]), [['vertex', ground.vertices], ['index', ground.indices]], 'uploaded once, its own arrays');
+    assert.deepEqual(port.geometryBox(ground), { min: [-2, 0, -2], max: [2, 0, 2] }, 'flat on XZ, 4 across');
+    // A Primitives shape is made as before, and a factory neither knows refuses.
+    const plane = port.primitive('createPlane', [4, 4]);
+    assert.deepEqual(port.geometryBox(plane), { min: [-2, -2, 0], max: [2, 2, 0] }, 'the plane stands upright in XY');
+    assert.throws(() => port.primitive('createTeapot', [1]), /EA_CALL: no primitive createTeapot/);
 });
 
 test('EA-D14b the offscreen first frame on null-graph: a world\'s screen pass pointed at a private target and back, as null-graph\'s own pipeline draws it, read back as RGBA8 rows', async () => {

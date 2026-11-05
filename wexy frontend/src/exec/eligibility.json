@@ -8,7 +8,7 @@
       "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
       "executorProfile": "ea5-exec.v1",
       "environment": "ea5-env.v3|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome",
-      "evidence": "EA-G1 2026-11-04 on AMD Radeon(TM) Graphics, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-04T09-38-05/amd.json",
+      "evidence": "EA-G1 2026-11-05 on AMD Radeon(TM) Graphics, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-05T07-41-38/amd.json",
       "coverage": {
         "max": {
           "bytes": 67107840
@@ -35,11 +35,11 @@
       "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
       "executorProfile": "ea5-exec.v1",
       "environment": "ea5-env.v3|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome",
-      "evidence": "EA-G1 2026-11-04 on AMD Radeon(TM) Graphics, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-04T09-38-05/amd.json",
+      "evidence": "EA-G1 2026-11-05 on AMD Radeon(TM) Graphics, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-05T07-41-38/amd.json",
       "coverage": {
         "max": {
-          "vertices": 8514,
-          "indices": 49152
+          "vertices": 16641,
+          "indices": 98304
         },
         "values": {
           "factory": [
@@ -48,6 +48,7 @@
             "createCube",
             "createCylinder",
             "createDodecahedron",
+            "createGround",
             "createIcosahedron",
             "createOctahedron",
             "createPlane",
@@ -66,7 +67,7 @@
       "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
       "executorProfile": "ea5-exec.v1",
       "environment": "ea5-env.v3|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome",
-      "evidence": "EA-G1 2026-11-04 on AMD Radeon(TM) Graphics, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-04T09-38-05/amd.json",
+      "evidence": "EA-G1 2026-11-05 on AMD Radeon(TM) Graphics, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-05T07-41-38/amd.json",
       "coverage": {
         "max": {},
         "values": {
@@ -86,7 +87,7 @@
       "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
       "executorProfile": "ea5-exec.v1",
       "environment": "ea5-env.v3|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome",
-      "evidence": "EA-G1 2026-11-04 on AMD Radeon(TM) Graphics, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-04T09-38-05/amd.json",
+      "evidence": "EA-G1 2026-11-05 on AMD Radeon(TM) Graphics, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-05T07-41-38/amd.json",
       "coverage": {
         "max": {
           "lights": 6
@@ -100,7 +101,7 @@
       "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
       "executorProfile": "ea5-exec.v1",
       "environment": "ea5-env.v3|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome",
-      "evidence": "EA-G1 2026-11-04 on AMD Radeon(TM) Graphics, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-04T09-38-05/amd.json",
+      "evidence": "EA-G1 2026-11-05 on AMD Radeon(TM) Graphics, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-05T07-41-38/amd.json",
       "coverage": {
         "max": {
           "instances": 1048576,
@@ -127,7 +128,7 @@
       "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
       "executorProfile": "ea5-exec.v1",
       "environment": "ea5-env.v3|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome",
-      "evidence": "EA-G1 2026-11-04 on AMD Radeon(TM) Graphics, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-04T09-38-05/amd.json",
+      "evidence": "EA-G1 2026-11-05 on AMD Radeon(TM) Graphics, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-05T07-41-38/amd.json",
       "coverage": {
         "max": {
           "effects": 8,
@@ -161,7 +162,7 @@
       "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
       "executorProfile": "ea5-exec.v1",
       "environment": "ea5-env.v3|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome",
-      "evidence": "EA-G1 2026-11-04 on AMD Radeon(TM) Graphics, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-04T09-38-05/amd.json",
+      "evidence": "EA-G1 2026-11-05 on AMD Radeon(TM) Graphics, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-05T07-41-38/amd.json",
       "coverage": {
         "max": {
           "invocations": 16776960,
@@ -183,7 +184,7 @@
       "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
       "executorProfile": "ea5-exec.v1",
       "environment": "ea5-env.v3|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome",
-      "evidence": "EA-G1 2026-11-04 on AMD Radeon(TM) Graphics, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-04T09-38-05/amd.json",
+      "evidence": "EA-G1 2026-11-05 on AMD Radeon(TM) Graphics, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-05T07-41-38/amd.json",
       "coverage": {
         "max": {
           "pixels": 2302174
@@ -197,7 +198,7 @@
       "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
       "executorProfile": "ea5-exec.v1",
       "environment": "ea5-env.v3|amd|gcn-5|0x1638|AMD Radeon(TM) Graphics|d3d12|windows|chrome",
-      "evidence": "EA-G1 2026-11-04 on AMD Radeon(TM) Graphics, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-04T09-38-05/amd.json",
+      "evidence": "EA-G1 2026-11-05 on AMD Radeon(TM) Graphics, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-05T07-41-38/amd.json",
       "coverage": {
         "max": {
           "instances": 1048576,
@@ -220,7 +221,7 @@
       "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
       "executorProfile": "ea5-exec.v1",
       "environment": "ea5-env.v3|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome",
-      "evidence": "EA-G1 2026-11-04 on NVIDIA GeForce GTX 1650, HeadlessChrome/157.0.0.0: block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-04T09-40-45/nvidia.json",
+      "evidence": "EA-G1 2026-11-05 on NVIDIA GeForce GTX 1650, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-05T07-37-24/nvidia.json",
       "coverage": {
         "max": {
           "bytes": 67107840
@@ -247,11 +248,11 @@
       "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
       "executorProfile": "ea5-exec.v1",
       "environment": "ea5-env.v3|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome",
-      "evidence": "EA-G1 2026-11-04 on NVIDIA GeForce GTX 1650, HeadlessChrome/157.0.0.0: block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-04T09-40-45/nvidia.json",
+      "evidence": "EA-G1 2026-11-05 on NVIDIA GeForce GTX 1650, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-05T07-37-24/nvidia.json",
       "coverage": {
         "max": {
-          "vertices": 8514,
-          "indices": 49152
+          "vertices": 16641,
+          "indices": 98304
         },
         "values": {
           "factory": [
@@ -260,6 +261,7 @@
             "createCube",
             "createCylinder",
             "createDodecahedron",
+            "createGround",
             "createIcosahedron",
             "createOctahedron",
             "createPlane",
@@ -278,7 +280,7 @@
       "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
       "executorProfile": "ea5-exec.v1",
       "environment": "ea5-env.v3|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome",
-      "evidence": "EA-G1 2026-11-04 on NVIDIA GeForce GTX 1650, HeadlessChrome/157.0.0.0: block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-04T09-40-45/nvidia.json",
+      "evidence": "EA-G1 2026-11-05 on NVIDIA GeForce GTX 1650, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-05T07-37-24/nvidia.json",
       "coverage": {
         "max": {},
         "values": {
@@ -298,7 +300,7 @@
       "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
       "executorProfile": "ea5-exec.v1",
       "environment": "ea5-env.v3|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome",
-      "evidence": "EA-G1 2026-11-04 on NVIDIA GeForce GTX 1650, HeadlessChrome/157.0.0.0: block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-04T09-40-45/nvidia.json",
+      "evidence": "EA-G1 2026-11-05 on NVIDIA GeForce GTX 1650, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-05T07-37-24/nvidia.json",
       "coverage": {
         "max": {
           "lights": 6
@@ -312,7 +314,7 @@
       "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
       "executorProfile": "ea5-exec.v1",
       "environment": "ea5-env.v3|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome",
-      "evidence": "EA-G1 2026-11-04 on NVIDIA GeForce GTX 1650, HeadlessChrome/157.0.0.0: block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-04T09-40-45/nvidia.json",
+      "evidence": "EA-G1 2026-11-05 on NVIDIA GeForce GTX 1650, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-05T07-37-24/nvidia.json",
       "coverage": {
         "max": {
           "instances": 1048576,
@@ -339,7 +341,7 @@
       "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
       "executorProfile": "ea5-exec.v1",
       "environment": "ea5-env.v3|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome",
-      "evidence": "EA-G1 2026-11-04 on NVIDIA GeForce GTX 1650, HeadlessChrome/157.0.0.0: block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-04T09-40-45/nvidia.json",
+      "evidence": "EA-G1 2026-11-05 on NVIDIA GeForce GTX 1650, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-05T07-37-24/nvidia.json",
       "coverage": {
         "max": {
           "effects": 8,
@@ -373,7 +375,7 @@
       "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
       "executorProfile": "ea5-exec.v1",
       "environment": "ea5-env.v3|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome",
-      "evidence": "EA-G1 2026-11-04 on NVIDIA GeForce GTX 1650, HeadlessChrome/157.0.0.0: block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-04T09-40-45/nvidia.json",
+      "evidence": "EA-G1 2026-11-05 on NVIDIA GeForce GTX 1650, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-05T07-37-24/nvidia.json",
       "coverage": {
         "max": {
           "invocations": 16776960,
@@ -395,7 +397,7 @@
       "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
       "executorProfile": "ea5-exec.v1",
       "environment": "ea5-env.v3|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome",
-      "evidence": "EA-G1 2026-11-04 on NVIDIA GeForce GTX 1650, HeadlessChrome/157.0.0.0: block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-04T09-40-45/nvidia.json",
+      "evidence": "EA-G1 2026-11-05 on NVIDIA GeForce GTX 1650, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-05T07-37-24/nvidia.json",
       "coverage": {
         "max": {
           "pixels": 2302174
@@ -409,7 +411,7 @@
       "engineBundleHash": "d923cc218830b0f90d9ae8ddc20c1f340ed5f58558e07935649ea458e989d646",
       "executorProfile": "ea5-exec.v1",
       "environment": "ea5-env.v3|nvidia|turing|0x1f99|NVIDIA GeForce GTX 1650|d3d12|windows|chrome",
-      "evidence": "EA-G1 2026-11-04 on NVIDIA GeForce GTX 1650, HeadlessChrome/157.0.0.0: block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-04T09-40-45/nvidia.json",
+      "evidence": "EA-G1 2026-11-05 on NVIDIA GeForce GTX 1650, HeadlessChrome/157.0.0.0: block-film×1, block-film×4, block-film×16, galaxy×1, galaxy×4, foggy-dusk×1, foggy-dusk×4, foggy-dusk×16, cov-compute×1, cov-custom×1, cov-effects-a×1, cov-effects-b×1, cov-effects-c×1, cov-materials×1, cov-scale×1, cov-shapes×1, cov-compute-xl×1, cov-custom-xl×1, cov-scale-xl×1; dev/out/ea-g1/2026-11-05T07-37-24/nvidia.json",
       "coverage": {
         "max": {
           "instances": 1048576,

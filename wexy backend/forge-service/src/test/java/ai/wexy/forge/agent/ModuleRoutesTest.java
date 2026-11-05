@@ -166,7 +166,10 @@ class ModuleRoutesTest {
         return PLACE.path("interface").deepCopy();
     }
 
-    /** A valid author request for the mock world's `place` module: R, S, the stage and the buffer it writes, its interface. */
+    /**
+     * A valid author request for the mock world's `place` module: R, S, the stage, the buffer it writes and the batch that
+     * draws it with its geometry and material (the browser's slice since 2026-11-05), its interface.
+     */
     ObjectNode author() {
         ObjectNode b = JSON.createObjectNode();
         b.put("turnId", turnId).put("jobId", "job-1");
@@ -181,7 +184,7 @@ class ModuleRoutesTest {
         b.set("design", PROGRAM.path("design").deepCopy());
         ArrayNode nodes = b.putArray("nodes");
         for (JsonNode n : PROGRAM.path("program").path("nodes")) {
-            if (Set.of("place", "blocks").contains(n.path("id").asText())) {
+            if (Set.of("place", "blocks", "terrain", "cube", "clay").contains(n.path("id").asText())) {
                 nodes.add(n.deepCopy());
             }
         }
@@ -288,7 +291,7 @@ class ModuleRoutesTest {
         assertThat(meta.path("interfaceHash").asText()).isEqualTo(PLACE.path("interface").path("interfaceHash").asText());
         assertThat(meta.path("subject")).isEqualTo(author().path("subject"));
         assertThat(meta.path("versions")).isEqualTo(author().path("versions"));
-        assertThat(meta.path("promptVersion").asText()).isEqualTo("module.author.v3");
+        assertThat(meta.path("promptVersion").asText()).isEqualTo("module.author.v4");
         assertThat(meta.path("role").asText()).isEqualTo("module");
         StringBuilder text = new StringBuilder();
         data(wire, "delta").forEach(d -> text.append(d.path("text").asText()));
@@ -306,7 +309,7 @@ class ModuleRoutesTest {
         assertThat(g.kind()).isEqualTo(Generation.Kind.AGENT);
         assertThat(g.parentId()).isEqualTo(turnId);
         assertThat(g.status()).isEqualTo(Generation.Status.OK);
-        assertThat(g.promptVersion()).isEqualTo("module.author.v3");
+        assertThat(g.promptVersion()).isEqualTo("module.author.v4");
         assertThat(g.hostVersion()).isEqualTo("ea-abi.v2");
         assertThat(g.fn()).isEqualTo("place");
         assertThat(g.input()).contains("\"jobId\":\"job-1\"").contains(PLACE.path("interface").path("interfaceHash").asText()).doesNotContain(PROMPT)
@@ -319,10 +322,19 @@ class ModuleRoutesTest {
         String user = sent.path("messages").get(1).path("content").asText();
         assertThat(system).startsWith("You write one WGSL module body for Wexy").contains("`sim`, at a fixed-step compute stage only")
                 .contains(BODY);
+        // module.author.v4 (2026-11-05, the plane analysis): which way each shape faces, scale before rotation, the color
+        // rule; and no promise that every primitive is size 1, which the agent does not always keep.
+        assertThat(system).contains("ground lies flat on XZ facing up; plane and ring stand upright in XY facing +Z")
+                .contains("then rotated, then moved to the position").contains("so a color left at zero draws")
+                .doesNotContain("which the agent gives size 1");
         assertThat(user).contains(JSON.writeValueAsString(PROMPT)).contains(author().path("design").toString())
                 .contains("The module: place, a compute.").contains("- \"fn placeBlocks(index: u32)\"")
                 .contains(PLACE.path("interface").path("preamble").asText()).contains(PLACE.path("interface").path("epilogue").asText())
                 .doesNotContain("What a revision of the program asks");
+        // The slice: the stage, the buffer it writes, and the batch drawing it with its geometry and material; not the rest.
+        assertThat(user).contains("Its node, the nodes wired to it and, for a compute stage, each batch that draws a")
+                .contains("\"id\":\"place\"").contains("\"id\":\"blocks\"").contains("\"id\":\"terrain\"").contains("\"id\":\"cube\"")
+                .contains("\"id\":\"clay\"").doesNotContain("\"id\":\"sun\"").doesNotContain("\"id\":\"film\"");
         pin("author.sse", wire);
     }
 
@@ -334,14 +346,14 @@ class ModuleRoutesTest {
         String wire = streamed(repair(FAULT));
 
         assertThat(events(wire)).startsWith("meta", "delta").endsWith("usage", "done");
-        assertThat(data(wire, "meta").get(0).path("promptVersion").asText()).isEqualTo("module.repair.v3");
+        assertThat(data(wire, "meta").get(0).path("promptVersion").asText()).isEqualTo("module.repair.v4");
         assertThat(data(wire, "meta").get(0).path("subject").path("codeHash").asText()).isEqualTo(ModuleRequest.sha256(FAULT));
         String user = JSON.readTree(fake.requests().stream().filter(r -> r.path().endsWith("/chat/completions")).findFirst().orElseThrow().body())
                 .path("messages").get(1).path("content").asText();
         assertThat(user).contains("```wgsl\n" + FAULT + "\n```")
                 .contains("- line 6, call: " + JSON.writeValueAsString(repair(FAULT).path("previous").path("findings").get(0).path("message").asText()))
                 .contains(JSON.writeValueAsString(PROMPT));
-        assertThat(moduleRecords()).extracting(Generation::promptVersion).containsExactly("module.repair.v3");
+        assertThat(moduleRecords()).extracting(Generation::promptVersion).containsExactly("module.repair.v4");
         pin("repair.sse", wire);
     }
 
@@ -401,8 +413,24 @@ class ModuleRoutesTest {
         refused("a node with upload, gated (Q80)", b -> ((ObjectNode) b.path("nodes").get(0)).put("config",
                 "{\"elements\":64,\"layout\":\"instance14\",\"strideFloats\":14,\"pingPong\":false,\"init\":\"upload\"}"), 400, "bad-request", "not available yet");
         refused("no node owns the module", b -> ((ObjectNode) b.path("module")).put("id", "other"), 400, "bad-request", "exactly one node whose module is other");
-        refused("two nodes own it", b -> ((ArrayNode) b.path("nodes")).add(((ObjectNode) b.path("nodes").get(1).deepCopy()).put("id", "again")), 400, "bad-request",
-                "exactly one node whose module is place, not 2");
+        // A slice is never more than its program (2026-11-05: a stage's batches, geometry and material go with it), so its
+        // cap is a program's: one past it is refused, at the program's own words.
+        refused("a slice past a program's nodes", b -> {
+            ArrayNode nodes = (ArrayNode) b.path("nodes");
+            for (int i = nodes.size(); i <= NodeCheck.MAX_NODES; i++) {
+                nodes.add(NodeCheckTest.node("pad" + i, "ng.geometry.primitive", Map.of("shape", "cube", "size", 1, "segments", 3)));
+            }
+        }, 400, "bad-request", "a program has 1 to " + NodeCheck.MAX_NODES + " nodes, not " + (NodeCheck.MAX_NODES + 1));
+        refused("two nodes own it", b -> {
+            ArrayNode nodes = (ArrayNode) b.path("nodes");
+            JsonNode stage = null;
+            for (JsonNode n : nodes) {
+                if ("place".equals(n.path("id").asText())) {
+                    stage = n;
+                }
+            }
+            nodes.add(((ObjectNode) stage.deepCopy()).put("id", "again"));
+        }, 400, "bad-request", "exactly one node whose module is place, not 2");
         // A fullscreen's own entry, so the interface passes and the owner's kind is what refuses.
         refused("the owner of another kind", b -> {
             ((ObjectNode) b.path("module")).put("kind", "fullscreen");
@@ -509,7 +537,7 @@ class ModuleRoutesTest {
         String wire = streamed(noted);
 
         assertThat(events(wire)).startsWith("meta", "delta").endsWith("usage", "done");
-        assertThat(data(wire, "meta").get(0).path("promptVersion").asText()).isEqualTo("module.author.v3");
+        assertThat(data(wire, "meta").get(0).path("promptVersion").asText()).isEqualTo("module.author.v4");
         String user = JSON.readTree(fake.requests().stream().filter(r -> r.path().endsWith("/chat/completions")).findFirst().orElseThrow().body())
                 .path("messages").get(1).path("content").asText();
         assertThat(user).endsWith(PLACE.path("interface").path("epilogue").asText() + "\n```\n\nWhat a revision of the program asks of this module's code"

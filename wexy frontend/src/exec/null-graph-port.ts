@@ -13,13 +13,14 @@
 // Kuwahara) run at their defaults.
 
 import { Camera, NullGraph, RenderPassNode, type ComputeStageNode, type RenderBatch } from 'null-graph';
-import { Primitives, StandardLayout, type Geometry } from 'null-graph/geometry';
+import { Geometry, Primitives, StandardLayout } from 'null-graph/geometry';
 import { AmbientLightProxy, DirectionalLightProxy, LightSystem, PointLightProxy } from 'null-graph/lights';
 import {
     BasicMaterial, EmissiveMaterial, LambertMaterial, StandardPBRMaterial, ToonMaterial, buildBasicShader, buildEmissiveShader, buildLambertShader, buildPBRShader,
     buildToonShader,
 } from 'null-graph/materials';
 import * as post from 'null-graph/post';
+import { GROUND_FACTORY, groundGeometry } from '../contract/adapters/ground';
 import { eyeOf, type CameraView } from '../runtime/camera-path';
 import { vertexBox } from './bounds';
 import type { BatchRequest, BindEntry, CameraState, EnginePort, Handle } from './engine-port';
@@ -124,9 +125,16 @@ export function createNullGraphPort(engine: NullGraph): EnginePort {
         removeComputeStage: stage => { engine.removeComputeStage(stage as ComputeStageNode); },
 
         primitive: (factory, params) => {
-            const make = (Primitives as unknown as Record<string, (layout: typeof StandardLayout, ...p: number[]) => Geometry>)[factory];
-            if (typeof make !== 'function') throw new Error(`EA_CALL: no primitive ${factory}`);
-            const geometry = make(StandardLayout, ...params);
+            let geometry: Geometry;
+            if (factory === GROUND_FACTORY) {
+                // The host's ground (ground.ts): its arrays as a Geometry, uploaded as a Primitives shape is.
+                const { vertices, indices } = groundGeometry(params[0], params[1]);
+                geometry = new Geometry(StandardLayout, vertices, indices);
+            } else {
+                const make = (Primitives as unknown as Record<string, (layout: typeof StandardLayout, ...p: number[]) => Geometry>)[factory];
+                if (typeof make !== 'function') throw new Error(`EA_CALL: no primitive ${factory}`);
+                geometry = make(StandardLayout, ...params);
+            }
             geometry.upload(engine);
             return geometry;
         },

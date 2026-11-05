@@ -6,9 +6,11 @@
 // is kept apart from test/resolve.test.mjs, which checks that resolving touches none.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Primitives, StandardLayout } from 'null-graph/geometry';
+import { Geometry, Primitives, StandardLayout } from 'null-graph/geometry';
 import { LIGHT_BYTES, MATERIAL_UNIFORM_BYTES, PARAM_SLICE_BYTES, POST_BATCH_BYTES, VERTEX_BYTES, primitive } from '../src/contract/adapters/contribute.ts';
 import { POLICY_V1 } from '../src/contract/adapters/graph.ts';
+import { GROUND_FACTORY, groundGeometry } from '../src/contract/adapters/ground.ts';
+import { ADAPTERS } from '../src/contract/adapters/index.ts';
 import { resolveProgram } from '../src/contract/adapters/resolve.ts';
 
 globalThis.GPUBufferUsage ??= { MAP_READ: 1, MAP_WRITE: 2, COPY_SRC: 4, COPY_DST: 8, INDEX: 16, VERTEX: 32, UNIFORM: 64, STORAGE: 128, INDIRECT: 256, QUERY_RESOLVE: 512 };
@@ -75,6 +77,33 @@ test('EA-X3 every primitive\'s counts are Primitives\' own, for every shape and 
     const g = Primitives.createSphere(StandardLayout, 1, 7, 4);
     assert.equal(bytes('ball#vertices'), g.vertices.byteLength);
     assert.equal(bytes('ball#indices'), Math.ceil(g.indices.byteLength / 4) * 4);
+});
+
+test('EA-X3b the ground\'s counts are its builder\'s for every segments from 3 to 128; X names the host\'s createGround, and its bytes are Geometry.upload\'s', async () => {
+    // The manifest's shapes are Primitives' thirteen and the ground, so no shape reaches X unpinned.
+    const thirteen = ['cube', 'octahedron', 'plane', 'pyramid', 'icosahedron', 'dodecahedron', 'tetrahedron', 'sphere', 'torus', 'cylinder', 'cone', 'capsule', 'ring'];
+    const shapes = ADAPTERS.adapters.find(a => a.id === 'ng.geometry.primitive').config.properties.shape.enum;
+    assert.deepEqual([...shapes].sort(), [...thirteen, 'ground'].sort());
+    assert.equal(typeof Primitives[GROUND_FACTORY], 'undefined', 'the ground is the host\'s, never a Primitives factory');
+    for (let segments = 3; segments <= 128; segments++) {
+        const call = primitive('ground', 1, segments);
+        const g = groundGeometry(...call.params);
+        assert.equal(g.vertices.length / StandardLayout.strideFloats, call.vertices, `ground ${segments}: vertices`);
+        assert.equal(g.indices.length, call.indices, `ground ${segments}: indices`);
+        assert.equal(g.indices.BYTES_PER_ELEMENT, call.indexBytes, `ground ${segments}: index width`);
+    }
+    const c = primitive('ground', 2, 16);
+    assert.deepEqual([c.factory, ...c.params], [GROUND_FACTORY, 2, 16]);
+    // The engine's own Geometry takes the arrays as a Primitives shape's: StandardLayout, 16-bit indices.
+    const made = new Geometry(StandardLayout, ...Object.values(groundGeometry(2, 16)));
+    assert.equal(made.indexFormat, 'uint16');
+    const r = await resolveProgram([node('floor', 'ng.geometry.primitive', { shape: 'ground', size: 2, segments: 16 })]);
+    assert.equal(r.ok, true);
+    const bytes = id => r.graph.resources.find(x => x.id === id).bytes;
+    assert.equal(bytes('floor#vertices'), made.vertices.byteLength);
+    assert.equal(bytes('floor#indices'), Math.ceil(made.indices.byteLength / 4) * 4);
+    const create = r.graph.operations.find(o => o.id === 'floor#create');
+    assert.deepEqual([create.call, create.args.factory, create.args.params, create.args.indexFormat], ['geometry.primitive', GROUND_FACTORY, [2, 16], 'uint16']);
 });
 
 test('EA-X4 the stock materials\' uniform buffers and LightSystem\'s light buffer are the engine\'s, through a recording device', async () => {

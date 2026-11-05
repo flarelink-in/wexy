@@ -43,6 +43,7 @@
 
 import '../src/styles/base.css';
 import '../src/styles/studio.css';
+import { ADAPTER_MANIFEST_HASH } from '../src/contract/adapters';
 import { createAgentClient, ENGINE_BUNDLE_HASH, type AgentClient, type AgentTurnRequest } from '../src/forge-client/agent-client';
 import { readAgentStream, type AgentEvent, type AgentTurnResult } from '../src/forge-client/agent-stream';
 import { createApi } from '../src/forge-client/http';
@@ -87,6 +88,17 @@ const check = (name: string, ok: boolean, detail: unknown = null) => {
 
 const enc = new TextEncoder();
 const lf = (s: string) => s.replace(/\r\n/g, '\n');
+/** The data of a recording's first event named `name`. */
+const firstEvent = <T>(wire: string, name: string): T => {
+    const block = lf(wire).split('\n\n').find(b => b.startsWith(`event:${name}\n`));
+    return JSON.parse(block!.slice(`event:${name}\ndata:`.length)) as T;
+};
+/**
+ * The template the recorded author call names, and the reservation the refused turn held, as the recordings say them
+ * (read like RECORDED_BODY), so a template's new version or a longer system message leaves no check naming the last.
+ */
+const RECORDED_AUTHOR_TEMPLATE = firstEvent<{ promptVersion: string }>(moduleAuthorWire, 'meta').promptVersion;
+const RECORDED_BUDGET_HELD = `$${(firstEvent<{ costMicroUsd: number }>(errorBudgetWire, 'usage').costMicroUsd / 1e6).toFixed(4)}`;
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 async function until(condition: () => boolean, ms = 3_000): Promise<void> {
     for (const t0 = performance.now(); !condition(); await sleep(10)) {
@@ -228,7 +240,7 @@ async function endings(): Promise<void> {
     const shown = v.programText ?? '';
     check('EA-V1 handed-off: the program is its adapter nodes, each config shown parsed, under the contract and adapters it was checked by',
         /"adapterId": "ng\.buffer\.storage"/.test(shown) && /"layout": "instance14"/.test(shown) && /"effect": "Tonemap"/.test(shown)
-        && !shown.includes('\\"layout\\"') && /agent-action\.v3, as this build/.test(v.meta ?? '') && /3c7775588fb8…, as this build/.test(v.meta ?? ''),
+        && !shown.includes('\\"layout\\"') && /agent-action\.v3, as this build/.test(v.meta ?? '') && (v.meta ?? '').includes(`${ADAPTER_MANIFEST_HASH.slice(0, 12)}…, as this build`),
         { program: shown.slice(0, 600), meta: v.meta });
 
     v = await ending(askedWire, 'asked');
@@ -261,7 +273,7 @@ async function endings(): Promise<void> {
     v = await ending(errorBudgetWire, 'error-budget');
     check('EA-V1 a later charge refused: failed, the code and where, the first call\'s reservation held', v.phase === 'failed' && v.success === 'false'
         && v.reason === 'budget in the stream: Live creation has reached its spending limit for now.'
-        && v.calls[0].includes('? in / ? out · $0.1606 held, no usage came'), v);
+        && v.calls[0].includes(`? in / ? out · ${RECORDED_BUDGET_HELD} held, no usage came`), v);
 
     v = await ending(errorUpstreamWire, 'error-upstream');
     check('EA-V1 answers off the schema twice: failed, as upstream', v.phase === 'failed'
@@ -460,7 +472,7 @@ async function candidates(): Promise<void> {
         && v.modules.length === 1 && place.module === 'place' && place.phase === 'passed' && /^place · compute · passed · 1 call · body [0-9a-f]{12}…$/.test(place.head)
         && place.body === RECORDED_BODY && place.verdicts.length === 1 && place.verdicts[0].startsWith('lint pass (host, current)')
         && v.budget === 'Q_C: 4 of 34 calls · authors 1/12 · repairs 0/10 · revisions 0/3' && v.jobs.length === 1
-        && /^job-1 place author: ok · \$0\.01\d\d · [^·]+ · module\.author\.v2$/.test(v.jobs[0])
+        && /^job-1 place author: ok · \$0\.01\d\d · [^·]+ · /.test(v.jobs[0]) && v.jobs[0].endsWith(` · ${RECORDED_AUTHOR_TEMPLATE}`)
         && v.evidence === 'Evidence 5 records' && requests.length === 1 && requests[0].purpose === 'author', v);
     candidateButton(p, 'Download bundle').click();
     const bundle = saved.length === 1 ? JSON.parse(saved[0].text) : null;
@@ -577,9 +589,9 @@ async function candidates(): Promise<void> {
     const r = lookCandidate(revising);
     check('EA-V11 a program the browser refuses is revised: the revision\'s turn shows beside the hand-off\'s, each call with its charge, model and template',
         r.phase === 'static-verified' && r.budget === 'Q_C: 5 of 34 calls · authors 1/12 · repairs 0/10 · revisions 1/3' && r.turns.length === 2
-        && r.turns[0].role === 'hand-off' && r.turns[0].head === 'turn-1 hand-off: handed-off · 3 calls · $0.1380 · muse-spark-1.3 · agent.v6'
+        && r.turns[0].role === 'hand-off' && r.turns[0].head === 'turn-1 hand-off: handed-off · 3 calls · $0.1380 · muse-spark-1.3 · agent.v7'
         && r.turns[0].calls.length === 3 && r.turns[1].role === 'revision'
-        && r.turns[1].head === 'turn-1 program revision: handed-off · 1 call · $0.0460 · muse-spark-1.3 · agent.v6'
+        && r.turns[1].head === 'turn-1 program revision: handed-off · 1 call · $0.0460 · muse-spark-1.3 · agent.v7'
         && JSON.stringify(r.turns[1].calls) === JSON.stringify(['1 revise: $0.0460 · gen-1']) && r.jobs.length === 1 && r.jobs[0].includes('place author: ok'), r);
     candidateButton(revising, 'Download bundle').click();
     const revisedBundle = revisedSaved.length === 1 ? JSON.parse(revisedSaved[0].text) : null;
@@ -587,8 +599,8 @@ async function candidates(): Promise<void> {
     const records = revisedBundle ? revisedBundle.calls.turns.reduce((n: number, t: { calls: unknown[] }) => n + t.calls.length, 0) + revisedBundle.calls.jobs.length : -1;
     check('EA-V11 the downloaded bundle holds the revision\'s turn: its call, charge, model and template; each call Q_C settled has its record',
         revisedBundle?.format === 'wexy-candidate-bundle.v3' && revision?.role === 'revision' && revision.status === 'handed-off' && revision.model === 'muse-spark-1.3'
-        && revision.promptVersion === 'agent.v6' && revision.charge === 'known' && revision.calls.length === 1 && revision.calls[0].purpose === 'revise'
-        && revision.calls[0].costMicroUsd === 46_000 && revisedBundle.versions.templates.includes('agent.v6') && records === revisedBundle.calls.budget.calls.settled,
+        && revision.promptVersion === 'agent.v7' && revision.charge === 'known' && revision.calls.length === 1 && revision.calls[0].purpose === 'revise'
+        && revision.calls[0].costMicroUsd === 46_000 && revisedBundle.versions.templates.includes('agent.v7') && records === revisedBundle.calls.budget.calls.settled,
         { turns: revisedBundle?.calls?.turns, templates: revisedBundle?.versions?.templates, records });
 }
 

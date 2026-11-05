@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { ADAPTER_MANIFEST_HASH, ADAPTER_MANIFEST_TEXT, ADAPTERS, checkManifest, checkNodes } from '../src/contract/adapters/index.ts';
 import { ENGINE } from '../src/contract/engine/index.ts';
 
@@ -15,7 +16,7 @@ import { ENGINE } from '../src/contract/engine/index.ts';
  * 10-30: the compute stage's after input and done output (Q77); before, 7af95545….
  * 10-31: the variant gates' table, `upload` gated (Q80); before, 1de4e9b8….
  */
-const MANIFEST_HASH = '3c7775588fb816ce8ccd3660e16d8ae6bfa9526f83174ecf666f8c66ab4c4c77';
+const MANIFEST_HASH = '8bdd11e8ef2f0ced4b0cabbbac19ca4b6ff0df03fca2d56082005b05b1497220';
 
 const node = (id, adapterId, config, inputs = [], adapterVersion = 1) => ({ id, adapterId, adapterVersion, config: JSON.stringify(config), inputs });
 const from = (port, nodeId, output) => ({ port, nodeId, output });
@@ -179,7 +180,7 @@ test('EA-A6 a model\'s text in a node is quoted short, never whole; a malformed 
     assert.deepEqual(checkNodes(array).diagnostics.map(d => d.path), ['/nodes/6/inputs/0']);
 });
 
-const BACKEND_MAIN = 'D:/orion-realms/wexy/wexy backend/forge-service/src/main';
+const BACKEND_MAIN = fileURLToPath(new URL('../../wexy backend/forge-service/src/main', import.meta.url));
 
 test('EA-A7 the backend embeds this manifest byte for byte and pins its hash, when that repository is on this disk (EA3.6, Q74)',
     { skip: !existsSync(BACKEND_MAIN) && 'the backend repository is not on this disk' }, () => {

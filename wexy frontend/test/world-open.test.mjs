@@ -59,7 +59,10 @@ test('PL-FE5 the castle opens from the platform as it was saved: its head read, 
     const w = opened.world;
     assert.deepEqual([w.worldId, w.title, w.revisionId, w.rowVersion], [WORLD, 'The castle on the hill', REV, 3], 'the server\'s title and head, the save binding\'s');
     assert.deepEqual([w.snapshot.x.hash, w.snapshot.id], [EXPECTED.x, EXPECTED.candidate], 'sealed by this host to the corpus\' recorded X and id(C)');
-    assert.equal(w.provenance.same, true);
+    // The file names the X and id(C) of the build that saved it (Developer view's provenance); a later contract change
+    // moves this build's (2026-11-05, the ground shape), so `same` says whether that build is this one.
+    const file = JSON.parse(CASTLE);
+    assert.deepEqual(w.provenance, { graph: file.graph, candidate: file.candidate, same: file.graph === EXPECTED.x && file.candidate === EXPECTED.candidate });
     assert.deepEqual(w.design, JSON.parse(CASTLE).design);
     assert.deepEqual(api.sent, [`GET /v1/worlds/${WORLD}`, `GET /v1/worlds/${WORLD}/revisions/${REV}`]);
     onlyWorldRoutes(api.sent);

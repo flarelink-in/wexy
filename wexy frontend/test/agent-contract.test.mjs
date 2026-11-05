@@ -15,7 +15,7 @@ import { ENGINE_BUNDLE_HASH } from '../src/forge-client/agent-client.ts';
 import { NOTE_CHARS } from '../src/forge-client/module-client.ts';
 import { NOTE_CODE, REPAIR_BUDGET_CODE, SET_ASIDE_CODE } from '../src/loop/candidate.ts';
 
-const BACKEND = 'D:/orion-realms/wexy/wexy backend/forge-service/src';
+const BACKEND = fileURLToPath(new URL('../../wexy backend/forge-service/src', import.meta.url));
 const FIXTURES = fileURLToPath(new URL('./fixtures/agent-wire/', import.meta.url));
 /**
  * sha256 of agent-action.v3.json with LF line ends; the backend's copy is the source (EA6.3, 11-02: v2's revision with
@@ -37,9 +37,11 @@ const SCHEMA_HASH = 'c25fc7689301b9a8f79ae424de5aac489a11fed8399e9dbcb771c20581f
  * v3 (the refused turn's reservation with it), and revised.sse, a turn that revises a base; before, 24373afe… (agent.v4
  * without the two rules), 13b6a9cb… (10-31: agent.v3 and Q80's gates), cb04377c….
  */
-// 810e4a46… since 2026-11-04: error-upstream.sse's turn makes a third call, its second schema repair, and its error says
-// why the last answer was not an object, in the parser's words; before, c5da82a4….
-const WIRE_HASH = '810e4a4642e6df5fdef784debdc8739a270d826d6f5d1cf24fd7f3c3add9b9dd';
+// 91569a5d… since 2026-11-05 (the ground shape): agent.v7 and the manifest that names the ground, so every meta's
+// promptVersion and manifestHash, and the refused turn's reservation (160,585 → 162,508 µUSD, the template's shape facts
+// and the manifest's longer summaries); before, 810e4a46… (2026-11-04): error-upstream.sse's turn makes a third call, its
+// second schema repair, and its error says why the last answer was not an object, in the parser's words; before, c5da82a4….
+const WIRE_HASH = '91569a5d53d41aca3dab3c01ac35b46bc26477222f1cc83e32cf71888586b276';
 
 const lf = (s) => s.replace(/\r\n/g, '\n');
 const recordings = () => Object.fromEntries(readdirSync(FIXTURES).sort().map(n => [n, lf(readFileSync(join(FIXTURES, n), 'utf8'))]));
@@ -63,14 +65,14 @@ test('EA-W2 the schema and every recording are the backend\'s, byte for byte, wh
     for (const [name, text] of Object.entries(files)) assert.equal(text, lf(readFileSync(join(dir, name), 'utf8')), name);
 });
 
-test('EA-W3 every recorded turn quotes this build\'s engine bundle, action contract and adapters, and the agent.v6 prompt, and names its calls in order', () => {
+test('EA-W3 every recorded turn quotes this build\'s engine bundle, action contract and adapters, and the agent.v7 prompt, and names its calls in order', () => {
     for (const [name, text] of Object.entries(recordings())) {
         if (!name.endsWith('.sse')) continue;
         const [meta] = eventData(text, 'meta');
         assert.equal(meta.bundleHash, ENGINE_BUNDLE_HASH, `${name}: regenerate the recordings after the bundle changes`);
         assert.equal(meta.actionSchema, AGENT_ACTION_VERSION, name);
         assert.equal(meta.manifestHash, ADAPTER_MANIFEST_HASH, `${name}: regenerate the recordings after the manifest changes`);
-        assert.equal(meta.promptVersion, 'agent.v6', name);
+        assert.equal(meta.promptVersion, 'agent.v7', name);
         assert.deepEqual(eventData(text, 'call').map(c => c.n), eventData(text, 'call').map((_, i) => i + 1), name);
     }
 });
@@ -128,7 +130,7 @@ test('EA-W5 the recorded design and program pass; each departure from the schema
 
 test('EA-W6 one wire limit for an event: the reader\'s is the backend\'s AgentTurn.MAX_EVENT_CHARS, when it is on this disk', { skip: !existsSync(BACKEND) && 'the backend repository is not on this disk' }, async () => {
     const { AGENT_EVENT_CHARS, AGENT_STREAM_LIMITS } = await import('../src/forge-client/agent-stream.ts');
-    const java = readFileSync('D:/orion-realms/wexy/wexy backend/forge-common/src/main/java/ai/wexy/common/AgentTurn.java', 'utf8');
+    const java = readFileSync(fileURLToPath(new URL('../../wexy backend/forge-common/src/main/java/ai/wexy/common/AgentTurn.java', import.meta.url)), 'utf8');
     const backend = Number(/MAX_EVENT_CHARS = ([\d_]+);/.exec(java)?.[1].replace(/_/g, ''));
     assert.equal(AGENT_EVENT_CHARS, backend);
     for (const name of ['design', 'program', 'check']) assert.equal(AGENT_STREAM_LIMITS.eventChars[name], backend, name);
@@ -189,10 +191,10 @@ test('EA-VR4a a revision\'s notes are the schema\'s, held whole: a list of at mo
 test('EA-VR4b the backend checks what the browser reads: its note\'s bound, and the code a kept body\'s note is sent as, when it is on this disk', { skip: !existsSync(BACKEND) && 'the backend repository is not on this disk' }, () => {
     const request = readFileSync(join(BACKEND, 'main/java/ai/wexy/forge/agent/ModuleRequest.java'), 'utf8');
     assert.match(request, new RegExp(`static final int NOTE_CHARS = ${NOTE_CHARS};`));
-    const repair = readFileSync(join(BACKEND, 'main/resources/prompts/module.repair.v3.md'), 'utf8');
-    assert.ok(repair.includes(NOTE_CODE), `module.repair.v3 explains ${NOTE_CODE}`);
-    const agent = readFileSync(join(BACKEND, 'main/resources/prompts/agent.v6.md'), 'utf8');
-    for (const code of [SET_ASIDE_CODE, REPAIR_BUDGET_CODE]) assert.ok(agent.includes(code), `agent.v6 explains ${code}`);
+    const repair = readFileSync(join(BACKEND, 'main/resources/prompts/module.repair.v4.md'), 'utf8');
+    assert.ok(repair.includes(NOTE_CODE), `module.repair.v4 explains ${NOTE_CODE}`);
+    const agent = readFileSync(join(BACKEND, 'main/resources/prompts/agent.v7.md'), 'utf8');
+    for (const code of [SET_ASIDE_CODE, REPAIR_BUDGET_CODE]) assert.ok(agent.includes(code), `agent.v7 explains ${code}`);
     // Blank as the browser's trim counts it (the independent review of EA6.3).
     assert.match(readFileSync(join(BACKEND, 'main/java/ai/wexy/forge/agent/ModuleRequest.java'), 'utf8'), /Character\.isSpaceChar\(c\) \|\| c == 0xFEFF/);
 });

@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { assembleModule, functionLine, HOST_START, LOOK_STRUCT, MODEL_START, PARTICLE_STRUCT } from '../src/contract/host.ts';
 import { H1, H1_FILES, normalizeHostText } from '../src/contract/h1/index.ts';
 import { DIAL } from '../src/contract/lint.ts';
@@ -19,7 +20,7 @@ import { DIAL } from '../src/contract/lint.ts';
  */
 const H1_HASH = 'be6af5f571b61514a587d1ada0db0bc19f2abc45f37a7d1194c95a76cad24a2c';
 
-const BACKEND = 'D:/orion-realms/wexy/wexy backend/forge-service/src/main/resources';
+const BACKEND = fileURLToPath(new URL('../../wexy backend/forge-service/src/main/resources', import.meta.url));
 
 const hashAll = (files) => {
     const h = createHash('sha256');

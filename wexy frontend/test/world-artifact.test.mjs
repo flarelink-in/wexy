@@ -153,7 +153,17 @@ test('PL-FE11 sealed again, trusting nothing: another build\'s provenance is kep
     assert.equal(opened.ok, true, opened.reason);
     assert.equal(opened.snapshot.x.hash, EXPECTED.worlds.castle.x, 'this build\'s X');
     assert.deepEqual(opened.provenance, { graph: 'b'.repeat(64), candidate: 'c'.repeat(64), same: false });
-    const own = await openWorld((await parseWorld(CASTLE, null)).world, 'own');
+    // The corpus castle names the X and id(C) of the build that saved it, which a later contract change moves (2026-11-05,
+    // the ground shape); saved again by this build's own path and opened, a world names this build's.
+    const castle = JSON.parse(CASTLE);
+    const corpus = await openWorld((await parseWorld(CASTLE, null)).world, 'corpus');
+    assert.equal(corpus.ok, true, corpus.reason);
+    assert.equal(corpus.provenance.same, castle.graph === EXPECTED.worlds.castle.x && castle.candidate === EXPECTED.worlds.castle.candidate,
+        'the corpus file\'s provenance is its own day\'s');
+    const resaved = await worldArtifact({ snapshot: corpus.snapshot, design: castle.design, view: castle.view, keyframes: castle.keyframes });
+    assert.equal(resaved.ok, true, resaved.reason);
+    const own = await openWorld((await parseWorld(resaved.world.text, resaved.world.sha256)).world, 'own');
+    assert.equal(own.ok, true, own.reason);
     assert.equal(own.provenance.same, true, 'saved and opened by this build: the same X and id(C)');
     const refused = async (text, pattern, what) => {
         const p = await parseWorld(text, null);

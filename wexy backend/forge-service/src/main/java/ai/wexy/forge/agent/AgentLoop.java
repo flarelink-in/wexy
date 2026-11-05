@@ -63,7 +63,7 @@ public final class AgentLoop {
     private final LongSupplier clockMillis;
     private final ObjectMapper json = new ObjectMapper();
 
-    /** The template every call of a turn is built from ({@code agent.v6}), as its records and its meta name it. */
+    /** The template every call of a turn is built from ({@code agent.v7}), as its records and its meta name it. */
     public String promptVersion() {
         return prompts.version("agent");
     }
