@@ -6,20 +6,69 @@
 
 **Describe a world. Watch it run on your graphics card. Film it.**
 
-Wexy is the website: a browser studio for creating, exploring and filming living 3D worlds.
-Meta's models plan the world and write constrained GPU functions; Wexy checks the output
-before rendering it through NullGraph on the viewer's graphics card. Choose a camera view,
-adjust supported controls, capture a still, or export a wide, vertical or square video.
+Wexy is an agentic WebGPU authoring studio that turns natural-language ideas into real-time,
+interactive GPU programs in the browser. Meta's models design the scene and write constrained
+WGSL shader modules; Wexy's verification and repair pipeline checks candidates before they run
+through NullGraph on the viewer's graphics card.
 
-**For judges:** the demo video and this public repository are the primary evaluation material.
-A hosted deployment is optional, not a setup dependency. You can run the site locally using
-the steps below without the author's Firebase account, secret manager or private notes.
-Actual live generation requires your own authorized Meta API credentials and can incur charges.
-The no-key routes below do not substitute for live Meta-call evidence in the submission video.
+Unlike a rendered video clip, a running world can be explored locally: move the camera, adjust
+supported controls, capture a still, or export a wide, vertical or square MP4 without a new
+model request for every viewpoint.
+
+## Try the hosted app
+
+**The finished, hosted build is available directly at [wexy.ai](https://wexy.ai).**
+You do not need to clone the repository or run a local backend to try the website.
+
+- **Open the studio:** [wexy.ai/studio.html](https://wexy.ai/studio.html)
+- **Developers: open `studio.html?agent=1`:** [live agent workflow in Developer view](https://wexy.ai/studio.html?agent=1)
+- **Watch the demo:** [submission video](https://youtu.be/ZXJ62_oP4Gk)
+
+Use a WebGPU-capable browser with hardware acceleration. Hosted live creation is subject to
+the deployment's access requirements, allowances and available model budget. The local setup
+below is for developers and judges who want to inspect, test or run their own instance;
+live generation on your own instance requires authorized Meta API credentials.
+
+### Developer quickstart: run a turn, write modules, download a bundle
+
+**The engine-aware (EA) agent workflow is wired into the actual `studio.html` app, not a
+standalone demo or an offline-only pattern.** Developer view watches the same creation
+controller and uses the same GPU stage as the creator flow. On a live-connected deployment,
+its turn and module actions use the configured backend; `?agent=1` exposes the controls and
+diagnostics, but does not itself configure a backend or turn mock responses into live calls.
+
+1. Open [Developer view](https://wexy.ai/studio.html?agent=1). For your local instance, use
+   `http://localhost:5173/studio.html?agent=1` after configuring the frontend/backend connection
+   below. Use `?agent=1`, not just `?dev=1`, to reach the agent panels.
+2. Enter your world idea, then click **Run agent turn**. Inspect the streamed calls, engine
+   document reads, checks, and resulting design/program. Wait for a successful **hand-off**;
+   this checks the program but does not build or render a world.
+3. Click **Write the modules** in the candidate panel. Wexy authors the WGSL modules, checks
+   and repairs the candidate, and compiles the bodies on this device when WebGPU is available.
+   Inspect the module verdicts, findings, call costs and evidence before proceeding.
+4. Click **Download bundle** to save `wexy-candidate-<attempt>.json` with the candidate's
+   program, module bodies and diagnostic evidence. You can also download an incomplete or
+   failed candidate for debugging; having a bundle is not proof of a successful GPU run.
+   Treat it as potentially sensitive: it includes the request and generated code.
+5. When the candidate is sealed and this device's compilation checks pass, click
+   **Run on this GPU**. Studio performs device admission, building, probing and execution
+   checks before replacing the world on the stage. This is the same execution action as
+   **Show it** in the creator flow; static checks alone do not establish rendering success.
+6. Explore the running world, inspect its review evidence where available, and capture a still
+   or use **Make a video**. Download the bundle again if you want the available review evidence
+   and frames included with that attempt.
+
+In short: **`?agent=1` → Run agent turn → hand-off → Write the modules → Download bundle
+→ Run on this GPU → inspect/capture**. Live model actions remain subject to access and budget
+limits; the local `local,mock` setup follows the workflow with recorded responses, not paid
+upstream calls.
 
 ## Contents
 
+- [Try the hosted app](#try-the-hosted-app)
+- [Developer quickstart: run a turn, write modules, download a bundle](#developer-quickstart-run-a-turn-write-modules-download-a-bundle)
 - [What the product does](#what-the-product-does)
+- [How Meta powers Wexy](#how-meta-powers-wexy)
 - [Choose an evaluation mode](#choose-an-evaluation-mode)
 - [Prerequisites](#prerequisites)
 - [1. Clone and run the no-key playground](#1-clone-and-run-the-no-key-playground)
@@ -36,8 +85,10 @@ The no-key routes below do not substitute for live Meta-call evidence in the sub
 
 ## What the product does
 
-- **Create:** turn an idea into a scene plan and model-authored GPU function bodies. The
-  engine-aware authoring path also builds a checked program and its modules.
+- **Create:** turn an idea into a structured scene design, an engine-aware program and
+  model-authored GPU modules. The agent creator is the default studio creation path.
+- **Repair:** feed compiler and contract diagnostics back to the model for targeted revisions
+  rather than treating one-shot shader output as ready to run.
 - **Check before running:** structured contracts and execution checks gate installation;
   unchecked output does not silently replace the existing world.
 - **Explore:** move the camera and use controls supported by the running world. A model-generated
@@ -45,6 +96,8 @@ The no-key routes below do not substitute for live Meta-call evidence in the sub
 - **Capture:** take stills and use **Make a video** to choose format, quality and length,
   render the shot, preview the completed MP4 and save it. Browser/GPU/codec support matters.
 - **Inspect:** Developer view exposes generation evidence, call diagnostics and candidate checks.
+- **Save:** signed-in creators can save and reopen compatible worlds, rename them and manage
+  their private creation history when the deployment's saved-world storage is configured.
 - **Try without credits:** hand-written playground worlds let you explore rendering and capture
   without a model call. The backend also has a separate recorded mock transport for testing.
 
@@ -52,10 +105,30 @@ Rendering and film encoding happen on your device. Live prompts and model reques
 the backend and Meta; local rendering does **not** make generation entirely offline or private.
 Controls vary by world. Generation quality and supported engine coverage are not universal.
 
+## How Meta powers Wexy
+
+Model calls go through the Java backend; Meta API credentials never belong in the browser bundle.
+
+| Role | Checked-in model configuration |
+|---|---|
+| Scene planning, authoring and initial function repair | `muse-spark-1.3` |
+| Agent turns, module generation/repair and visual review | `muse-spark-1.3` |
+| Third repair in the separate function-repair endpoint's chain | `muse-wonder-1.0`, high reasoning effort |
+
+Wonder escalation is specific to the function-repair endpoint, not an automatic fallback for
+agent turns, module repairs or visual review. Visual review also requires the backend's vision
+and consent gates. See `wexy backend/forge-service/src/main/resources/application.yaml` for the
+role bindings, token caps and deadlines.
+
+The workflow is **design → generate → check → repair when needed → explicit GPU admission**.
+Meta's models propose the program; engine checks and device admission control execution.
+Once admitted, rendering and capture run locally rather than generating a new video remotely.
+
 ## Choose an evaluation mode
 
 | Mode | What you can evaluate | Needs | Paid Meta calls? |
 |---|---|---|---|
+| **Hosted app — wexy.ai** | End-user studio and Developer view without local setup | WebGPU browser; deployment access/allowances | Live creation uses the hosted model budget |
 | **Browser playground** | Hand-written examples, camera, stills and video capture | Frontend + WebGPU browser | **No** |
 | **Local mock backend** | Gateway/service integration and recorded plan/author/repair flows | Frontend, Java, Redis; MariaDB/platform for accounts | **No**; fixture responses are not live inference |
 | **Live Meta backend** | Real generation through the implemented authoring paths | Local stack + your Meta API key and credit | **Yes** |
@@ -235,7 +308,8 @@ the file or copy it into the frontend. Start forge with **`local`, not `local,mo
 
 Use your provider's authorized endpoint; the configured default is `https://api.meta.ai/v1`.
 The checked-in roles use **`muse-spark-1.3`** for planning, authoring, agent/module work and
-review, with **`muse-wonder-1.0`** for escalation. Availability depends on your account; inspect
+review, with **`muse-wonder-1.0`** for the third repair in the function-repair endpoint's chain.
+Availability depends on your account; inspect
 `wexy backend/forge-service/src/main/resources/application.yaml` rather than assuming access.
 Do not change models without checking their input/output and reasoning-setting compatibility.
 
@@ -243,11 +317,12 @@ Open one of the following routes:
 
 | Route on `http://localhost:5173` | Purpose |
 |---|---|
+| `/studio.html` | Default agent creator: **Create world**, checks, then **Show it** |
 | `/studio.html?legacy=1` | Existing plan/author/check creation path |
-| `/studio.html?create=agent` | Opt-in engine-aware creator path: **Create world**, checks, then **Show it** |
-| `/studio.html?create=agent&agent=1` | Same creator path with Developer diagnostics |
+| `/studio.html?create=agent` | Explicit selection of the same agent creator |
+| `/studio.html?agent=1` | Developer view with agent panels and step-by-step inspection |
 
-The agent creator is still opt-in in this checkout; it is not the unflagged default. Its
+The agent creator is the default in this checkout; `?legacy=1` selects the earlier path. Its
 checked hand-off, module build and device admission are separate stages. Press **Show it**
 when offered; a static verdict alone is not proof the world has rendered. Generated requests
 can fail validation or exceed this device's admitted workload; report that rather than treating
@@ -262,7 +337,8 @@ can refuse a request before the nominal balance is exhausted. Lower caps can mak
 agent turns unavailable. Mock runs also consume local meter counters.
 
 Prompt allowances are separate from dollar caps: the current defaults include one anonymous
-creation per account/network, one early-access creation per day and an admin lane. Do not
+creation per account, daily network limits of three per IPv4 address or one per IPv6 /64,
+one early-access creation per day and an admin lane. Do not
 expect unlimited retries. Keep the counters intact and inspect the denial rather than
 disabling protections. The local profile uses recorded content-safety verdicts, not the
 production Azure moderation service; it must never be exposed publicly.
@@ -279,11 +355,18 @@ Remove the live credential when finished; restarting with `local,mock` restores 
 4. Move the camera on the resulting world. Adjust only controls that world exposes.
 5. Capture a still, or open **Make a video**, choose format/quality/length and render a short shot.
 6. Wait for completion, play the actual result, then save/share the file where supported.
-7. For model-use inspection, open Developer view and correlate call diagnostics with the generated
-   program/modules and running result. Backend-side evidence establishes real upstream calls.
+7. For model-use inspection, open `studio.html?agent=1` and follow the
+   [Developer quickstart](#developer-quickstart-run-a-turn-write-modules-download-a-bundle):
+   **Run agent turn → Write the modules → Download bundle → Run on this GPU**. Correlate call
+   diagnostics with the generated program/modules and running result. Backend-side evidence
+   establishes real upstream calls.
 
-Use source labels honestly: a playground is hand-written, a backend mock is a recording/fixture,
-and an earlier saved attempt is a replay. File export/sharing is not a durable public world URL.
+Signed-in creators can manage saved worlds at `/creations` when private storage is configured.
+Reopening a compatible saved world loads its stored program, not a fresh model generation,
+and still requires the studio's explicit execution step.
+
+A playground is hand-written, a backend mock is a recording/fixture, and an earlier saved
+attempt is a replay. Private saved worlds and exported video files are not public world publishing.
 
 ## Configuration reference
 
@@ -415,11 +498,17 @@ unrestricted GPU command stream. The host owns execution and verifies before rep
 
 ## Status, provenance and license
 
-This is an actively developed hackathon product. The engine-aware creator is currently
-opt-in behind `?create=agent`; Developer view is behind `?agent=1`. Device admission and filming
-have their own checks. Durable generation records, saved-world publishing and the public
-gallery are not complete; current generation records are in memory. Do not assume a saved
-result or shared link survives a restart. Deploy compatible frontend/backend contracts together.
+Wexy is available in early access at **https://wexy.ai** and remains actively developed.
+The engine-aware agent creator is the default; Developer view is available through `?agent=1`,
+and `?legacy=1` selects the earlier creation path. Device admission and filming have their own checks.
+
+Private saved worlds and revisions are implemented through platform-service, MariaDB metadata
+and a configured private B2 object store. Signed-in creators can reopen compatible worlds and
+manage their history at `/creations`. Local installs need the `B2_PRIVATE_*` settings documented
+in `wexy backend/.env.example` for saved-world routes; without them those routes return 503
+while accounts remain available. Public world publishing and the gallery remain separate,
+unfinished features. Forge's transient generation records are still in memory and are distinct
+from durable saved worlds. Deploy compatible frontend/backend contracts together.
 
 NullGraph is the author's separately published WebGPU library. Its broader simulation-agent
 APIs do not automatically become available through Wexy's authoring surface. Agent-populated
