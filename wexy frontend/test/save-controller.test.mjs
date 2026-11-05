@@ -850,3 +850,467 @@ test('EA9.4 review: changed is a difference from the saved views, never a count 
     b.saves.accountChanged();
     assert.equal(b.saves.state().status, 'saved');
 });
+
+// The review of merged EA9.4 (11-05), M1: an edit changes a world's text on the same stage, and a request with no answer may
+// have committed. Nothing else is sent for the creation until that request is resolved, the same body under the same key;
+// then its views, if they changed since, are a revision of the head it made. Never a second world.
+const KEY2 = { ...KEY, t: 0.75, azimuth: 120 };
+const lost = () => new ForgeError('unavailable', 0, 'no answer');
+const keyframesOf = r => JSON.parse(r.body.artifact).keyframes;
+
+test('EA9.4 merged-review M1: views edited after an unanswered create, then Try again: the create resolved under its key, then one revision with the views', async () => {
+    // The first create committed, its answer lost twice; the platform answers its key's replay with the world it made.
+    const h = harness({ 'POST /v1/worlds': [lost(), lost(), world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [world(1, 1)] });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    assert.equal(h.saves.state().status, 'offline');
+    h.saves.edited([KEY]);
+    assert.equal(h.saves.state().status, 'offline', 'still "Not saved", with Try again');
+    await h.saves.retry();
+    const creates = h.api.sent.filter(r => r.path === '/v1/worlds');
+    assert.equal(creates.length, 3, 'the create, its retry, and the press resolving it: no other create');
+    assert.equal(new Set(creates.map(r => r.key)).size, 1, 'one create, one key: never a second world');
+    assert.equal(creates[2].body.artifact, creates[0].body.artifact, 'the same body');
+    assert.deepEqual(keyframesOf(creates[2]), []);
+    assert.equal(h.api.sent.length, 4);
+    const rev = h.api.sent[3];
+    assert.deepEqual([rev.path, rev.body.baseRevisionId, rev.body.expectedVersion], [`/v1/worlds/${WORLD}/revisions`, REV[0], 0]);
+    assert.deepEqual(keyframesOf(rev), [KEY], 'the views as edited, on the head the create made');
+    assert.notEqual(rev.key, creates[0].key, 'another request, another key');
+    assert.deepEqual([h.saves.state().status, h.saves.state().revisionId], ['saved', REV[1]]);
+});
+
+test('EA9.4 merged-review M1: still unanswered, the edited views wait: no other key; taken back, the create resolved is all there is to save', async () => {
+    const h = harness({ 'POST /v1/worlds': [lost(), lost(), lost(), lost(), world(0)] });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    h.saves.edited([KEY]);
+    await h.saves.retry();
+    assert.deepEqual([h.api.sent.length, h.saves.state().status], [4, 'offline']);
+    assert.equal(new Set(h.api.sent.map(r => r.key)).size, 1, 'only the first create, under its key');
+    assert.ok(h.api.sent.every(r => r.path === '/v1/worlds' && r.body.artifact === h.api.sent[0].body.artifact), 'its body each time');
+    // The views put back as they were sent: once the create answers, nothing is left to save; no identical revision.
+    h.saves.edited([]);
+    await h.saves.retry();
+    assert.deepEqual([h.api.sent.length, h.api.sent[4].key, h.saves.state().status], [5, h.api.sent[0].key, 'saved']);
+});
+
+test('EA9.4 merged-review M1: a Save of the views unanswered, edited again, then Try again: that revision resolved under its key, then one on its head', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [lost(), lost(), world(1, 1), world(2, 2)] });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    h.saves.edited([KEY]);
+    await h.saves.saveChanges();
+    assert.equal(h.saves.state().status, 'offline');
+    h.saves.edited([KEY2]);
+    await h.saves.retry();
+    const revs = h.api.sent.slice(1);
+    assert.equal(revs.length, 4);
+    assert.equal(new Set(revs.slice(0, 3).map(r => r.key)).size, 1, 'the unanswered revision, under its own key');
+    assert.deepEqual([revs[2].body.baseRevisionId, revs[2].body.expectedVersion, keyframesOf(revs[2])], [REV[0], 0, [KEY]]);
+    // Before the fix this went on REV[0] again, under a fresh key: a 409 if the first had committed.
+    assert.deepEqual([revs[3].body.baseRevisionId, revs[3].body.expectedVersion, keyframesOf(revs[3])], [REV[1], 1, [KEY2]]);
+    assert.notEqual(revs[3].key, revs[0].key);
+    assert.deepEqual([h.saves.state().status, h.saves.state().revisionId], ['saved', REV[2]]);
+});
+
+test('EA9.4 merged-review M1: views put back while Try again resolves the create: saved, no identical revision; edited while it resolves: changed, Save the creator\'s', async () => {
+    // Edited, Try again, then put back as sent while the create is resolved: nothing is left to save.
+    const h = harness({ 'POST /v1/worlds': [lost(), lost(), world(0)] });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    h.saves.edited([KEY]);
+    const release = h.api.hold('POST /v1/worlds');
+    const press = h.saves.retry();
+    await sentAtLeast(h, 3);
+    h.saves.edited([]);
+    release();
+    await press;
+    assert.deepEqual([h.api.sent.length, h.saves.state().status], [3, 'saved'], 'as saved: nothing more sent');
+
+    // Try again with the views as sent, edited while it resolves: the press was for those views, so it ends changed.
+    const c = harness({ 'POST /v1/worlds': [lost(), lost(), world(0)] });
+    c.saves.installed(installed(1));
+    await c.saves.settled();
+    const release2 = c.api.hold('POST /v1/worlds');
+    const press2 = c.saves.retry();
+    await sentAtLeast(c, 3);
+    c.saves.edited([KEY]);
+    release2();
+    await press2;
+    assert.deepEqual([c.api.sent.length, c.saves.state().status], [3, 'changed'], 'nothing sent by itself: Save is the creator\'s');
+});
+
+test('EA9.4 merged-review M1: its own request refused once resolved is said, nothing more sent; the next Try again sends the views under a fresh key', async () => {
+    const h = harness({ 'POST /v1/worlds': [lost(), lost(), new ForgeError('storage-full', 403, 'full'), world(0)] });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    h.saves.edited([KEY]);
+    await h.saves.retry();
+    assert.deepEqual([h.api.sent.length, new Set(h.api.sent.map(r => r.key)).size, h.saves.state().status], [3, 1, 'storage-full'],
+        'a full storage said once, never sent again by itself');
+    // Room made: the world as it is now, a request of its own.
+    await h.saves.retry();
+    assert.equal(h.api.sent.length, 4);
+    assert.notEqual(h.api.sent[3].key, h.api.sent[0].key);
+    assert.deepEqual(keyframesOf(h.api.sent[3]), [KEY]);
+    assert.equal(h.saves.state().status, 'saved');
+});
+
+// M2: a reopened world's views are saved on its owner's Save (EA9.4), and that save can go unanswered like any other.
+const REOPENED = { source: 'reopened', ranAs: 'uid-1', saved: { worldId: WORLD, revisionId: REV[1], rowVersion: 3 }, keyframes: [KEY] };
+
+test('EA9.4 merged-review M2: a reopened world\'s Save unanswered: its owner\'s Try again sends that revision again, its key and body; never under another account', async () => {
+    const h = harness({ [`POST /v1/worlds/${WORLD}/revisions`]: [lost(), lost(), lost(), lost(), world(2, 4)] });
+    h.saves.installed(installed(1, REOPENED));
+    h.saves.edited([]);
+    await h.saves.saveChanges();
+    assert.deepEqual([h.api.sent.length, h.saves.state().status], [2, 'offline']);
+    await h.saves.retry();
+    assert.deepEqual([h.api.sent.length, h.saves.state().status], [4, 'offline'], 'Try again sends it: before the fix it did nothing');
+    // Another account signed in: nothing of it is sent, by a press either (Q129); its owner back, the same request again.
+    Object.assign(h.account, { epoch: 2, uid: 'uid-2' });
+    h.saves.accountChanged();
+    await h.saves.retry();
+    assert.deepEqual([h.api.sent.length, h.saves.state().status], [4, 'elsewhere']);
+    Object.assign(h.account, { epoch: 3, uid: 'uid-1' });
+    h.saves.accountChanged();
+    assert.equal(h.saves.state().status, 'offline');
+    await h.saves.retry();
+    assert.equal(h.api.sent.length, 5);
+    assert.equal(new Set(h.api.sent.map(r => r.key)).size, 1, 'one request, one key');
+    assert.ok(h.api.sent.every(r => r.body.artifact === h.api.sent[0].body.artifact && r.body.baseRevisionId === REV[1] && r.body.expectedVersion === 3));
+    assert.deepEqual(keyframesOf(h.api.sent[4]), []);
+    assert.deepEqual([h.saves.state().status, h.saves.state().revisionId, h.api.sent.at(-1).as], ['saved', REV[2], 'uid-1']);
+});
+
+test('EA9.4 merged-review M2: a reopened world\'s Save cut short by an account change goes on when its owner signs in again, under its key', async () => {
+    // Its first send answered after the switch (dropped: F4), then the same key's replay.
+    const h = harness({ [`POST /v1/worlds/${WORLD}/revisions`]: [world(2, 4), world(2, 4)] });
+    h.saves.installed(installed(1, REOPENED));
+    h.saves.edited([KEY2]);
+    const release = h.api.hold(`POST /v1/worlds/${WORLD}/revisions`);
+    const press = h.saves.saveChanges();
+    await sentAtLeast(h, 1);
+    Object.assign(h.account, { epoch: 2, uid: 'uid-2' });
+    h.saves.accountChanged();
+    release();
+    await press;
+    assert.deepEqual([h.api.sent.length, h.saves.state().status], [1, 'elsewhere']);
+    // Its owner back, the account read at once: one word, and the save it asked for goes on.
+    Object.assign(h.account, { epoch: 3, uid: 'uid-1' });
+    h.saves.accountChanged();
+    await h.saves.settled();
+    assert.deepEqual(h.api.sent.map(r => [r.key, r.as]), [[h.api.sent[0].key, 'uid-1'], [h.api.sent[0].key, 'uid-1']]);
+    assert.deepEqual(keyframesOf(h.api.sent[1]), [KEY2]);
+    assert.deepEqual([h.saves.state().status, h.saves.state().revisionId], ['saved', REV[2]]);
+});
+
+// The independent review of those fixes (11-05): a save no press asked for (an account's word, its owner's return) sent
+// views edited after what it resumed, by itself; identical revisions of a saved head; a superseded parent's own revision.
+test('EA9.4 fixes-review mid: its owner back, a save no press asked for resolves what was sent and says changed: an edit made while it was out, or under another account, is the creator\'s Save', async () => {
+    // Edited while the create was out, another account coming and going: as with no account change, it ends changed.
+    const h = harness({ 'POST /v1/worlds': [world(0), world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [world(1, 1)] });
+    const release = h.api.hold('POST /v1/worlds');
+    h.saves.installed(installed(1));
+    await sentAtLeast(h, 1);
+    h.saves.edited([KEY]);
+    Object.assign(h.account, { epoch: 2, uid: 'uid-2' });
+    h.saves.accountChanged();
+    release();
+    await h.saves.settled();
+    Object.assign(h.account, { epoch: 3, uid: 'uid-1' });
+    h.saves.accountChanged();
+    await h.saves.settled();
+    assert.deepEqual(h.api.sent.map(r => [r.path, r.key]), [['/v1/worlds', h.api.sent[0].key], ['/v1/worlds', h.api.sent[0].key]],
+        'the create resolved under its key, and nothing sent by itself');
+    assert.equal(h.saves.state().status, 'changed');
+    await h.saves.saveChanges();
+    assert.deepEqual([h.api.sent.length, keyframesOf(h.api.sent[2]), h.saves.state().status], [3, [KEY], 'saved'], 'its owner\'s Save sends them');
+
+    // Edited under another account while the owner's create was cut short (lost, then the switch in its retry's pause).
+    const a = harness({ 'POST /v1/worlds': [lost(), world(0)] }, 'active', acc => Object.assign(acc, { epoch: 2, uid: 'uid-2' }));
+    a.saves.installed(installed(1));
+    await a.saves.settled();
+    a.saves.accountChanged();
+    a.saves.edited([KEY]);
+    Object.assign(a.account, { epoch: 3, uid: 'uid-1' });
+    a.saves.accountChanged();
+    await a.saves.settled();
+    assert.deepEqual([a.api.sent.length, a.api.sent[1].key, a.saves.state().status], [2, a.api.sent[0].key, 'changed'],
+        'said when its owner returns (EA9.4\'s review), never sent by itself');
+
+    // A reopened world's Save cut short, its views put back under another account: that Save resolved, nothing more.
+    const o = harness({ [`POST /v1/worlds/${WORLD}/revisions`]: [world(2, 4), world(2, 4)] });
+    o.saves.installed(installed(1, REOPENED));
+    o.saves.edited([KEY2]);
+    const held = o.api.hold(`POST /v1/worlds/${WORLD}/revisions`);
+    const press = o.saves.saveChanges();
+    await sentAtLeast(o, 1);
+    Object.assign(o.account, { epoch: 2, uid: 'uid-2' });
+    o.saves.accountChanged();
+    held();
+    await press;
+    o.saves.edited([KEY]);
+    Object.assign(o.account, { epoch: 3, uid: 'uid-1' });
+    o.saves.accountChanged();
+    await o.saves.settled();
+    assert.deepEqual([o.api.sent.length, o.api.sent[1].key, o.saves.state().status], [2, o.api.sent[0].key, 'changed']);
+});
+
+test('EA9.4 fixes-review low: never an identical revision: views put back after a refused Save read saved; neither Try again nor its owner\'s return sends anything', async () => {
+    const full = () => new ForgeError('storage-full', 403, 'full');
+    // A live world and a reopened one: the Save of other views refused as full, then the views put back as saved.
+    for (const [name, routes, world1, edit, back] of [
+        ['live', { 'POST /v1/worlds': [world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [full(), world(1, 1)] }, installed(1), [KEY], []],
+        ['reopened', { [`POST /v1/worlds/${WORLD}/revisions`]: [full(), world(2, 4)] }, installed(1, REOPENED), [], [KEY]],
+    ]) {
+        const h = harness(routes);
+        h.saves.installed(world1);
+        await h.saves.settled();
+        const sent = h.api.sent.length;
+        h.saves.edited(edit);
+        await h.saves.saveChanges();
+        assert.equal(h.saves.state().status, 'storage-full', name);
+        h.saves.edited(back);
+        assert.equal(h.saves.state().status, 'saved', `${name}: the world on the stage is its saved head, not "Not saved"`);
+        await h.saves.retry();
+        assert.equal(h.api.sent.length, sent + 1, `${name}: no identical revision`);
+    }
+    // The create resolved by Try again, its views' revision refused as full, the views put back as the create sent them.
+    const c = harness({ 'POST /v1/worlds': [lost(), lost(), world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [full(), world(1, 1)] });
+    c.saves.installed(installed(1));
+    await c.saves.settled();
+    c.saves.edited([KEY]);
+    await c.saves.retry();
+    assert.deepEqual([c.api.sent.length, c.saves.state().status], [4, 'storage-full']);
+    c.saves.edited([]);
+    assert.equal(c.saves.state().status, 'saved', 'as the head the create made');
+    await c.saves.retry();
+    assert.equal(c.api.sent.length, 4);
+    // A Save asked, the account changed before it went, the views put back under the other account: its owner's return
+    // finds it saved and sends nothing, live or reopened.
+    for (const [name, routes, world1, edit, back] of [
+        ['live', { 'POST /v1/worlds': [world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [world(1, 1)] }, installed(1), [KEY], []],
+        ['reopened', { [`POST /v1/worlds/${WORLD}/revisions`]: [world(2, 4)] }, installed(1, REOPENED), [], [KEY]],
+    ]) {
+        const h = harness(routes);
+        h.saves.installed(world1);
+        await h.saves.settled();
+        const sent = h.api.sent.length;
+        h.saves.edited(edit);
+        const press = h.saves.saveChanges();
+        Object.assign(h.account, { epoch: 2, uid: 'uid-2' });
+        h.saves.accountChanged();
+        await press;
+        h.saves.edited(back);
+        Object.assign(h.account, { epoch: 3, uid: 'uid-1' });
+        h.saves.accountChanged();
+        await h.saves.settled();
+        assert.deepEqual([h.api.sent.length, h.saves.state().status], [sent, 'saved'], name);
+    }
+});
+
+test('EA9.4 fixes-review low: views put back read saved after a Save refused for what it is (400, not allowed), never after one with no answer (it may have committed)', async () => {
+    // Refused as not the schema, then as not allowed: the views put back are the saved head's.
+    const r = harness({ [`POST /v1/worlds/${WORLD}/revisions`]: [new ForgeError('bad-request', 400, 'not the schema')] });
+    r.saves.installed(installed(1, REOPENED));
+    r.saves.edited([]);
+    await r.saves.saveChanges();
+    assert.equal(r.saves.state().status, 'failed');
+    r.saves.edited([KEY]);
+    assert.equal(r.saves.state().status, 'saved');
+    const n = harness({}, 'inactive');
+    n.saves.installed(installed(1, REOPENED));
+    n.saves.edited([]);
+    await n.saves.saveChanges();
+    assert.equal(n.saves.state().status, 'not-allowed');
+    n.saves.edited([KEY]);
+    assert.deepEqual([n.saves.state().status, n.api.sent.length], ['saved', 0]);
+    // Unanswered (503 twice): the revision may hold the other views now, so "Not saved" stays; Try again resolves it under
+    // its key, then the views put back are its revision.
+    const busy = () => new ForgeError('unavailable', 503, 'Saving worlds is unavailable right now.');
+    const u = harness({ [`POST /v1/worlds/${WORLD}/revisions`]: [busy(), busy(), world(1, 4), world(2, 5)] });
+    u.saves.installed(installed(1, { ...REOPENED, saved: { worldId: WORLD, revisionId: REV[0], rowVersion: 3 } }));
+    u.saves.edited([]);
+    await u.saves.saveChanges();
+    assert.equal(u.saves.state().status, 'failed');
+    u.saves.edited([KEY]);
+    assert.equal(u.saves.state().status, 'failed');
+    await u.saves.retry();
+    assert.deepEqual(u.api.sent.map(s => [s.key, s.body.baseRevisionId, s.body.expectedVersion, keyframesOf(s).length]),
+        [[u.api.sent[0].key, REV[0], 3, 0], [u.api.sent[0].key, REV[0], 3, 0], [u.api.sent[0].key, REV[0], 3, 0], [u.api.sent[3].key, REV[1], 4, 1]]);
+    assert.notEqual(u.api.sent[3].key, u.api.sent[0].key);
+    assert.deepEqual([u.saves.state().status, u.saves.state().revisionId], ['saved', REV[2]]);
+});
+
+test('EA9.4 fixes-review low: views put back while a Save was out, the Save refused: Try again finds them as saved and sends nothing', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [new ForgeError('storage-full', 403, 'full'), world(1, 1)] });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    h.saves.edited([KEY]);
+    const release = h.api.hold(`POST /v1/worlds/${WORLD}/revisions`);
+    const press = h.saves.saveChanges();
+    await sentAtLeast(h, 2);
+    h.saves.edited([]);
+    release();
+    await press;
+    assert.equal(h.saves.state().status, 'storage-full', 'the Save it pressed, said once');
+    await h.saves.retry();
+    assert.deepEqual([h.api.sent.length, h.saves.state().status], [2, 'saved'], 'no identical revision: its head holds the views on the stage');
+});
+
+test('EA9.4 fixes-review: a Save pressed while its owner\'s account is still being read goes on as that press once read; an account change in between ends it', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [world(1, 1)] });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    h.saves.edited([KEY]);
+    h.account.kind = 'unknown';
+    await h.saves.saveChanges();
+    assert.deepEqual([h.api.sent.length, h.saves.state().status], [1, 'not-saved']);
+    h.account.kind = 'active';
+    h.saves.accountChanged();
+    await h.saves.settled();
+    assert.deepEqual([h.api.sent.length, keyframesOf(h.api.sent[1]), h.saves.state().status], [2, [KEY], 'saved'], 'the press, once read');
+
+    // Another account in between: the press was not that session's, and its owner back finds the views changed, whether
+    // its account is read at once or after the session's word (as the studio hears them).
+    for (const readLate of [false, true]) {
+        const a = harness({ 'POST /v1/worlds': [world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [world(1, 1)] });
+        a.saves.installed(installed(1));
+        await a.saves.settled();
+        a.saves.edited([KEY]);
+        a.account.kind = 'unknown';
+        await a.saves.saveChanges();
+        Object.assign(a.account, { epoch: 2, uid: 'uid-2' });
+        a.saves.accountChanged();
+        Object.assign(a.account, { epoch: 3, uid: 'uid-1', kind: readLate ? 'unknown' : 'active' });
+        a.saves.accountChanged();
+        if (readLate) {
+            assert.equal(a.saves.state().status, 'not-saved');
+            a.account.kind = 'active';
+            a.saves.accountChanged();
+        }
+        await a.saves.settled();
+        assert.deepEqual([a.api.sent.length, a.saves.state().status], [1, 'changed'], `read ${readLate ? 'late' : 'at once'}`);
+    }
+});
+
+test('EA9.4 fixes-review: a Save refused as not allowed is not sent by itself when its owner comes back active: its views read changed, and Save sends them', async () => {
+    const h = harness({ [`POST /v1/worlds/${WORLD}/revisions`]: [world(2, 4)] }, 'inactive');
+    h.saves.installed(installed(1, REOPENED));
+    h.saves.edited([]);
+    await h.saves.saveChanges();
+    assert.equal(h.saves.state().status, 'not-allowed');
+    Object.assign(h.account, { epoch: 2, uid: 'uid-2', kind: 'active' });
+    h.saves.accountChanged();
+    Object.assign(h.account, { epoch: 3, uid: 'uid-1' });
+    h.saves.accountChanged();
+    await h.saves.settled();
+    assert.deepEqual([h.api.sent.length, h.saves.state().status], [0, 'changed'], 'a press refused is done; its owner presses again');
+    await h.saves.saveChanges();
+    assert.deepEqual([h.api.sent.length, keyframesOf(h.api.sent[0]), h.saves.state().status], [1, [], 'saved']);
+});
+
+test('EA9.4 fixes-review low: an improvement installed while its parent\'s Try again resolves stands for it: the create resolved, then one revision, the improvement\'s', async () => {
+    const h = harness({ 'POST /v1/worlds': [lost(), lost(), world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [world(1, 1), world(2, 2)] });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    h.saves.edited([KEY]);
+    const release = h.api.hold('POST /v1/worlds');
+    const press = h.saves.retry();
+    await sentAtLeast(h, 3);
+    h.saves.installed(installed(2, { improves: 1, keyframes: [KEY] }));
+    release();
+    await press;
+    await h.saves.settled();
+    const revs = h.api.sent.filter(r => r.path.endsWith('/revisions'));
+    assert.equal(revs.length, 1, 'the superseded parent sends none of its own');
+    assert.deepEqual([revs[0].body.baseRevisionId, keyframesOf(revs[0]), JSON.parse(revs[0].body.artifact).candidate],
+        [REV[0], [KEY], improvedAt(2).id], 'the improvement\'s world, on the head the create made');
+    assert.deepEqual([h.saves.state().stage, h.saves.state().status, h.saves.state().revisionId], [2, 'saved', REV[1]]);
+});
+
+test('EA9.4 fixes-review: Try again and the account\'s word together, the views edited while the first resolves: changed, nothing sent by itself', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0), world(0)], [`POST /v1/worlds/${WORLD}/revisions`]: [world(1, 1)] });
+    const release = h.api.hold('POST /v1/worlds');
+    h.saves.installed(installed(1));
+    await sentAtLeast(h, 1);
+    // The same uid in a new epoch (a sign-in again): the create's answer dropped, its save waiting for the account.
+    h.account.epoch = 2;
+    release();
+    await h.saves.settled();
+    assert.equal(h.saves.state().status, 'not-saved');
+    const release2 = h.api.hold('POST /v1/worlds');
+    const press = h.saves.retry();
+    h.saves.accountChanged();
+    await sentAtLeast(h, 2);
+    h.saves.edited([KEY]);
+    release2();
+    await press;
+    await h.saves.settled();
+    assert.deepEqual([h.api.sent.length, h.api.sent[1].key, h.saves.state().status], [2, h.api.sent[0].key, 'changed'],
+        'the edit came after both: Save is the creator\'s');
+});
+
+test('EA9.4 fixes-review: a 202 whose polls ran out, the views edited, Try again: the create followed under its key, then one revision', async () => {
+    const posts = h => h.api.sent.filter(r => r.method === 'POST');
+    const pending = { status: 202, body: { operationId: OP, state: 'PENDING' } };
+    const h = harness({
+        'POST /v1/worlds': [pending, pending],
+        // Under way until the press sends the create again, then done.
+        [`GET /v1/me/operations/${OP}`]: () => (posts(h).length < 2 ? { status: 200, body: { operationId: OP, state: 'PENDING', status: null, result: null } }
+            : { status: 200, body: { operationId: OP, state: 'DONE', status: 201, result: world(0) } }),
+        [`POST /v1/worlds/${WORLD}/revisions`]: [world(1, 1)],
+    });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    assert.equal(h.saves.state().status, 'failed', 'still under way after its polls');
+    h.saves.edited([KEY]);
+    await h.saves.retry();
+    assert.deepEqual(posts(h).map(r => r.path), ['/v1/worlds', '/v1/worlds', `/v1/worlds/${WORLD}/revisions`]);
+    assert.equal(posts(h)[1].key, posts(h)[0].key, 'the create followed under its key: never a second world');
+    assert.deepEqual([keyframesOf(posts(h)[2]), h.saves.state().status], [[KEY], 'saved']);
+});
+
+test('EA9.4 fixes-review: Save as a new world refused as full is a world still to make: views put back as the old head\'s say nothing saved, and Try again posts it', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0), new ForgeError('storage-full', 403, 'full'), world(0)],
+        [`POST /v1/worlds/${WORLD}/revisions`]: [new ForgeError('conflict', 409, 'moved')] });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    h.saves.edited([KEY]);
+    await h.saves.saveChanges();
+    assert.equal(h.saves.state().status, 'conflict');
+    await h.saves.saveAsNew();
+    assert.equal(h.saves.state().status, 'storage-full');
+    // As the head another tab moved on from: that is not this new world, which is not made yet.
+    h.saves.edited([]);
+    assert.equal(h.saves.state().status, 'storage-full');
+    await h.saves.retry();
+    const last = h.api.sent.at(-1);
+    assert.deepEqual([h.api.sent.length, last.path, keyframesOf(last), h.saves.state().status], [4, '/v1/worlds', [], 'saved']);
+    assert.deepEqual([h.api.sent[2].path, keyframesOf(h.api.sent[2])], ['/v1/worlds', [KEY]]);
+    assert.ok(last.key !== h.api.sent[2].key && last.key !== h.api.sent[0].key, 'another body, another key');
+});
+
+test('EA9.4 fixes-review: its own views\' revision resolved as a conflict: said, the saved world named; Save as a new world posts the views as they are', async () => {
+    const h = harness({ 'POST /v1/worlds': [world(0), world(0)],
+        [`POST /v1/worlds/${WORLD}/revisions`]: [lost(), lost(), new ForgeError('conflict', 409, 'moved')] });
+    h.saves.installed(installed(1));
+    await h.saves.settled();
+    h.saves.edited([KEY]);
+    await h.saves.saveChanges();
+    assert.equal(h.saves.state().status, 'offline');
+    h.saves.edited([KEY2]);
+    await h.saves.retry();
+    assert.equal(h.api.sent[3].key, h.api.sent[1].key, 'the unanswered revision resolved under its key');
+    assert.deepEqual([h.api.sent.length, h.saves.state().status, h.saves.state().worldId], [4, 'conflict', WORLD]);
+    // As the head it last saved: another tab's head stands now, so that is not "Saved".
+    h.saves.edited([]);
+    assert.equal(h.saves.state().status, 'conflict');
+    h.saves.edited([KEY2]);
+    await h.saves.saveAsNew();
+    const last = h.api.sent.at(-1);
+    assert.deepEqual([h.api.sent.length, last.path, keyframesOf(last), h.saves.state().status], [5, '/v1/worlds', [KEY2], 'saved']);
+    assert.notEqual(last.key, h.api.sent[0].key);
+});

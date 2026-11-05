@@ -8,7 +8,8 @@
 // builds on its head; an improvement that was itself improved before its turn is skipped, the newest standing for it.
 // Starters, the archive's replays and reopened worlds are not saved again; h1 worlds never reach here (Q123). Every try
 // of one request goes with one Idempotency-Key, so an answer lost to the network costs no second world; a request with
-// no answer stays the creation's until it is resolved under that key, so an improvement never makes a second world.
+// no answer stays the creation's until it is resolved under that key, so neither an improvement nor an edit of the
+// world's views makes a second world (the review of merged EA9.4, M1).
 // Each save belongs to the account epoch it was asked under, checked before every send, retry and poll, and its requests
 // are bound to that epoch's caller (http.ts's `Caller`), so the transport itself refuses to send one under anyone else,
 // its own retry after a 401 included (W3's review, its high): nothing goes out under an account signed in meanwhile, and
@@ -17,7 +18,6 @@
 // it stays on the stage as a local world, and its owner's binding waits for its owner. Nothing here touches the stage:
 // a failure says so and leaves the world where it is (F2).
 
-import { canonicalJson, sha256Hex } from '../contract/adapters/canonical';
 import type { SolutionDesign } from '../contract/agent';
 import type { DeepReadonly } from '../contract/engine/frozen';
 import { boundTo, type Api, type Caller } from '../forge-client/http';
@@ -107,14 +107,17 @@ export interface SaveController {
     cleared(): void;
     /**
      * The creator's "Try again": the same key for the same request. Also after a full storage, once the creator has made
-     * room (never by itself: PL-FE10). Its owner's alone: under another account it does nothing (Q129).
+     * room (never by itself: PL-FE10). Its owner's alone: under another account it does nothing (Q129). A live world's, and
+     * a reopened one's whose owner's Save of its views went unanswered (the review of merged EA9.4, M2).
      */
     retry(): Promise<void>;
     /** After a conflict: the world on the stage as a new world, under a fresh key. */
     saveAsNew(): Promise<void>;
     /**
      * The world on the stage's keyframes changed (EA9.4, Q119 (a)): what its next save sends. A world saved already reads
-     * `changed` until its owner's {@link saveChanges}; a save under way that sent the older ones ends `changed` too.
+     * `changed` until its owner's {@link saveChanges}; a save under way that sent the older ones ends `changed` too, and a
+     * save no press asked for (an account's word, its owner's return) never sends them. Views put back as the saved head
+     * holds them read `saved`, after a refused Save too.
      */
     edited(keyframes: readonly CameraKeyframe[]): void;
     /** The creator's Save after `changed`: the world with its keyframes now, a revision of its saved head, its owner's alone. */
@@ -138,18 +141,20 @@ export const RETRY_MS = 3_000;
  * A request sent for a creation whose outcome is not known: no answer, or still under way after the polls. It may have
  * committed, so nothing new is sent for that creation until it is resolved, by sending it again, the same body under the
  * same key, which the platform answers as it answered the first (the review of 11-03: an improvement had made a second
- * world while its parent's create was unanswered).
+ * world while its parent's create was unanswered; the review of merged EA9.4: so had the same world with its views
+ * edited, under a fresh key).
  */
 interface Unresolved {
     /** The install whose request it is. */
     readonly stage: number;
     readonly key: string;
-    readonly hash: string;
     readonly title: string;
     readonly text: string;
     readonly sha256: string;
     /** The head a revision was based on; null for a new world. */
     readonly base: { readonly worldId: string; readonly revisionId: string; readonly rowVersion: number } | null;
+    /** The views its text holds: once it is saved, its head's. */
+    readonly keyframes: readonly CameraKeyframe[];
 }
 
 /** A creation as its saves know it: shared by a world and the worlds that improve it. */
@@ -176,6 +181,11 @@ interface Binding {
      */
     waitingForAccount: boolean;
     /**
+     * The wait is a press's (Try again, Save) that found its owner's account not read yet, or anonymous: that account's
+     * read goes on with it as the press. Any account change in between ends it: the press was not that session's.
+     */
+    pressWaiting: boolean;
+    /**
      * Whose world this is (the second review of W3; Q129, the user, 2026-11-04): the caller its Run was pressed as (a
      * reopened world's reader), or the one signed in at its install. Fixed: no press makes it another account's.
      */
@@ -198,6 +208,20 @@ const copyKeys = (keys: readonly CameraKeyframe[]): CameraKeyframe[] => keys.map
 
 /** What one request came to, or `stale`: the account changed, so nothing more was sent and nothing is applied. */
 type Outcome = SaveAnswer | 'stale';
+
+/**
+ * Why a save runs: by `itself` (an install, an account's word, its owner's return), on the creator's `press` (Try again,
+ * Save), or `as-new` ("Save as a new world", a press too). Only a press sends views of its own for a world its saved head
+ * already holds; by itself a save resolves what was sent, and says the views saved or changed (EA9.4: Save is the
+ * creator's; the independent review of the merged review's fixes).
+ */
+type Asked = 'itself' | 'press' | 'as-new';
+
+/**
+ * Refusals after which views put back as the saved head holds them read `saved` again: that head is the world on the
+ * stage. Not a conflict (another tab's head stands) nor a request with no answer (it may have committed other views).
+ */
+const REFUSALS: ReadonlySet<SaveStatus> = new Set<SaveStatus>(['failed', 'storage-full', 'too-large', 'not-allowed']);
 
 const fresh = (): Lineage => ({ worldId: null, revisionId: null, rowVersion: null, epoch: null, unresolved: null });
 
@@ -302,6 +326,7 @@ export function createSaveController(ports: SavePorts): SaveController {
      */
     const awayFrom = (b: Binding, detail: string): void => {
         if (b.status !== 'elsewhere') b.away = b.status;
+        b.pressWaiting = false;
         set(b, 'elsewhere', detail);
     };
 
@@ -312,8 +337,20 @@ export function createSaveController(ports: SavePorts): SaveController {
         else awayFrom(b, detail);
     };
 
-    /** `b`'s save, as asked for under `epoch` (the install's, its owner's return, or the creator's press). */
-    const save = async (b: Binding, epoch: number, asNew = false): Promise<void> => {
+    /**
+     * `b` saved with the keyframes `keys`, its saved head's now. An edit since that left them otherwise is not saved, and
+     * Save is offered for it (EA9.4).
+     */
+    const savedWith = (b: Binding, keys: readonly CameraKeyframe[]): void => {
+        b.savedKeys = keys;
+        if (sameKeys(b.keyframes, keys)) set(b, 'saved');
+        else set(b, 'changed', 'its keyframes changed while it was saved');
+    };
+
+    /** `b`'s save, as asked for under `epoch`: by itself (its install, an account's word, its owner's return), or pressed. */
+    const save = async (b: Binding, epoch: number, asked: Asked = 'itself'): Promise<void> => {
+        const asNew = asked === 'as-new';
+        const pressed = asked !== 'itself';
         // Saved already: a press and an account's word queued together save it once (the independent review).
         if (disposed || b.superseded || (b.status === 'saved' && !asNew)) return;
         const live = () => !disposed && ports.account().epoch === epoch;
@@ -323,9 +360,11 @@ export function createSaveController(ports: SavePorts): SaveController {
         if (b.owner === null || (account.caller?.uid ?? null) !== b.owner) return awayFrom(b, 'the account that made it is not signed in');
         if (account.kind === 'anonymous' || account.kind === 'unknown') {
             b.waitingForAccount = true;
+            b.pressWaiting = pressed;
             return set(b, account.kind === 'anonymous' ? 'sign-in' : 'not-saved', `the account is ${account.kind}`);
         }
         b.waitingForAccount = false;
+        b.pressWaiting = false;
         // Its owner's account, read, cannot save (suspended, being deleted): said, with nothing to press.
         if (account.kind !== 'active') return set(b, 'not-allowed', `the account is ${account.kind}`);
         // The caller this epoch was read as: every request of this save goes out as it, or not at all.
@@ -335,16 +374,41 @@ export function createSaveController(ports: SavePorts): SaveController {
         // Its owner signed in again (a new epoch, the same uid): its requests go out under this epoch from now on.
         l.epoch = epoch;
         set(b, 'saving');
-        // The creation's last request may have committed: resolved first, so an improvement never makes a second world.
+        // The creation's last request may have committed: nothing else is sent for it until that one is resolved, the same
+        // body under the same key, whether it was the world's this one improved or this world's own with other views (the
+        // review of merged EA9.4, M1: views edited, then Try again, had sent a second create under a fresh key).
         const before = l.unresolved;
-        if (before && before.stage !== b.world.stage) {
+        if (before) {
+            // The views this save found: if its request holds them, an edit while it resolves is offered as Save (`changed`).
+            // If not, the views when its revision is built go with it, a press's alone (the guard below).
+            const wanted = b.keyframes;
             const resolved = await dispatch(before, live, caller);
             if (resolved === 'stale') return stopped(b, 'the account changed while it was saved');
             settle(l, before, resolved);
-            if (l.unresolved) {
+            const own = before.stage === b.world.stage;
+            if (!own && l.unresolved) {
                 const [status, detail] = statusOf(resolved);
                 return set(b, status, `the save before it is still unanswered: ${detail}`);
             }
+            if (own) {
+                // Its own request: refused for what it is, said, nothing more sent (a full storage once); still unanswered,
+                // said, its Try again the same request once more.
+                if (resolved.kind !== 'saved') {
+                    const [status, detail] = statusOf(resolved);
+                    return set(b, status, detail);
+                }
+                // Saved with the views it sent: done if those are the ones this save found. If not, the head it made holds
+                // the older ones, and the guard below decides what follows.
+                if (sameKeys(wanted, before.keyframes)) return savedWith(b, before.keyframes);
+                b.savedKeys = before.keyframes;
+            }
+        }
+        // Its saved head holds it as it is: saved, nothing sent, never an identical revision. And by itself a save sends no
+        // views of its own for a world with a saved head: an edit since is the creator's Save (`changed`), whoever's session
+        // made it (EA9.4's review) and however long the save waited (the independent review of these fixes). Only a press
+        // goes on, with the views as they are.
+        if (!asNew && b.savedKeys !== null && l.worldId !== null && (!pressed || sameKeys(b.keyframes, b.savedKeys))) {
+            return savedWith(b, b.savedKeys);
         }
         if (!b.world.design) return set(b, 'failed', 'the world has no design to save');
         // Its keyframes as they are now (EA9.4): an edit after this point leaves it `changed`, for its owner's Save.
@@ -353,23 +417,20 @@ export function createSaveController(ports: SavePorts): SaveController {
         if (!built.ok) return set(b, built.code === 'too-large' ? 'too-large' : 'failed', built.reason);
         const base = !asNew && l.worldId && l.revisionId && l.rowVersion !== null
             ? { worldId: l.worldId, revisionId: l.revisionId, rowVersion: l.rowVersion } : null;
-        const hash = await sha256Hex(canonicalJson({ base, title: b.world.title, sha256: built.world.sha256 }));
+        // Improved meanwhile (its own request resolved, or its text built): the improvement stands for it, and saves next,
+        // on the head this one's request made (the independent review: a superseded parent sent a revision of its own).
+        if (b.superseded) return;
         if (!live()) return stopped(b, 'the account changed before it was saved');
-        const own = l.unresolved && l.unresolved.stage === b.world.stage && l.unresolved.hash === hash ? l.unresolved : null;
-        const r: Unresolved = own ?? {
-            stage: b.world.stage, key: ports.newKey(), hash, title: b.world.title, text: built.world.text, sha256: built.world.sha256, base,
+        // Nothing of the creation is unresolved now, so this body is a request of its own, under a key of its own.
+        const r: Unresolved = {
+            stage: b.world.stage, key: ports.newKey(), title: b.world.title, text: built.world.text, sha256: built.world.sha256, base, keyframes: sent,
         };
         l.unresolved = r;
         const outcome = await dispatch(r, live, caller);
         if (outcome === 'stale') return stopped(b, 'the account changed while it was saved');
         settle(l, r, outcome);
+        if (outcome.kind === 'saved') return savedWith(b, sent);
         const [status, detail] = statusOf(outcome);
-        // Saved with the keyframes it had when sent: those are its saved head's now. An edit since that left them otherwise
-        // is not saved, and Save is offered for it (EA9.4).
-        if (status === 'saved') {
-            b.savedKeys = sent;
-            if (!sameKeys(b.keyframes, sent)) return set(b, 'changed', 'its keyframes changed while it was saved');
-        }
         return set(b, status, detail);
     };
 
@@ -398,7 +459,7 @@ export function createSaveController(ports: SavePorts): SaveController {
                 lineage = fresh();
             }
             const b: Binding = {
-                world, lineage, status: 'idle', detail: '', superseded: false, waitingForAccount: false, owner, away: null,
+                world, lineage, status: 'idle', detail: '', superseded: false, waitingForAccount: false, pressWaiting: false, owner, away: null,
                 keyframes: copyKeys(world.keyframes ?? []),
                 // A reopened world is its saved head, its keyframes as read; a new one has none saved yet.
                 savedKeys: world.source === 'reopened' ? copyKeys(world.keyframes ?? []) : null,
@@ -425,11 +486,13 @@ export function createSaveController(ports: SavePorts): SaveController {
         retry() {
             const b = current;
             // The creator's "Try again", for its owner alone: under another account nothing of it is offered or sent (Q129).
-            if (!b || b.world.source !== 'live' || !ownerHere(b)
+            // A reopened world's too: its owner's Save of its views can go unanswered like any save, and its "Try again" is
+            // the only way on (the review of merged EA9.4, M2). A reopened world reaches these states by that Save alone.
+            if (!b || (b.world.source !== 'live' && b.world.source !== 'reopened') || !ownerHere(b)
                 || !['failed', 'offline', 'sign-in', 'not-saved', 'storage-full'].includes(b.status)) return Promise.resolve();
             b.superseded = false;
             const epoch = ports.account().epoch;
-            return enqueue(() => save(b, epoch));
+            return enqueue(() => save(b, epoch, 'press'));
         },
         saveAsNew() {
             const b = current;
@@ -437,7 +500,7 @@ export function createSaveController(ports: SavePorts): SaveController {
             // A conflict is known not to have committed: the world is saved as a creation of its own, still its owner's.
             b.lineage = fresh();
             const epoch = ports.account().epoch;
-            return enqueue(() => save(b, epoch, true));
+            return enqueue(() => save(b, epoch, 'as-new'));
         },
         edited(keyframes) {
             const b = current;
@@ -446,17 +509,23 @@ export function createSaveController(ports: SavePorts): SaveController {
             // Saved already: its owner's Save keeps a change from what is saved, and one undone is saved again. Under way,
             // or not saved yet: its next save sends them. Any other's world stays as it is (Q129), its owner's return says
             // it; a starter or a replay is nobody's to save.
-            if (!ownerHere(b) || (b.world.source !== 'live' && b.world.source !== 'reopened')) return;
-            const differs = b.savedKeys !== null && !sameKeys(b.keyframes, b.savedKeys);
-            if (b.status === 'saved' && differs) set(b, 'changed');
-            else if (b.status === 'changed' && !differs) set(b, 'saved', 'its views are as saved again');
+            if (!ownerHere(b) || (b.world.source !== 'live' && b.world.source !== 'reopened') || b.savedKeys === null) return;
+            const asSaved = sameKeys(b.keyframes, b.savedKeys);
+            if (b.status === 'saved' && !asSaved) set(b, 'changed');
+            else if (b.status === 'changed' && asSaved) set(b, 'saved', 'its views are as saved again');
+            // A Save of other views refused, these put back as its head holds them: that head is the world on the stage,
+            // saved (the independent review of these fixes: "Not saved" stayed over them, and Try again sent an identical
+            // revision).
+            else if (asSaved && REFUSALS.has(b.status) && b.lineage.unresolved === null && b.lineage.worldId !== null) {
+                set(b, 'saved', 'its views are as saved again');
+            }
         },
         saveChanges() {
             const b = current;
             if (!b || b.status !== 'changed' || !ownerHere(b)) return Promise.resolve();
             const epoch = ports.account().epoch;
             set(b, 'saving');
-            return enqueue(() => save(b, epoch));
+            return enqueue(() => save(b, epoch, 'press'));
         },
         accountChanged() {
             const b = current;
@@ -470,10 +539,13 @@ export function createSaveController(ports: SavePorts): SaveController {
             }
             if (b.status === 'elsewhere') {
                 // Its owner is back: what it was, given back. Saved, it is said saved (nothing sent); a save that was
-                // waiting, or stopped by the change, goes on; a refusal waits for the creator's press as before.
+                // waiting, or stopped by the change, goes on by itself: a world never saved is sent, and one with a saved
+                // head has what was sent resolved, its views then said saved or changed; a refusal waits for the creator's
+                // press as before. A reopened world's goes on too (the review of merged EA9.4: it was left saying
+                // "Saving…" with nothing under way).
                 const was = b.away ?? 'idle';
                 b.away = null;
-                if (b.world.source === 'live' && (b.waitingForAccount || ['saving', 'sign-in', 'not-saved', 'not-allowed'].includes(was))) {
+                if (b.waitingForAccount || ['saving', 'sign-in', 'not-saved', 'not-allowed'].includes(was)) {
                     if (account.kind === 'active') {
                         b.waitingForAccount = false;
                         // Said at once, so the account's second word (its read after the session's) finds it under way.
@@ -502,13 +574,17 @@ export function createSaveController(ports: SavePorts): SaveController {
             if (b.waitingForAccount && account.kind === 'active') {
                 // Its owner's account is active: the anonymous creator who linked Google (the companion's P1, the same
                 // uid), or an account whose read answered late. Once: a second word of the same account (its session's
-                // change, then its account read) must not send it twice.
+                // change, then its account read) must not send it twice. A press that waited for this read goes on as
+                // that press (the creator's Save of its views); any other wait goes on by itself.
                 b.waitingForAccount = false;
+                const asked: Asked = b.pressWaiting ? 'press' : 'itself';
+                b.pressWaiting = false;
                 set(b, 'saving');
-                void enqueue(() => save(b, account.epoch));
+                void enqueue(() => save(b, account.epoch, asked));
             } else if (b.waitingForAccount && account.kind === 'inactive') {
                 // Read late, and barred (suspended, being deleted): said so, with nothing to press (the independent review).
                 b.waitingForAccount = false;
+                b.pressWaiting = false;
                 set(b, 'not-allowed', 'the account is inactive');
             }
         },
