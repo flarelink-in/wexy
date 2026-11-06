@@ -20,6 +20,12 @@
 // compose.local.yaml. Before it starts it clears the allowance keys (wexy:allow:*, wexy:grant:*) in that Redis with
 // redis-cli inside its container (docker exec), since every local browser shares one network (127.0.0.1); --keep
 // leaves them. It refuses a gateway off loopback. On the charger, one GPU harness at a time (the laptop's gotchas).
+//
+// Its step 6 (a second fresh browser on the same network is asked to sign in at once) holds when the browser reaches
+// the gateway over IPv6 loopback, whose /64 gets one anonymous world a day. Over IPv4 a network gets three (Q98 revised,
+// 2026-11-04), so the second browser is granted and the step fails. A gateway started with --server.address=127.0.0.1
+// is IPv4 only; start it with --server.address=::1, and forge with
+// --wexy.internal-jwt.jwks-uri=http://[::1]:8400/.well-known/jwks.json (2026-11-06).
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
