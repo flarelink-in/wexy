@@ -15,9 +15,7 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,7 +27,7 @@ import java.util.regex.Pattern;
 /**
  * The prompt templates, loaded and checked at startup (forge-loop design §5.5, §6). A template is a
  * versioned Markdown file, {@code prompts/<name>.v<n>.md}, whose first line names it:
- * {@code <!-- wexy prompt: author.evolve v1 -->}. Its id ({@code author.evolve.v1}) goes into every
+ * {@code <!-- wexy prompt: module.author v4 -->}. Its id ({@code module.author.v4}) goes into every
  * record, cache key and mock recording, so a change to a template is a new version, never an edit.
  *
  * <p>Above the first line that is exactly {@code ---} is the static part: it becomes the system
@@ -42,22 +40,14 @@ import java.util.regex.Pattern;
  * line does not match its name, when there is no {@code ---} line, or when a placeholder is not one
  * its part can fill: a mistake in a template must stop the service, not reach a model.
  *
- * <p>The exemplars placeholder shows the mock's plans to the planner, the h1 exemplar functions with
- * their worlds' plans to the authors, and the mock's edit to the director: the same files the mock
- * upstream replays (§8), so the examples a model sees and the answers the mock gives agree. The
- * agent's example is the mock's program in the same way, beside the adapter manifest it is checked
- * against.
+ * <p>The agent and module examples are the mock's program and body, beside the adapter manifest.
+ * Static h1 host fields remain available for compatibility, not model creation.
  */
 @Component
 public class PromptTemplates {
 
     /** The templates each role's calls use. */
     static final Map<String, List<String>> TEMPLATES_BY_ROLE = Map.of(
-            "planner", List.of("planner"),
-            "author", List.of("author.evolve", "author.look", "author.sky"),
-            "repairer", List.of("repair"),
-            "escalator", List.of("repair"),
-            "director", List.of("director"),
             "paper", List.of("paper"),
             "agent", List.of("agent"),
             "module", List.of("module.author", "module.repair"),
@@ -67,10 +57,6 @@ public class PromptTemplates {
 
     /** The request fields each template's variable part may use (all authors share theirs). */
     static final Map<String, Set<String>> REQUEST_FIELDS = Map.of(
-            "planner", Set.of("style", "seconds", "idea"),
-            "author", Set.of("idea", "world", "spawn", "params", "controls"),
-            "repair", Set.of("fn", "attempt", "params", "code", "diagnostics"),
-            "director", Set.of("world", "turn"),
             "paper", Set.of("documents", "request"),
             "agent", Set.of("budgets", "style", "seconds", "request", "base"),
             "module.author", Set.of("request", "design", "module", "kind", "nodes", "preamble", "entries", "epilogue", "note"),
@@ -81,8 +67,6 @@ public class PromptTemplates {
 
     private static final Pattern ID_LINE = Pattern.compile("<!-- wexy prompt: ([a-z]+(?:\\.[a-z]+)?) v([1-9][0-9]*) -->");
     private static final Pattern FILE_NAME = Pattern.compile("([a-z]+(?:\\.[a-z]+)?)\\.v([1-9][0-9]*)\\.md");
-    private static final String PLANS = "classpath:mock/plans/";
-    private static final String EDITS = "classpath:mock/edits/";
     private static final String PAPER_REQUESTS = "classpath:paper/requests.v1.json";
     /** The mock's agent program: the example agent.v2 shows, and the answer the mock gives. */
     private static final String AGENT_EXAMPLE = "classpath:mock/agent/program.json";
@@ -155,7 +139,7 @@ public class PromptTemplates {
 
         Map<String, String> fill = staticFields(name, host, resources, json);
         String system = fillAll(staticPart, fill, path + " (static part)");
-        Set<String> requestFields = REQUEST_FIELDS.get(name.startsWith("author.") ? "author" : name);
+        Set<String> requestFields = REQUEST_FIELDS.get(name);
         Matcher open = PLACEHOLDER.matcher(variablePart);
         while (open.find()) {
             if (requestFields == null || !requestFields.contains(open.group(1))) {
@@ -193,15 +177,7 @@ public class PromptTemplates {
         fill.put("particles", host.particles());
         fill.put("sky", host.sky());
         fill.put("rules", host.rules());
-        if (name.startsWith("author.")) {
-            String fn = name.substring("author.".length());
-            fill.put("host", host.contractFor(fn));
-            fill.put("exemplars", functionExamples(fn, host, resources, json));
-        } else if (name.equals("planner")) {
-            fill.put("exemplars", planExamples(resources));
-        } else if (name.equals("director")) {
-            fill.put("exemplars", fenced("json", HostContract.read(resources.getResource(EDITS + "director.json"))));
-        } else if (name.equals("paper") || name.equals("agent")) {
+        if (name.equals("paper") || name.equals("agent")) {
             // The engine-aware templates (PaperProbe; the agent loop): the engine bundle, verified, and the documents every
             // call shares, quoted here once so that every call sends the same system bytes.
             EngineBundle engine = EngineBundle.load(json);
@@ -250,42 +226,6 @@ public class PromptTemplates {
         } catch (IOException e) {
             throw new IllegalStateException("The paper template needs its requests at " + PAPER_REQUESTS, e);
         }
-    }
-
-    private static String planExamples(ResourcePatternResolver resources) {
-        List<String> examples = new ArrayList<>();
-        try {
-            Resource[] plans = resources.getResources(PLANS + "*.json");
-            Arrays.sort(plans, Comparator.comparing(Resource::getFilename));
-            for (Resource plan : plans) {
-                examples.add(fenced("json", HostContract.read(plan)));
-            }
-        } catch (IOException e) {
-            throw new UncheckedIOException("Cannot list " + PLANS, e);
-        }
-        return String.join("\n\n", examples);
-    }
-
-    private static String functionExamples(String fn, HostContract host, ResourcePatternResolver resources, ObjectMapper json) {
-        List<String> examples = new ArrayList<>();
-        int n = 1;
-        for (HostContract.Exemplar exemplar : host.exemplars(fn)) {
-            String planPath = PLANS + exemplar.world() + ".json";
-            JsonNode plan;
-            try {
-                plan = json.readTree(HostContract.read(resources.getResource(planPath)));
-            } catch (IOException e) {
-                throw new IllegalStateException("The exemplar " + exemplar.world() + "." + fn + " needs its world's plan at " + planPath, e);
-            }
-            StringBuilder text = new StringBuilder("Example ").append(n++).append(", from \"").append(plan.path("title").asText())
-                    .append("\": ").append(plan.path("summary").asText()).append('\n')
-                    .append("Its controls: ").append(DraftText.paramsInline(plan)).append('\n');
-            if (!fn.equals("sky")) {
-                text.append("Its random numbers:\n").append(DraftText.spawn(plan)).append('\n');
-            }
-            examples.add(text.append(fenced("wgsl", exemplar.code())).toString());
-        }
-        return String.join("\n\n", examples);
     }
 
     private static String fenced(String language, String code) {

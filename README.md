@@ -130,7 +130,7 @@ Once admitted, rendering and capture run locally rather than generating a new vi
 |---|---|---|---|
 | **Hosted app — wexy.ai** | End-user studio and Developer view without local setup | WebGPU browser; deployment access/allowances | Live creation uses the hosted model budget |
 | **Browser playground** | Hand-written examples, camera, stills and video capture | Frontend + WebGPU browser | **No** |
-| **Local mock backend** | Gateway/service integration and recorded plan/author/repair flows | Frontend, Java, Redis; MariaDB/platform for accounts | **No**; fixture responses are not live inference |
+| **Local mock backend** | Gateway/service integration and the recorded agent turn, module and review flows | Frontend, Java, Redis; MariaDB/platform for accounts | **No**; fixture responses are not live inference |
 | **Live Meta backend** | Real generation through the implemented authoring paths | Local stack + your Meta API key and credit | **Yes** |
 
 Mock transport covers its recorded scenarios, not arbitrary prompts or every newer agent/review
@@ -259,9 +259,10 @@ Start/restart Vite after changing environment values:
 npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
 ```
 
-Open `http://localhost:5173/studio.html?legacy=1` **without** `source=mock` to exercise the
-backend's recorded legacy flow. Use a featured prompt corresponding to a recorded example,
-such as the black-hole starter. An arbitrary new idea is not meaningful mock-model testing.
+Open `http://localhost:5173/studio.html` **without** `source=mock` to exercise the backend's
+recorded agent flow. The mock answers every idea with the same recorded program and module
+(`wexy backend/forge-service/src/main/resources/mock/agent` and `mock/modules`: blocks under a
+sepia film), so an arbitrary new idea is not meaningful mock-model testing.
 Local **Sign in** simulates a provider transition; it is not real Google authentication.
 
 ### D. Readiness and shutdown
@@ -318,11 +319,12 @@ Open one of the following routes:
 | Route on `http://localhost:5173` | Purpose |
 |---|---|
 | `/studio.html` | Default agent creator: **Create world**, checks, then **Show it** |
-| `/studio.html?legacy=1` | Existing plan/author/check creation path |
 | `/studio.html?create=agent` | Explicit selection of the same agent creator |
 | `/studio.html?agent=1` | Developer view with agent panels and step-by-step inspection |
 
-The agent creator is the default in this checkout; `?legacy=1` selects the earlier path. Its
+The agent creator is the only creation path in this checkout: the earlier plan/author/check
+creator was retired (EA9.6), and its hand-written examples and archives still play with no
+model call. Its
 checked hand-off, module build and device admission are separate stages. Press **Show it**
 when offered; a static verdict alone is not proof the world has rendered. Generated requests
 can fail validation or exceed this device's admitted workload; report that rather than treating
@@ -499,8 +501,8 @@ unrestricted GPU command stream. The host owns execution and verifies before rep
 ## Status, provenance and license
 
 Wexy is available in early access at **https://wexy.ai** and remains actively developed.
-The engine-aware agent creator is the default; Developer view is available through `?agent=1`,
-and `?legacy=1` selects the earlier creation path. Device admission and filming have their own checks.
+The engine-aware agent creator is the only creation path; Developer view is available through
+`?agent=1`. Device admission and filming have their own checks.
 
 Private saved worlds and revisions are implemented through platform-service, MariaDB metadata
 and a configured private B2 object store. Signed-in creators can reopen compatible worlds and

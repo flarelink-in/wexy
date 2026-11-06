@@ -60,8 +60,9 @@ class AppCheckReplayProtectionTest {
 
     private static final String PROJECT_NUMBER = "123456789";
     private static final String APP_ID = "1:123456789:web:abc123";
-    private static final String PLAN = "/v1/forge/plan";
-    private static final String AUTHOR = "/v1/forge/author";
+    /** A route that spends its token, and one that takes the page's cached token (a save, since W3; ForgeRoutesTest). */
+    private static final String TURN = "/v1/agent/turn";
+    private static final String SAVE = "/v1/worlds";
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private record ConsumeCall(String method, String path, String authorization, String contentType, String token) {
@@ -109,9 +110,9 @@ class AppCheckReplayProtectionTest {
         AppCheckFilter appCheck = enforcing();
         String token = token();
 
-        send(appCheck.singleUse(), PLAN, token);
+        send(appCheck.singleUse(), TURN, token);
 
-        assertRefused(() -> send(appCheck.singleUse(), PLAN, token), AppCheckRejection.Reason.REPLAYED);
+        assertRefused(() -> send(appCheck.singleUse(), TURN, token), AppCheckRejection.Reason.REPLAYED);
         assertThat(forwarded).hasValue(1);
         assertThat(attestations("verified")).isEqualTo(1.0);
         assertThat(attestations("replayed")).isEqualTo(1.0);
@@ -123,22 +124,22 @@ class AppCheckReplayProtectionTest {
         String token = token();
         consumedByGoogle.add(token);
 
-        assertRefused(() -> send(enforcing().singleUse(), PLAN, token), AppCheckRejection.Reason.REPLAYED);
+        assertRefused(() -> send(enforcing().singleUse(), TURN, token), AppCheckRejection.Reason.REPLAYED);
         assertThat(forwarded).hasValue(0);
     }
 
-    /** The page's cached token keeps working on routes that do not spend, before and after a plan spends one. */
+    /** The page's cached token keeps working on routes that do not spend, before and after a turn spends one. */
     @Test
     void routesThatDoNotSpendKeepAcceptingTheCachedToken() throws Exception {
         AppCheckFilter appCheck = enforcing();
         String token = token();
 
-        send(appCheck, AUTHOR, token);
-        send(appCheck, AUTHOR, token);
+        send(appCheck, SAVE, token);
+        send(appCheck, SAVE, token);
         assertThat(consumeCalls).isEmpty();
 
-        send(appCheck.singleUse(), PLAN, token);
-        send(appCheck, AUTHOR, token);
+        send(appCheck.singleUse(), TURN, token);
+        send(appCheck, SAVE, token);
 
         assertThat(forwarded).hasValue(4);
         assertThat(consumeCalls).hasSize(1);
@@ -154,7 +155,7 @@ class AppCheckReplayProtectionTest {
                 token("1:123456789:web:another-app", Instant.now().plusSeconds(3600)));
 
         for (String token : junk) {
-            assertRefused(() -> send(appCheck.singleUse(), PLAN, token), AppCheckRejection.Reason.INVALID);
+            assertRefused(() -> send(appCheck.singleUse(), TURN, token), AppCheckRejection.Reason.INVALID);
         }
         assertThat(consumeCalls).isEmpty();
         assertThat(forwarded).hasValue(0);
@@ -165,7 +166,7 @@ class AppCheckReplayProtectionTest {
     void googleIsAskedTheDocumentedQuestion() throws Exception {
         String token = token();
 
-        send(enforcing().singleUse(), PLAN, token);
+        send(enforcing().singleUse(), TURN, token);
 
         assertThat(consumeCalls).singleElement().satisfies(call -> {
             assertThat(call.method()).isEqualTo("POST");
@@ -184,8 +185,8 @@ class AppCheckReplayProtectionTest {
         AppCheckFilter appCheck = enforcing();
         String token = token();
 
-        send(appCheck.singleUse(), PLAN, token);
-        assertRefused(() -> send(appCheck.singleUse(), PLAN, token), AppCheckRejection.Reason.REPLAYED);
+        send(appCheck.singleUse(), TURN, token);
+        assertRefused(() -> send(appCheck.singleUse(), TURN, token), AppCheckRejection.Reason.REPLAYED);
 
         assertThat(forwarded).hasValue(1);
         // The repeat was refused without asking Google again.
@@ -200,7 +201,7 @@ class AppCheckReplayProtectionTest {
         AppCheckFilter appCheck = filter(true, true, true, 300);
 
         long started = System.nanoTime();
-        send(appCheck.singleUse(), PLAN, token());
+        send(appCheck.singleUse(), TURN, token());
 
         assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofMillis(2_500));
         assertThat(forwarded).hasValue(1);
@@ -215,7 +216,7 @@ class AppCheckReplayProtectionTest {
         AtomicInteger refused = new AtomicInteger();
 
         Flux.range(0, 20)
-                .flatMap(i -> appCheck.singleUse().filter(request(PLAN, token), chain)
+                .flatMap(i -> appCheck.singleUse().filter(request(TURN, token), chain)
                         .subscribeOn(Schedulers.parallel())
                         .onErrorResume(AppCheckRejection.class, e -> {
                             refused.incrementAndGet();
@@ -234,8 +235,8 @@ class AppCheckReplayProtectionTest {
         AppCheckFilter appCheck = filter(true, true, false, 2_000);
         String token = token();
 
-        send(appCheck.singleUse(), PLAN, token);
-        send(appCheck.singleUse(), PLAN, token);
+        send(appCheck.singleUse(), TURN, token);
+        send(appCheck.singleUse(), TURN, token);
 
         assertThat(forwarded).hasValue(2);
         assertThat(attestations("verified")).isEqualTo(1.0);
@@ -248,8 +249,8 @@ class AppCheckReplayProtectionTest {
         AppCheckFilter appCheck = filter(false, true, true, 2_000);
         String token = token();
 
-        send(appCheck.singleUse(), PLAN, token);
-        send(appCheck.singleUse(), PLAN, token);
+        send(appCheck.singleUse(), TURN, token);
+        send(appCheck.singleUse(), TURN, token);
 
         assertThat(forwarded).hasValue(2);
         assertThat(attestations("replayed")).isEqualTo(1.0);
@@ -261,8 +262,8 @@ class AppCheckReplayProtectionTest {
         AppCheckFilter appCheck = filter(true, false, true, 2_000);
         String token = token();
 
-        send(appCheck.singleUse(), PLAN, token);
-        send(appCheck.singleUse(), PLAN, token);
+        send(appCheck.singleUse(), TURN, token);
+        send(appCheck.singleUse(), TURN, token);
 
         assertThat(forwarded).hasValue(2);
         assertThat(consumeCalls).isEmpty();
@@ -277,8 +278,8 @@ class AppCheckReplayProtectionTest {
                 PROJECT_NUMBER, APP_ID, baseUrl() + "/v1/jwks", 60);
         String token = token();
 
-        send(appCheck.singleUse(), PLAN, token);
-        assertRefused(() -> send(appCheck.singleUse(), PLAN, token), AppCheckRejection.Reason.REPLAYED);
+        send(appCheck.singleUse(), TURN, token);
+        assertRefused(() -> send(appCheck.singleUse(), TURN, token), AppCheckRejection.Reason.REPLAYED);
 
         assertThat(forwarded).hasValue(1);
         assertThat(consumeCalls).isEmpty();

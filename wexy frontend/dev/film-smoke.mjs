@@ -2,10 +2,10 @@
 // refuses: for each scene and shape asked, forge the starter (the playground mock, no backend), open "Make video",
 // wait for the measurement, pick the shape, the quality and 6 s, make the film, and record the outcome: ready, or the
 // dialog's refusal in its words and the library's, plus every console error and exception. Screenshots and
-// results.json go to dev/out/film-smoke/<gpu>-<time>/. Exits 1 when a film did not come out. With --autofix the mock
-// serves the galaxy's evolve with two GLSL slips (?autofix=1), so the world passes only through rung L2's auto-fix and
-// the film must be made from the fixed text (F2): the build must report both auto-fixes.
-//   node dev/film-smoke.mjs [--gpu nvidia] [--scenes galaxy,storm] [--shapes Wide,Vertical,Square] [--quality HD] [--autofix] [--chrome path]
+// results.json go to dev/out/film-smoke/<gpu>-<time>/. Exits 1 when a film did not come out. (--autofix, F2's film made
+// from auto-fixed text, went at EA9.6 with the mock client whose ?autofix=1 served the galaxy's evolve with two GLSL
+// slips; test/autofix.test.mjs and test/gate.test.mjs hold the auto-fix itself.)
+//   node dev/film-smoke.mjs [--gpu nvidia] [--scenes galaxy,storm] [--shapes Wide,Vertical,Square] [--quality HD] [--chrome path]
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,7 +19,10 @@ const gpu = opt('gpu', 'amd');
 const scenes = opt('scenes', 'galaxy,storm').split(',');
 const shapes = opt('shapes', 'Wide,Vertical').split(',');
 const quality = opt('quality', 'HD');
-const autofixed = argv.includes('--autofix');
+if (argv.includes('--autofix')) {
+    console.error('film-smoke: --autofix needed the mock client that EA9.6 retired; nothing serves the slipped evolve now.');
+    process.exit(2);
+}
 const CHROME = [opt('chrome'), process.env.CHROME_PATH,
     'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe']
     .filter(Boolean).find(p => existsSync(p));
@@ -83,7 +86,7 @@ try {
         for (const shape of shapes) {
             const since = consoleLines.length;
             const name = `${scene}-${shape.toLowerCase()}-${quality.toLowerCase()}`;
-            await page.send('Page.navigate', { url: `${origin}/studio.html?scene=${scene}&dev=1${autofixed ? '&autofix=1' : ''}` });
+            await page.send('Page.navigate', { url: `${origin}/studio.html?scene=${scene}&dev=1` });
             const forged = await waitFor(`!document.querySelector('#btn-export')?.disabled`, 180000);
             const spec = await evaluate(`(() => { const t = document.querySelector('#panel-spec')?.innerText ?? ''; const m = t.match(/"particles"[\\s\\S]{0,400}/); return m ? m[0].replace(/\\s+/g, ' ').slice(0, 300) : ''; })()`).catch(() => '');
             await evaluate(`document.querySelector('#btn-export').click()`);
@@ -101,11 +104,9 @@ try {
             const refusal = await evaluate(warn);
             const text = await evaluate(dialogText);
             const errors = consoleLines.slice(since).filter(l => l.type === 'error' || l.type === 'exception').map(l => l.text);
-            // The studio's build line ("…, 2 auto-fix(es)"): with --autofix the galaxy must have gone through both.
-            const autofixes = Number(consoleLines.slice(since).map(l => /(\d+) auto-fix\(es\)/.exec(l.text)?.[1]).find(Boolean) ?? NaN);
-            const ok = forged && first && ended && /ready/.test(title) && !refusal && (!autofixed || scene !== 'galaxy' || autofixes === 2);
-            results.push({ scene, shape, quality, ok, forged, measured: first, estimate, refusedBefore, title, refusal, autofixes, errors, spec, dialog: text });
-            console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}: ${title || 'no title'}${autofixed ? ` (${autofixes} auto-fixes)` : ''}${refusal ? ` — ${refusal}` : ''}${errors.length ? ` — console: ${errors[0].slice(0, 200)}` : ''}`);
+            const ok = forged && first && ended && /ready/.test(title) && !refusal;
+            results.push({ scene, shape, quality, ok, forged, measured: first, estimate, refusedBefore, title, refusal, errors, spec, dialog: text });
+            console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}: ${title || 'no title'}${refusal ? ` — ${refusal}` : ''}${errors.length ? ` — console: ${errors[0].slice(0, 200)}` : ''}`);
             if (ok) { await evaluate(`document.querySelector('.export-dialog .icon-btn')?.click()`); await sleep(800); }
         }
     }

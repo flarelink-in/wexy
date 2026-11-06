@@ -76,9 +76,8 @@ public class GatewayShieldProperties {
      * authentication is named plainly; its per-account twin, keyed by the verified uid, ends in
      * {@code -user}; anonymous Firebase users get a tighter one where it matters.
      *
-     * One world costs about four forge-create requests at once (a plan, then the functions in
-     * parallel), so no create bucket may hold fewer than that. These are starting values, tuned
-     * after the Day-2 benchmark; money is capped by SpendGuard, not here.
+     * These are starting values, tuned after the Day-2 benchmark; money is capped by SpendGuard,
+     * not here. (h1's forge-create and forge-edit classes went with its routes at EA9.6.)
      *
      * An agent turn (the agent-loop design, Q66) makes up to {@link AgentTurn#MAX_CALLS} model calls, so its buckets
      * count calls: a request costs that many tokens, the constant forge-service caps a turn's calls at, so the two
@@ -88,11 +87,6 @@ public class GatewayShieldProperties {
      */
     private final Map<String, Bucket> buckets = new LinkedHashMap<>(Map.ofEntries(
             Map.entry("public-read", new Bucket(15, 45)),
-            Map.entry("forge-create", new Bucket(0.5, 20)),
-            Map.entry("forge-create-user", new Bucket(0.1, 12)),
-            Map.entry("forge-create-anonymous", new Bucket(0.05, 8)),
-            Map.entry("forge-edit", new Bucket(1, 30)),
-            Map.entry("forge-edit-user", new Bucket(0.5, 15)),
             Map.entry("agent-turn", new Bucket(AgentTurn.MAX_CALLS / 30.0, 4 * AgentTurn.MAX_CALLS, AgentTurn.MAX_CALLS)),
             Map.entry("agent-turn-user", new Bucket(AgentTurn.MAX_CALLS / 60.0, 2 * AgentTurn.MAX_CALLS, AgentTurn.MAX_CALLS)),
             Map.entry("agent-turn-anonymous", new Bucket(AgentTurn.MAX_CALLS / 120.0, 2 * AgentTurn.MAX_CALLS, AgentTurn.MAX_CALLS)),

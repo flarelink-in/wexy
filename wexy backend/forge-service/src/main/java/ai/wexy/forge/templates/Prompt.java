@@ -9,11 +9,11 @@ import java.util.List;
  * how they were made. The system message is the template's static part, identical for every call of
  * that template (P9), so Meta's prompt cache serves it; the user message carries the request.
  *
- * @param templateId     the template that built it, e.g. {@code author.evolve.v1}
+ * @param templateId     the template that built it, e.g. {@code module.author.v4}
  * @param hostVersion    the host contract it describes, e.g. {@code h1}
  * @param messages       system, then user
- * @param responseSchema the schema the answer must match ({@code scene-draft.v1}, {@code edit-plan.v1}),
- *                       or null when the answer is a function's text
+ * @param responseSchema the schema the answer must match, or null when the answer is text (a module's body) or the
+ *                       caller names its own format
  */
 public record Prompt(String templateId, String hostVersion, List<ChatMessage> messages, String responseSchema) {
 

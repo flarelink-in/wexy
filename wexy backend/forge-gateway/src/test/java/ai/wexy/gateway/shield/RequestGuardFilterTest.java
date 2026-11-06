@@ -74,7 +74,7 @@ class RequestGuardFilterTest {
     @Test
     void everythingElseKeeps256KiB() {
         for (Object[] row : new Object[][]{
-                {HttpMethod.POST, "/v1/forge/plan"},
+                {HttpMethod.POST, "/v1/agent/module"},
                 {HttpMethod.POST, "/v1/agent/turn"},
                 {HttpMethod.PATCH, "/v1/me/profile"},
                 {HttpMethod.PATCH, "/v1/worlds/" + WORLD},
@@ -106,7 +106,7 @@ class RequestGuardFilterTest {
         assertThat(streamed("/v1/worlds", SAVE)).isNull();
         assertThat(streamed("/v1/worlds", SAVE + 1)).isInstanceOfSatisfying(ResponseStatusException.class,
                 e -> assertThat(e.getStatusCode().value()).isEqualTo(413));
-        assertThat(streamed("/v1/forge/direct", DEFAULT + 1)).isInstanceOf(ResponseStatusException.class);
+        assertThat(streamed("/v1/agent/turn", DEFAULT + 1)).isInstanceOf(ResponseStatusException.class);
     }
 
     /** What reading a chunked body of `bytes` through the guard ended in: null when it was read whole. */

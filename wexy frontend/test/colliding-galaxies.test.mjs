@@ -1,28 +1,25 @@
 // The collision starter is separate from the byte-pinned backend h1 exemplars.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { MockClient } from '../src/forge-client/mock-client.ts';
+import { loadExample } from '../src/forge-client/example.ts';
 import { lintTarget } from '../src/verify/gate.ts';
 import { collidingGalaxies } from '../src/forge-client/examples/colliding-galaxies.ts';
 import { parseDraft } from '../src/contract/draft.ts';
 
 test('G1 collision prompts select two galaxies; ordinary galaxies keep the shared exemplar', async () => {
-    const client = new MockClient({ pace: 0 });
-    const signal = new AbortController().signal;
     for (const prompt of ['Two galaxies colliding', 'An Andromeda galaxy merger', 'Colliding galaxies']) {
-        const plan = await client.plan({ prompt, style: 'auto', seconds: 12 }, {}, signal);
-        assert.equal(plan.draft.title, 'Colliding Galaxies');
-        assert.equal(plan.generation.source, 'mock');
-        assert.equal(plan.ready.program.kind, 'functions');
+        const spec = loadExample(prompt, 'auto');
+        assert.equal(spec.title, 'Colliding Galaxies');
+        assert.equal(spec.program.kind, 'functions');
         for (const target of ['evolve', 'look', 'sky']) {
-            assert.deepEqual(lintTarget(plan.ready, target).diagnostics, [], target);
+            assert.deepEqual(lintTarget(spec, target).diagnostics, [], target);
         }
-        assert.ok(plan.ready.uniforms.encounter);
-        assert.ok(plan.ready.particles.count <= 524288);
+        assert.ok(spec.uniforms.encounter);
+        assert.ok(spec.particles.count <= 524288);
     }
-    const spiral = await client.plan({ prompt: 'A spiral galaxy', style: 'auto', seconds: 12 }, {}, signal);
-    assert.equal(spiral.draft.title, 'Spiral Galaxy');
-    assert.equal(spiral.ready, undefined);
+    const spiral = loadExample('A spiral galaxy', 'auto');
+    assert.equal(spiral.title, 'Spiral Galaxy');
+    assert.equal(spiral.program.kind, 'functions');
 });
 
 test('G2 collision plans round-trip, respect style and never mutate the pinned galaxy', () => {

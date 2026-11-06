@@ -31,7 +31,6 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -51,16 +50,11 @@ import java.util.regex.Pattern;
  *
  * <p><b>Which recording.</b> A request is matched to a template by its system message, byte for
  * byte: every call of a template sends the same system bytes (P9), and {@link PromptTemplates}
- * holds them, so the prompt needs no id line for the mock to route on. The planner gets
- * {@code mock/plans/<world>.json}, the world chosen by a word of its name in the idea, else the
- * first; an author gets the h1 exemplar of its function for the world the plan names; a repair gets
- * the exemplar whose fault it was sent; the director gets {@code mock/edits/director.json}. A system
- * message that matches no template is refused with 400: the mock answers Wexy's own prompts and
- * nothing else.
+ * holds them. Only agent, module and review recordings are served (EA9.6).
+ * A system message that matches no template is refused with 400.
  *
  * <p><b>Scenarios</b> ({@code wexy.mock.scenario}, or {@code WEXY_MOCK_SCENARIO}): {@code ok};
- * {@code fault} serves {@code mock/faults/<world>.evolve.wgsl}, an evolve with one real WGSL
- * mistake, so the repair path runs end to end, and a module's first body {@code mock/modules/<module>.fault.wgsl}; {@code slow} goes quiet for
+ * {@code fault} serves a module's first body {@code mock/modules/<module>.fault.wgsl}; {@code slow} goes quiet for
  * {@code wexy.mock.slow-millis} after the first chunk, for the heartbeat and the deadline;
  * {@code error-mid-stream} sends Meta's {@code {"type": "error", …}} event after the first chunk.
  *
@@ -81,14 +75,9 @@ public class MockMetaApi {
 
     private static final Logger log = LoggerFactory.getLogger(MockMetaApi.class);
     private static final int CHARS_PER_TOKEN = 4;
-    private static final String PLANS = "classpath:mock/plans/*.json";
-    private static final String FAULTS = "classpath:mock/faults/*.wgsl";
-    private static final String EDIT = "classpath:mock/edits/director.json";
     /** The agent turn (agent-loop design §15, EA2.4): a read on its first call, then a program that passes the check. */
     private static final String AGENT_READ = "classpath:mock/agent/need-context.json";
     private static final String AGENT_PROGRAM = "classpath:mock/agent/program.json";
-    private static final Pattern TITLE_LINE = Pattern.compile("^Title: (.+)$", Pattern.MULTILINE);
-    private static final Pattern REPAIR_FN = Pattern.compile("^The function: (evolve|look|sky) ", Pattern.MULTILINE);
     /** A module call's bodies (EA4.2), by module: {@code <module>.wgsl}, and {@code <module>.fault.wgsl} for the fault scenario. */
     private static final String MODULES = "classpath:mock/modules/*.wgsl";
     private static final Pattern MODULE_LINE = Pattern.compile("^The module: ([A-Za-z0-9_-]+), a ", Pattern.MULTILINE);
@@ -102,14 +91,10 @@ public class MockMetaApi {
 
     private final MockProperties properties;
     private final ModelCatalog catalog;
-    private final HostContract host;
     private final ObjectMapper json;
     /** The system message of each loaded template, to its name: how a request is routed. */
     private final Map<String, String> templatesBySystem = new LinkedHashMap<>();
-    private final Map<String, Plan> plans = new LinkedHashMap<>();
-    private final Map<String, String> faults = new LinkedHashMap<>();
     private final Map<String, String> modules = new LinkedHashMap<>();
-    private final String edit;
     private final String agentRead;
     private final String agentProgram;
     private final String review;
@@ -118,9 +103,6 @@ public class MockMetaApi {
     private final HttpServer server;
     private volatile String scenario;
 
-    /** One recorded plan: the world's file stem, its title, and its text as the mock streams it. */
-    record Plan(String world, String title, String text) {
-    }
 
     /** What a request gets: the recording's name, for the log, and its text. */
     record Recording(String name, String text) {
@@ -136,7 +118,6 @@ public class MockMetaApi {
                 HostContract host, ObjectMapper json, ResourcePatternResolver resources) {
         this.properties = properties;
         this.catalog = catalog;
-        this.host = host;
         this.json = json;
         this.scenario = checkedScenario(properties.scenario());
 
@@ -149,26 +130,15 @@ public class MockMetaApi {
         for (PromptTemplates.Template template : templates.all()) {
             templatesBySystem.put(template.system(), template.name());
         }
-        for (Resource file : list(resources, PLANS)) {
-            String text = read(file);
-            plans.put(stem(file), new Plan(stem(file), title(text, file), text));
-        }
-        if (plans.isEmpty()) {
-            throw new IllegalStateException("No recorded plans under mock/plans/: the mock has nothing to answer a planner with.");
-        }
-        for (Resource file : list(resources, FAULTS)) {
-            faults.put(stem(file), read(file));
-        }
         for (Resource file : list(resources, MODULES)) {
             modules.put(stem(file), read(file).strip());
         }
-        this.edit = read(resources.getResource(EDIT));
         this.agentRead = read(resources.getResource(AGENT_READ)).strip();
         this.agentProgram = read(resources.getResource(AGENT_PROGRAM)).strip();
         this.review = read(resources.getResource(REVIEW)).strip();
         this.server = start(properties.port());
-        log.warn("MOCK META API on 127.0.0.1:{} (scenario {}, {} tokens/s, {} plans): no model is called and nothing is spent, "
-                + "but every call is metered in Redis as a live one would be.", port(), scenario, properties.tokensPerSecond(), plans.size());
+        log.warn("MOCK META API on 127.0.0.1:{} (scenario {}, {} tokens/s): no model is called and nothing is spent, "
+                + "but every call is metered in Redis as a live one would be.", port(), scenario, properties.tokensPerSecond());
     }
 
     private HttpServer start(int port) {
@@ -318,82 +288,18 @@ public class MockMetaApi {
                     tokens(system) + tokens(user) + images * IMAGE_TOKENS, cachedTokens);
             return;
         }
+        // A template the mock has no recording for (since EA9.6, h1's are gone and the paper probe's was never recorded) is
+        // refused as Meta refuses a request, never by a thrown exception, which closed the connection with no answer.
+        if (!template.equals("agent")) {
+            error(exchange, 400, "invalid_request_error", "The mock has no recording for the template '" + template
+                    + "'; it answers agent, module and review calls.");
+            return;
+        }
         // An agent turn sends its first call with two messages and every later one with more (agent-loop design §2).
-        Recording recording = template.equals("agent")
-                ? messages.size() <= 2 ? new Recording("agent/need-context", agentRead) : new Recording("agent/program", agentProgram)
-                : pick(template, user);
+        Recording recording = messages.size() <= 2 ? new Recording("agent/need-context", agentRead) : new Recording("agent/program", agentProgram);
         int cap = request.path("max_completion_tokens").asInt(0);
         long cachedTokens = streamedSystems.add(system) ? 0 : tokens(system);
         stream(exchange, model, template, recording, cap > 0 ? cap : Integer.MAX_VALUE, tokens(system) + tokens(user), cachedTokens);
-    }
-
-    private Recording pick(String template, String user) {
-        if (template.equals("planner")) {
-            Plan plan = planFor(user);
-            return new Recording("plans/" + plan.world(), plan.text());
-        }
-        if (template.startsWith("author.")) {
-            String fn = template.substring("author.".length());
-            String world = worldNamed(user);
-            String fault = faults.get(world + "." + fn);
-            if ("fault".equals(scenario) && fault != null) {
-                return new Recording("faults/" + world + "." + fn, fault);
-            }
-            return new Recording("exemplars/" + world + "." + fn, exemplar(world, fn));
-        }
-        if (template.equals("repair")) {
-            Matcher named = REPAIR_FN.matcher(user);
-            String fn = named.find() ? named.group(1) : "evolve";
-            // The function it was sent is one of the faults: answer with that world's exemplar, the fix.
-            String world = faults.entrySet().stream()
-                    .filter(entry -> user.contains(entry.getValue()))
-                    .map(entry -> entry.getKey().substring(0, entry.getKey().indexOf('.')))
-                    .findFirst()
-                    .orElse(plans.keySet().iterator().next());
-            return new Recording("exemplars/" + world + "." + fn, exemplar(world, fn));
-        }
-        if (template.equals("director")) {
-            return new Recording("edits/director", edit);
-        }
-        throw new IllegalStateException("No recording for the template " + template + ".");
-    }
-
-    /** The plan whose world's name, or a word of its title, is in the idea; else the first. */
-    private Plan planFor(String user) {
-        String idea = user.toLowerCase(Locale.ROOT);
-        for (Plan plan : plans.values()) {
-            if (idea.contains(plan.world())) {
-                return plan;
-            }
-            for (String word : plan.title().toLowerCase(Locale.ROOT).split("[^a-z]+")) {
-                if (word.length() >= 4 && idea.contains(word)) {
-                    return plan;
-                }
-            }
-        }
-        return plans.values().iterator().next();
-    }
-
-    /** The world whose plan the author's message names on its {@code Title:} line; else the first. */
-    private String worldNamed(String user) {
-        Matcher title = TITLE_LINE.matcher(user);
-        if (title.find()) {
-            String named = title.group(1).strip();
-            for (Plan plan : plans.values()) {
-                if (plan.title().equalsIgnoreCase(named)) {
-                    return plan.world();
-                }
-            }
-        }
-        return plans.keySet().iterator().next();
-    }
-
-    private String exemplar(String world, String fn) {
-        return host.exemplars(fn).stream()
-                .filter(exemplar -> exemplar.world().equals(world))
-                .map(HostContract.Exemplar::code)
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException("No exemplar " + world + "." + fn + " under host/h1/exemplars/."));
     }
 
     private void stream(HttpExchange exchange, String model, String template, Recording recording, int cap,
@@ -554,11 +460,4 @@ public class MockMetaApi {
         return name.substring(0, name.lastIndexOf('.'));
     }
 
-    private String title(String planText, Resource file) {
-        try {
-            return json.readTree(planText).path("title").asText("");
-        } catch (IOException e) {
-            throw new IllegalStateException("The recorded plan " + file.getDescription() + " is not JSON.", e);
-        }
-    }
 }

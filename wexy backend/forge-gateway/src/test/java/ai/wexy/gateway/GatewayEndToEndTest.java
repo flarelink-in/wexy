@@ -128,7 +128,7 @@ class GatewayEndToEndTest {
 
     @Test
     void aForgeCallWithoutSignInIsAnAuthEnvelope() {
-        client.post().uri("/v1/forge/plan").contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
+        client.post().uri("/v1/agent/turn").contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
                 .exchange()
                 .expectStatus().isUnauthorized()
                 .expectBody().json("{\"code\":\"auth\"}");
@@ -139,7 +139,7 @@ class GatewayEndToEndTest {
     void anOversizedBodyIsRefusedBeforeItIsRead() {
         String body = "{\"turn\":\"" + "x".repeat(300 * 1024) + "\"}";
 
-        client.post().uri("/v1/forge/direct").contentType(MediaType.APPLICATION_JSON).bodyValue(body)
+        client.post().uri("/v1/agent/turn").contentType(MediaType.APPLICATION_JSON).bodyValue(body)
                 .exchange()
                 .expectStatus().isEqualTo(413)
                 .expectBody().json("{\"code\":\"too-large\"}");
@@ -161,7 +161,7 @@ class GatewayEndToEndTest {
 
     @Test
     void aSignedInCallReachesTheServiceWithTheGatewaysOwnToken() throws Exception {
-        client.post().uri("/v1/forge/plan")
+        client.post().uri("/v1/agent/turn")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer h.anonymous.s")
                 .header(InternalToken.HEADER, "forged.by.client")
                 .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"prompt\":\"two galaxies collide\"}")

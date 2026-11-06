@@ -23,7 +23,8 @@ wexy:
     ban:
       enabled: false
     buckets:
-      # Raised above the compiled default, so a test can tell configuration from code.
-      forge-edit:
+      # Raised above the compiled default (2 a second), so a test can tell configuration from code. Was forge-edit until
+      # EA9.6 retired it; public-read, which EA9.6 chose, would have been lowered (15 and 45) under every public route.
+      review-read:
         refill-per-second: 5
         burst-capacity: 30

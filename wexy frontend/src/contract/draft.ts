@@ -1,9 +1,10 @@
-// The planner's answer, parsed: rung L0 of the ladder (core-loop-frontend.md §7). A draft is the backend's
+// An h1 draft, parsed: rung L0 of the ladder (core-loop-frontend.md §7). Until EA9.6 it was the planner's answer;
+// since then it is h1's hand-written plans (src/contract/h1), which the examples and the backdrop load. A draft is
 // scene-draft.v1 (forge-loop design §5.4): SceneSpec 2.0 without its program and host, with the controls as an
-// array (Meta's strict subset) and every unused block null. The server validated it against the same schema; this
-// parser is the browser's own authority over what it compiles (coding principles §2): unknown in, a typed draft
-// out, ranges clamped and noted, anything else refused with a message a planner repair can use. The limits here
-// mirror the backend's schemas/scene-draft.v1.json and DraftChecks; test/contract.test.mjs pins the embedded copy.
+// array (Meta's strict subset) and every unused block null. This parser is the browser's own authority over what it
+// compiles (coding principles §2): unknown in, a typed draft out, ranges clamped and noted, anything else refused
+// with a message. Its limits are those of the backend's schemas/scene-draft.v1.json and DraftChecks, which EA9.6
+// deleted with the planner.
 
 import { RESERVED_WORDS } from './reserved';
 import {

@@ -2,10 +2,9 @@
 // itself behind ?create=agent, the creator's view, end to end with no paid call. A local stand-in gateway answers the agent
 // routes in the backend's recorded shapes (EA-VR11's): the turn hands off the castle as the agent wrote it, each module
 // call is answered with the castle's own body, and the allowance read after the turn says the free world is made.
-//   - ?legacy=1, the rollback: the studio is h1's, unchanged: a starter built by h1's loop over the mock, no creation code
-//     loaded;
+//   - (until EA9.6: ?legacy=1, the rollback, as h1's page with no creation code loaded; retired with h1's Create)
 //   - with no flag (the agent path, the default since 11-04) and ?scene=galaxy: the creator's view (no Developer view, no
-//     agent panel), the named example loaded by h1's loop with no model called, so the Playground is selected; "Live
+//     agent panel), the named example loaded with no model called (`loadExample` since EA9.6), so the Playground is selected; "Live
 //     creation" then offers Create once the stage (its device compiler) is ready;
 //   - Create: Stop offered while the turn runs and the modules are written (L3 on this device), then "Show it", nothing
 //     on the stage yet; the steps say so in plain words;
@@ -283,14 +282,9 @@ try {
     const starter = name => evaluate(`(() => { const b = [...document.querySelectorAll('.examples-chips .chip')].find(c => c.textContent === ${JSON.stringify(name)}); if (!b || b.disabled) return false; b.click(); return true; })()`);
     const h1Installed = () => `document.querySelector('#hud-source')?.textContent === 'Playground example' && !!document.querySelector('#hud-title')?.textContent && document.querySelector('.journey-step:last-child')?.classList.contains('is-done')`;
 
-    // The rollback, ?legacy=1: h1's page (EA9.1's exit): a starter built by h1's loop over the mock, so the Playground is
-    // the next action (the 11-04 mode switch, on either path), and none of the agent path loaded.
+    // The rollback's step, ?legacy=1 as h1's page with none of the agent path loaded, went with h1's Create at EA9.6:
+    // ?legacy=1 is an unknown selector now (EA9-U16 and test/retired-creation.test.mjs hold that).
     const modes = () => evaluate(`(() => { const m = document.querySelector('.creation-modes'); return m && !m.hidden ? [...m.querySelectorAll('button')].map(b => b.dataset.mode + (b.getAttribute('aria-pressed') === 'true' ? '*' : '')) : null; })()`);
-    await page.send('Page.navigate', { url: `${studioOrigin}/studio.html?legacy=1&scene=galaxy` });
-    const plain = await until(h1Installed(), 60_000);
-    const plainLook = { ...(await look()), creationCode: await loaded(), modes: await modes() };
-    step('?legacy=1 the studio is h1\'s: a starter built by h1\'s loop, labelled Playground example, the Playground selected; no creation code loaded',
-        plain && plainLook.label === 'Playground example' && JSON.stringify(plainLook.modes) === '["live","playground*"]' && plainLook.creationCode.length === 0 && !plainLook.dev, plainLook);
 
     // No flag, the agent path (the default since 11-04), with a loader: h1's hand-written example, no model called, so the
     // Playground is the next action; "Live creation" gives the agent's Create, which replaces it.

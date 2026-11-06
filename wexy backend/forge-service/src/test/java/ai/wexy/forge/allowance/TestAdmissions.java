@@ -27,18 +27,13 @@ public final class TestAdmissions {
      * turn (Q120 (b)).
      */
     public static AllowanceProperties strict() {
-        return strict(8, 8);
-    }
-
-    /** As {@link #strict()}, with `authorCalls` authors and `repairCalls` repairs a plan. */
-    public static AllowanceProperties strict(int authorCalls, int repairCalls) {
-        return new AllowanceProperties(1, 3, 1, 1, 20, 0, Duration.ofHours(2), 5, 3, 44, authorCalls, repairCalls, 1, Duration.ofDays(400),
+        return new AllowanceProperties(1, 3, 1, 1, 20, 0, Duration.ofHours(2), 3, 44, Duration.ofDays(400),
                 UID_KEY, false, 6, 1);
     }
 
     /** As {@link #strict()}, with prompts living `promptLife` (Q120 (b): a follow-up after its prompt's life). */
     public static AllowanceProperties strict(Duration promptLife) {
-        return new AllowanceProperties(1, 3, 1, 1, 20, 0, promptLife, 5, 3, 44, 8, 8, 1, Duration.ofDays(400), UID_KEY, false, 6, 1);
+        return new AllowanceProperties(1, 3, 1, 1, 20, 0, promptLife, 3, 44, Duration.ofDays(400), UID_KEY, false, 6, 1);
     }
 
     /** Room for the tests about something else: every allowance at a thousand, so none of them decides a test. */
@@ -48,7 +43,7 @@ public final class TestAdmissions {
 
     /** As {@link #wide()}, with `moduleCalls` module calls a prompt. */
     public static AllowanceProperties wide(int moduleCalls) {
-        return new AllowanceProperties(1000, 1000, 1000, 1000, 1000, 0, Duration.ofHours(2), 1000, 1000, moduleCalls, 1000, 1000, 1000,
+        return new AllowanceProperties(1000, 1000, 1000, 1000, 1000, 0, Duration.ofHours(2), 1000, moduleCalls,
                 Duration.ofDays(400), UID_KEY, false, 1000, 1000);
     }
 

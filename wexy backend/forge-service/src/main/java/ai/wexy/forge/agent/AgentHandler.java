@@ -8,7 +8,6 @@ import ai.wexy.forge.engine.EngineBundle;
 import ai.wexy.forge.error.ForgeException;
 import ai.wexy.forge.identity.Caller;
 import ai.wexy.forge.loop.LoopProperties;
-import ai.wexy.forge.loop.PlanRequest;
 import ai.wexy.forge.models.ModelCatalog;
 import ai.wexy.forge.records.GenerationStore;
 import ai.wexy.forge.records.Ulid;
@@ -250,9 +249,9 @@ public class AgentHandler {
         }
         JsonNode seconds = body.path("seconds");
         // A number beyond an int is refused, not wrapped into range (4294967308 is not 12).
-        PlanRequest checked = new PlanRequest(body.path("prompt").isTextual() ? body.path("prompt").asText() : null,
+        AgentRequest checked = new AgentRequest(body.path("prompt").isTextual() ? body.path("prompt").asText() : null,
                 body.path("style").isTextual() ? body.path("style").asText() : null,
-                seconds.isIntegralNumber() && seconds.canConvertToInt() ? seconds.asInt() : null, null).validated(caps);
+                seconds.isIntegralNumber() && seconds.canConvertToInt() ? seconds.asInt() : null).validated(caps);
         return new AgentRequest(checked.prompt(), checked.style(), checked.seconds());
     }
 

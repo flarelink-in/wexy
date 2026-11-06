@@ -102,7 +102,7 @@ export class TracePanel {
 
     constructor() {
         this.list = h('ol', { class: 'trace-list' });
-        this.empty = h('p', { class: 'trace-empty' }, 'Create a world to watch the planner, the author, the compiler gate and the GPU work through it here.');
+        this.empty = h('p', { class: 'trace-empty' }, 'Load an example to watch the compiler gate and the GPU work through it here; the agent\'s panels show a creation.');
         this.cost = h('div', { class: 'trace-cost' });
         this.el = h('section', { class: 'trace' },
             h('header', { class: 'panel-head' }, h('h2', null, 'Pipeline'), h('span', { class: 'panel-sub' }, 'prompt → spec → WGSL → gate → GPU')),

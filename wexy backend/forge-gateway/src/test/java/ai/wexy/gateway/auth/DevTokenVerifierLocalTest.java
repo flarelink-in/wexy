@@ -98,7 +98,7 @@ class DevTokenVerifierLocalTest {
     }
 
     private WebTestClient.ResponseSpec plan(String authorization) {
-        return client.post().uri("/v1/forge/plan")
+        return client.post().uri("/v1/agent/turn")
                 .header(HttpHeaders.AUTHORIZATION, authorization)
                 .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"prompt\":\"a spiral galaxy\"}")
                 .exchange();
@@ -140,9 +140,9 @@ class DevTokenVerifierLocalTest {
     /** §9: a dozen creates in a row must not be a 429 from your own gateway. */
     @Test
     void developmentIsNotRateLimitedByItsOwnGateway() {
-        for (String bucket : new String[]{"forge-create", "forge-create-user", "forge-create-anonymous", "forge-edit", "forge-edit-user"}) {
-            assertThat(shield.bucket(bucket).getRefillPerSecond()).as(bucket).isEqualTo(5d);
-            assertThat(shield.bucket(bucket).getBurstCapacity()).as(bucket).isEqualTo(100d);
+        for (String bucket : new String[]{"agent-module", "agent-module-user", "agent-module-anonymous", "agent-review", "agent-review-user"}) {
+            assertThat(shield.bucket(bucket).getRefillPerSecond()).as(bucket).isEqualTo(30d);
+            assertThat(shield.bucket(bucket).getBurstCapacity()).as(bucket).isIn(300d, 600d);
         }
         for (int i = 0; i < 12; i++) {
             plan("Bearer dev.anonymous.burst").expectStatus().isOk();

@@ -29,10 +29,10 @@ function fakeFetch(...answers) {
     return { fetchImpl, requests };
 }
 
-test('U15 the single-use App Check routes are exactly the gateway\'s (ForgeRoutesTest: forge-plan, agent-turn, agent-module, agent-review, me-bootstrap, me-delete, worlds-submit, waitlist)', () => {
-    assert.deepEqual([...SINGLE_USE_ROUTES], ['POST /v1/forge/plan', 'POST /v1/agent/turn', 'POST /v1/agent/module',
+test('U15 the single-use App Check routes are exactly the gateway\'s (ForgeRoutesTest: agent-turn, agent-module, agent-review, me-bootstrap, me-delete, worlds-submit, waitlist)', () => {
+    assert.deepEqual([...SINGLE_USE_ROUTES], ['POST /v1/agent/turn', 'POST /v1/agent/module',
         'POST /v1/agent/review', 'POST /v1/me', 'DELETE /v1/me', 'POST /v1/worlds/{id}/submissions', 'POST /v1/waitlist']);
-    assert.ok(needsSingleUseAppCheck('POST', '/v1/forge/plan'));
+    assert.ok(needsSingleUseAppCheck('POST', '/v1/agent/turn'));
     assert.ok(needsSingleUseAppCheck('POST', '/v1/agent/turn'));
     assert.ok(needsSingleUseAppCheck('POST', '/v1/agent/module'));
     // EA6.4: a model's review spends its token; its terms (GET) do not.
@@ -43,7 +43,7 @@ test('U15 the single-use App Check routes are exactly the gateway\'s (ForgeRoute
     assert.ok(needsSingleUseAppCheck('POST', '/v1/worlds/01JC3W5F6Q7R8S9T0V1W2X3Y4Z/submissions'));
     assert.ok(needsSingleUseAppCheck('POST', '/v1/waitlist'));
     for (const [m, p] of [['POST', '/v1/forge/author'], ['POST', '/v1/worlds'], ['POST', '/v1/worlds?draft=1'], ['POST', '/v1/worlds/abc/complete'],
-        ['GET', '/v1/worlds'], ['GET', '/v1/forge/plan'], ['GET', '/v1/agent/turn'], ['POST', '/v1/agent/turns'], ['GET', '/v1/me'],
+        ['GET', '/v1/worlds'], ['POST', '/v1/forge/plan'], ['GET', '/v1/agent/turn'], ['POST', '/v1/agent/turns'], ['GET', '/v1/me'],
         ['PATCH', '/v1/me/profile'], ['POST', '/v1/me/profile'], ['DELETE', '/v1/worlds/abc'], ['POST', '/v1/worlds//submissions'],
         ['POST', '/v1/worlds/a/b/submissions'], ['GET', '/v1/worlds/abc/submissions'], ['POST', '/v1/worlds/abc/submissions/x'],
         ['GET', '/v1/agent/review'], ['POST', '/v1/agent/review/x']]) {
@@ -85,10 +85,10 @@ test('U41 an idempotency key goes as Idempotency-Key, the same on the retry afte
 test('U16 a signed-in POST carries the ID token, a fresh limited-use App Check token, and JSON', async () => {
     const identity = fakeIdentity();
     const { fetchImpl, requests } = fakeFetch(new Response('ok', { status: 200 }));
-    const res = await createApi(CONFIG, identity, fetchImpl).send({ method: 'POST', path: '/v1/forge/plan', body: { prompt: 'a storm' }, auth: true, accept: 'text/event-stream' });
+    const res = await createApi(CONFIG, identity, fetchImpl).send({ method: 'POST', path: '/v1/agent/turn', body: { prompt: 'a storm' }, auth: true, accept: 'text/event-stream' });
     assert.equal(await res.text(), 'ok');
     const [r] = requests;
-    assert.equal(r.url, 'http://localhost:8400/v1/forge/plan');
+    assert.equal(r.url, 'http://localhost:8400/v1/agent/turn');
     assert.equal(r.headers.authorization, 'Bearer id-1');
     assert.equal(r.headers['x-firebase-appcheck'], 'ac-2');
     assert.equal(r.headers['content-type'], 'application/json');
@@ -100,7 +100,7 @@ test('U16 a signed-in POST carries the ID token, a fresh limited-use App Check t
 });
 
 test('U36 App Check policy follows the resolved path, not its unnormalised spelling', async () => {
-    for (const path of ['/v1/forge/x/../plan', '/v1/forge/%70lan', '/v1/me#draft', '/v1/worlds/abc/%73ubmissions']) {
+    for (const path of ['/v1/agent/x/../turn', '/v1/agent/%74urn', '/v1/me#draft', '/v1/worlds/abc/%73ubmissions']) {
         const identity = fakeIdentity();
         const { fetchImpl } = fakeFetch();
         await createApi(CONFIG, identity, fetchImpl).send({ method: 'POST', path, auth: true });
@@ -114,7 +114,7 @@ test('U37 an already cancelled request does not acquire credentials or send a re
     const controller = new AbortController();
     controller.abort();
     await assert.rejects(createApi(CONFIG, identity, fetchImpl).send({
-        method: 'POST', path: '/v1/forge/plan', auth: true, signal: controller.signal,
+        method: 'POST', path: '/v1/agent/turn', auth: true, signal: controller.signal,
     }), e => e.name === 'AbortError');
     assert.deepEqual(identity.calls, []);
     assert.equal(requests.length, 0);
@@ -126,7 +126,7 @@ test('U38 cancellation during identity acquisition stops App Check and dispatch'
     identity.authorization = async () => { controller.abort(); return 'Bearer id'; };
     const { fetchImpl, requests } = fakeFetch();
     await assert.rejects(createApi(CONFIG, identity, fetchImpl).send({
-        method: 'POST', path: '/v1/forge/plan', auth: true, signal: controller.signal,
+        method: 'POST', path: '/v1/agent/turn', auth: true, signal: controller.signal,
     }), e => e.name === 'AbortError');
     assert.deepEqual(identity.calls, []);
     assert.equal(requests.length, 0);
@@ -154,7 +154,7 @@ test('U19 401 refreshes the ID token and retries once, with a fresh App Check to
         new Response('{"code":"auth","message":"expired"}', { status: 401 }),
         new Response('ok', { status: 200 }),
     );
-    await createApi(CONFIG, identity, fetchImpl).send({ method: 'POST', path: '/v1/forge/plan', body: {}, auth: true });
+    await createApi(CONFIG, identity, fetchImpl).send({ method: 'POST', path: '/v1/agent/turn', body: {}, auth: true });
     assert.equal(requests.length, 2);
     assert.deepEqual(identity.calls, ['auth', 'appcheck single-use', 'auth (refresh)', 'appcheck single-use']);
     assert.notEqual(requests[0].headers['x-firebase-appcheck'], requests[1].headers['x-firebase-appcheck']);
@@ -165,14 +165,14 @@ test('U20 a second 401 is the caller\'s answer: no third request', async () => {
         new Response('{"code":"auth","message":"no"}', { status: 401 }),
         new Response('{"code":"auth","message":"still no"}', { status: 401 }),
     );
-    await assert.rejects(createApi(CONFIG, fakeIdentity(), fetchImpl).send({ method: 'POST', path: '/v1/forge/plan', body: {}, auth: true }),
+    await assert.rejects(createApi(CONFIG, fakeIdentity(), fetchImpl).send({ method: 'POST', path: '/v1/agent/turn', body: {}, auth: true }),
         e => e instanceof ForgeError && e.code === 'auth' && e.message === 'still no');
     assert.equal(requests.length, 2);
 });
 
 test('U21 a refusal is a ForgeError with the backend\'s code', async () => {
     const { fetchImpl } = fakeFetch(new Response('{"code":"budget","message":"The daily cap is reached."}', { status: 503 }));
-    await assert.rejects(createApi(CONFIG, fakeIdentity(), fetchImpl).send({ method: 'POST', path: '/v1/forge/plan', body: {}, auth: true }),
+    await assert.rejects(createApi(CONFIG, fakeIdentity(), fetchImpl).send({ method: 'POST', path: '/v1/agent/turn', body: {}, auth: true }),
         e => e instanceof ForgeError && e.code === 'budget' && e.status === 503);
 });
 
@@ -189,7 +189,7 @@ test('U23 a path that is not the gateway\'s is refused before anything is sent',
     const identity = fakeIdentity();
     const { fetchImpl, requests } = fakeFetch();
     const api = createApi(CONFIG, identity, fetchImpl);
-    for (const path of ['https://evil.example/v1/forge/plan', '//evil.example/v1/x', '/admin', 'v1/forge/plan', '/v1/../../evil']) {
+    for (const path of ['https://evil.example/v1/agent/turn', '//evil.example/v1/x', '/admin', 'v1/forge/plan', '/v1/../../evil']) {
         await assert.rejects(api.send({ method: 'POST', path, body: {}, auth: true }), /api: /, path);
     }
     assert.equal(requests.length, 0);

@@ -69,7 +69,7 @@ class AuthorizationFilterTest {
     }
 
     private static MockServerWebExchange request(String authorizationHeader, String peer, String forwardedFor) {
-        MockServerHttpRequest.BaseBuilder<?> builder = MockServerHttpRequest.post("/v1/forge/plan");
+        MockServerHttpRequest.BaseBuilder<?> builder = MockServerHttpRequest.post("/v1/agent/turn");
         if (authorizationHeader != null) {
             builder.header(HttpHeaders.AUTHORIZATION, authorizationHeader);
         }
@@ -132,7 +132,7 @@ class AuthorizationFilterTest {
         assertThat(forwardedClaims().getStringClaim(InternalToken.CLAIM_IPK)).isEqualTo(expected);
 
         // A forwarded-for the gateway does not trust, and an inbound internal token, change nothing.
-        MockServerWebExchange spoofed = MockServerWebExchange.from(MockServerHttpRequest.post("/v1/forge/plan")
+        MockServerWebExchange spoofed = MockServerWebExchange.from(MockServerHttpRequest.post("/v1/agent/turn")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer h.google.s")
                 .header("X-Forwarded-For", "198.51.100.1")
                 .header(InternalToken.HEADER, "forged")

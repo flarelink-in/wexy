@@ -26,7 +26,7 @@ export interface Caller {
  * bootstrap and deletion, a submission to the showcase and the waitlist; a world's save (POST /v1/worlds) left the set
  * and takes the cached token. A `{id}` stands for one path segment.
  */
-export const SINGLE_USE_ROUTES: readonly string[] = ['POST /v1/forge/plan', 'POST /v1/agent/turn', 'POST /v1/agent/module',
+export const SINGLE_USE_ROUTES: readonly string[] = ['POST /v1/agent/turn', 'POST /v1/agent/module',
     'POST /v1/agent/review', 'POST /v1/me', 'DELETE /v1/me', 'POST /v1/worlds/{id}/submissions', 'POST /v1/waitlist'];
 
 /** Each route of {@link SINGLE_USE_ROUTES} as its method and a whole-path pattern, `{id}` one segment. */

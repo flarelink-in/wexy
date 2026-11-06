@@ -79,7 +79,7 @@ services:
       # from the Wexy web app is refused 403 `appcheck`. It fails closed: an unset value enforces, and
       # WEXY_APPCHECK_ENFORCE=false in Infisical is the deliberate way back to monitor mode, whose log gives the ratio.
       WEXY_APPCHECK_ENFORCE: ${WEXY_APPCHECK_ENFORCE:-true}
-      # Replay protection on the single-use routes (the plan, the agent turn, publishing): each limited-use token is
+      # Replay protection on the single-use routes (the agent turn, module and review, publishing): each limited-use token is
       # spent with Google, and one already spent is refused. In force only together with WEXY_APPCHECK_ENFORCE.
       WEXY_APPCHECK_REPLAY_ENFORCE: ${WEXY_APPCHECK_REPLAY_ENFORCE:-true}
       # The studio's origins, comma-separated: https://wexy.ai and https://www.wexy.ai (Firebase Hosting's custom

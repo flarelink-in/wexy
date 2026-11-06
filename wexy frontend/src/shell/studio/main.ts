@@ -1,14 +1,14 @@
-// The Wexy studio: an idea -> the planner's draft -> the author's functions -> the verify ladder on this graphics
+// The Wexy studio: agent creation, and no-model example/archive playback, verified on this graphics
 // card, with repair turns -> a live NullGraph world with controls, keyframes and MP4 export. The loop itself is
 // src/loop (plain TypeScript); this file draws what it emits, swaps the world in once it has passed (L8), and
-// reports the outcome. Worlds come from the backend's models (the live source) or from the playground's mock,
+// presents agent worlds from the backend (live) or no-model examples and archives,
 // and every world shows its source (design guidelines §3).
 // Two views of one studio: the default speaks in plain words (Journey, Controls, the capture bar); Developer
 // view, reached only by ?dev=1 (design guidelines §0), adds the technical log, the scene file, the WGSL editor
 // and the GPU numbers.
 // EA9.1 (agent-first-studio-design.md; Q114, Q115 and Q118 decided 2026-11-03): behind ?create=agent the idea box's
 // Create is the agent's (src/loop/creation.ts): one turn, its modules and their repairs, then "Show it", the GPU go. The
-// agent path is now the default; ?legacy=1 keeps h1 available. ?agent=1's panels watch the same controller.
+// agent is the only creation path (EA9.6); ?agent=1's panels watch the same controller.
 
 import '@fontsource-variable/geist';
 import '@fontsource-variable/unbounded';
@@ -17,20 +17,18 @@ import '../../styles/base.css';
 import '../../styles/studio.css';
 
 import { ARCHETYPES } from '../../forge-client/archetypes';
-import type { ForgeClient, GenerationInfo, OutcomeReport, Source } from '../../forge-client/client';
+import type { Source } from '../../forge-client/client';
 import { readConfig } from '../../forge-client/config';
 import { createApi, type Api } from '../../forge-client/http';
 import { createIdentity } from '../../forge-client/identity';
-import { createLiveClient } from '../../forge-client/live-client';
-import { MockClient } from '../../forge-client/mock-client';
+import { loadExample } from '../../forge-client/example';
 import { COLLISION_PROMPT } from '../../forge-client/examples/colliding-galaxies';
 import { cameraPath, firstView, keyframeToView, viewToKeyframe, type CameraView } from '../../runtime/camera-path';
 import { sceneFilm, snapshotLive, snapshotOf, sweepFilms, type FilmSource } from '../../capture/film';
 import type { GateDiagnostic } from '../../verify/gate';
 import { createLadder } from '../../verify/ladder';
-import { RUNG_NAMES, runLoop, type LoopEvent, type LoopOutcome, type VerifyFailure, type Verifier } from '../../loop/machine';
+import { RUNG_NAMES, type VerifyFailure, type Verifier } from '../../loop/machine';
 import { COPY } from '../../loop/copy';
-import { completeOutcome } from '../../loop/outcome';
 import { SceneRuntime } from '../../runtime/scene-runtime';
 import { MAX_LIVE_PIXELS, Viewport, type CameraMode } from '../../runtime/viewport';
 import type { CompiledBody, ModuleCompiler } from '../../contract/adapters/bodies';
@@ -43,7 +41,7 @@ import { fmtInt, fmtMs } from '../../shared/format';
 import { highlightWgslLine } from '../../shared/highlight';
 import { icon, loader, logo, wordmark } from '../../shared/icons';
 import { formatJson } from '../../shared/json';
-import { programText, QUALITY_UNIFORM, targetsOf, withProgramText, type CameraKeyframe, type ProgramTarget, type SceneSpec, type Style } from '../../contract/spec';
+import { programText, targetsOf, withProgramText, type CameraKeyframe, type ProgramTarget, type SceneSpec, type Style } from '../../contract/spec';
 import { AccountSession, browserHint } from '../../platform/session';
 import { AccountControl, creationAccount } from './account';
 import { account as accountWorld, EMPTY, install as installWorld, uncounted, type ActiveWorld } from './active-world';
@@ -53,7 +51,7 @@ import { DirectorPanel } from './director';
 import { canShareFile, ExportDialog, shareFile } from './export-dialog';
 import { formatById, FORMATS, frameSize, type FormatId } from './formats';
 import { selectCreationPath, worldLink, type CreationPathSelection } from './creation-path';
-import { Journey, type StageId } from './journey';
+import { Journey } from './journey';
 import { CREATIONS, SaveView } from './save-view';
 import { SavedOpening } from './saved-opening';
 import { STARTER_WORLDS, starterFile, type StarterWorld } from './starters';
@@ -176,23 +174,11 @@ function runNumbers(report: AgentReport | null): string {
     return parts.join(' · ');
 }
 
-/** A call's line in the technical log. A mock call made no request, so it has no model or tokens to show. */
-function callMeta(g: GenerationInfo): string {
-    if (g.source === 'mock') return `${fmtMs(g.ms)} · playground example, no model call`;
-    const tokens = g.usage ? `${fmtInt(g.usage.in)} in / ${fmtInt(g.usage.out)} out${g.usage.reasoning ? ` (${fmtInt(g.usage.reasoning)} reasoning)` : ''}${g.usage.cached ? `, ${fmtInt(g.usage.cached)} cached` : ''}` : 'tokens unknown';
-    const first = g.ttftMs === null ? '' : ` · first text ${fmtMs(g.ttftMs)}`;
-    return `${fmtMs(g.ms)}${first} · ${g.model ?? 'model unknown'} · ${tokens}${g.promptVersion ? ` · ${g.promptVersion}` : ''}`;
-}
-
 class Studio {
     private viewport: Viewport | null = null;
     private ladder: Verifier<SceneRuntime> | null = null;
-    private readonly mock = new MockClient({
-        fault: new URLSearchParams(location.search).get('fault') === '1',
-        autofix: new URLSearchParams(location.search).get('autofix') === '1',
-    });
-    /** The backend, when this build knows a gateway; otherwise every world is a playground example. */
-    private live: ForgeClient | null = null;
+    /** Whether this page may create through the agent gateway. */
+    private live = false;
     /** H, the one world on the stage (EA9.3): `runtime`, `spec`, `agentWorld` and `backdrop` each read it. */
     private world: World = EMPTY;
     /** Where the draft in the editor came from: the h1 world it was loaded with (h1's editor state, §5's LegacyDraft). */
@@ -207,7 +193,6 @@ class Studio {
     private duration = 12;
     private busy = false;
     private abort: AbortController | null = null;
-    private calls: GenerationInfo[] = [];
     private texts: Partial<Record<ProgramTarget, string>> = {};
     private marks: Partial<Record<ProgramTarget, CodeMark[]>> = {};
     private activeTarget: ProgramTarget = 'evolve';
@@ -215,6 +200,7 @@ class Studio {
     private selectedKey = -1;
     private specTimer = 0;
     private lastHud = 0;
+    /** Examples installed on this page, for the build line the drives read. */
     private builds = 0;
     private devView = false;
     /** The shape photos and videos are made in; the capture bar and the export dialog share it. */
@@ -345,7 +331,7 @@ class Studio {
         // One identity for every client: Firebase starts once per page.
         const identity = config.apiOrigin ? createIdentity(config) : null;
         const api = identity ? createApi(config, identity) : null;
-        if (api && params.get('source') !== 'mock') this.live = createLiveClient(api);
+        if (api && params.get('source') !== 'mock') this.live = true;
         // The account control (W1), for the live backend only: a playground example spends nothing and asks no one in.
         if (api && this.live && identity?.account) {
             // A Create with no caller yet makes its own first, through the transport's own lazy sign-in (EA9.1, §6 step 1).
@@ -355,7 +341,7 @@ class Studio {
             // W2: a browser that held a Google session shows its account at once; any other page view loads nothing.
             void this.accountControl.restore();
         }
-        // ?create=agent, ?legacy=1, ?agent=1 and the loaders, resolved once (agent-first-studio-design.md §9).
+        // ?create=agent, ?agent=1 and the loaders (and ?legacy=1, refused since EA9.6), resolved once (agent-first-studio-design.md §9).
         this.path = selectCreationPath(params, { switched: true, gateway: !!this.live },
             { unavailable: COPY.creation.noGateway, invalid: COPY.creation.invalid });
         const path = this.path;
@@ -457,9 +443,6 @@ class Studio {
             // A saved world by its id (W3.6): read, sealed and compiled here, then Show it on the stage's card, the go.
             else if (path.loader?.kind === 'world') void this.openFromUrl(path.loader.name, api);
             else if (path.autorun) void Promise.all([this.stageReady, this.creationReady]).then(() => this.creationView?.create());
-        } else if (!path.invalid && (params.has('autorun') || params.has('scene') || params.has('capture'))) {
-            // A starter named in the URL is a playground example, whatever client this build has.
-            await this.forge(starter || !this.live ? 'mock' : 'live');
         }
         if (params.has('t') && this.viewport) {
             this.seek(Number(params.get('t')));
@@ -1301,7 +1284,7 @@ class Studio {
         this.forgeBtn.disabled = true;
         // On the agent path the creation view owns this button's press (creation-view.ts): Create world, Stop or Show it.
         this.forgeBtn.addEventListener('click', () => {
-            if (this.playground || this.path.create !== 'agent') void this.forge(this.playground || !this.live ? 'mock' : 'live');
+            if (this.playground || this.path.create !== 'agent') void this.forge('mock');
         });
         for (const [mode, label] of [['live', 'Live creation'], ['playground', 'Playground']] as const) {
             const button = h('button', { type: 'button', 'aria-pressed': String((mode === 'playground') === this.playground) }, label);
@@ -1569,14 +1552,6 @@ class Studio {
         this.layoutFilmGate();
     }
 
-    /**
-     * During a run, Developer view follows the work onto the Spec and WGSL tabs only when a code tab is already
-     * open: a developer on Controls keeps Controls (the user, 10-28: the code is not what one opens the run to see).
-     */
-    private followTab(tab: Tab): void {
-        if (!this.devView || this.tabs.director.getAttribute('aria-selected') === 'true') return;
-        this.selectTab(tab);
-    }
 
     /** After a run that brought no world: the running world's controls again, or the empty panel. */
     /**
@@ -1622,252 +1597,78 @@ class Studio {
 
     // ------------------------------------------------------------------ generation
 
-    /** One run of the loop over `source`, drawn as it happens; the world swapped in only once it has passed. */
-    private async forge(source: Source): Promise<void> {
-        const vp = this.viewport;
-        if (!vp || !this.ladder || this.busy) return;
-        // ?agent=1: never beside a Run, whose probe times the device and whose ledger would leave this build out; a Run
-        // waits for an example's build the same way (stageHolders' `building`; EA9.3's review).
+    /** Load a hand-written example, with no model calls or repair loop (EA9.6). */
+    private async forge(_source: Source): Promise<void> {
+        if (!this.viewport || !this.ladder || this.busy) return;
+        // Never beside a Run, whose probe times the device; a Run waits for an example's build the same way.
         if (this.stage?.busy) return;
-        // Nor beside the agent path's paid work, a creation or a round on the world on the stage (whose install this build
-        // would end, its spend lost), nor a starter on its way: the Playground's shortcut reaches here past its disabled
-        // button (EA9.4's review).
         if (this.creation?.busy || this.reviews?.improving || this.starterOpening !== null) return;
         const prompt = this.prompt.value.trim();
         if (!prompt) { this.prompt.focus(); return; }
-        const client = source === 'mock' || !this.live ? this.mock : this.live;
-        // On the agent path no Create reaches h1's routes (I4): only its hand-written examples, over the mock.
-        if (this.path.create === 'agent' && client !== this.mock) return;
-        // A live world's calls are one identity's: while Sign in, Sign out or a collision's sign-in is under way, Create
-        // (the button or its shortcut) waits (the W1 review, 2026-11-02).
-        if (client === this.live && this.accountControl?.changing) return;
-        this.abort?.abort();
         const ac = new AbortController();
+        this.abort?.abort();
         this.abort = ac;
-        const req = { prompt, style: this.style.value as Style | 'auto', seconds: Number(this.length.value) };
         this.setBusy(true);
         this.trace.reset();
         this.journey.reset();
-        this.calls = [];
-        this.trace.setCalls([]);
         this.editedTargets.clear();
-        this.showSourceBadge(client.source);
-
-        const steps = new Map<string, TraceStep>();
-        /** Each function's text before its repair, for the count of changed lines (FE1.5). */
-        const bases = new Map<string, string>();
-        let stage: StageId = 'plan';
-        let candidate: SceneSpec | null = null;
-        const onEvent = (e: LoopEvent) => {
-            switch (e.type) {
-                case 'planning':
-                    steps.set('plan', this.trace.add('Plan the world', 'spark'));
-                    steps.get('plan')!.setDetail(COPY.reading);
-                    this.journey.start('plan', COPY.reading);
-                    this.followTab('spec');
-                    this.specView.setText('', true);
-                    break;
-                case 'plan-text':
-                    this.specView.setText(e.soFar, true);
-                    steps.get('plan')?.setDetail(`Streaming the plan · ${fmtInt(e.soFar.length)} characters`);
-                    break;
-                case 'planned': {
-                    this.account(e.generation);
-                    const named = e.draft.uniforms.filter(u => u.name !== QUALITY_UNIFORM);
-                    const controls = named.length;
-                    // The controls take shape as soon as the plan names them: shown now, asleep until the world runs.
-                    if (!e.ready) this.director.preview(named.map(u => ({ label: u.label, min: u.min, max: u.max, step: u.step ?? 0.01, value: u.value })));
-                    steps.get('plan')?.ok(`${e.draft.title}: ${e.draft.summary}${e.clamped.length ? ` · clamped: ${e.clamped.join('; ')}` : ''}`, callMeta(e.generation));
-                    $('#scene-title').textContent = e.draft.title;
-                    this.journey.done('plan', `${e.draft.title.split(':')[0]} · ${controls} things you can change`);
-                    stage = 'build';
-                    if (e.ready) this.journey.done('build', 'Motion, light and scenery');
-                    else this.journey.start('build', COPY.working);
-                    break;
-                }
-                case 'authoring':
-                    this.followTab('wgsl');
-                    this.texts = {};
-                    this.marks = {};
-                    this.wgslView.setEditable(false);
-                    for (const fn of e.fns) {
-                        const s = this.trace.add(`Write ${fn}`, 'code');
-                        s.setDetail(COPY.writing[fn]);
-                        steps.set(fn, s);
-                    }
-                    break;
-                case 'function-text':
-                    this.texts[e.fn] = e.soFar;
-                    this.activeTarget = e.fn;
-                    this.showTarget(e.fn, true);
-                    steps.get(e.fn)?.setDetail(`Writing ${e.fn} · ${lineCount(e.soFar)} lines`);
-                    this.journey.detail(stage, stage === 'build' ? COPY.writing[e.fn] : COPY.repairing);
-                    break;
-                case 'authored':
-                    this.account(e.generation);
-                    this.texts[e.fn] = e.text;
-                    steps.get(e.fn)?.ok(`${lineCount(e.text)} lines of WGSL against host h1`, callMeta(e.generation));
-                    break;
-                case 'verifying': {
-                    candidate = e.spec;
-                    if (e.attempt === 1) {
-                        this.journey.done('build', e.spec.sky === 'function' ? 'Motion, light and sky' : 'Motion and light');
-                        this.journey.start('check', COPY.checking);
-                        stage = 'check';
-                    } else {
-                        this.journey.detail('check', COPY.checking);
-                    }
-                    this.draftSpec = e.spec;
-                    this.draftIsLive = false;
-                    this.syncTexts(e.spec);
-                    const s = this.trace.add(e.attempt === 1 ? 'Verify on this graphics card' : `Verify again · attempt ${e.attempt}`, 'gate');
-                    s.setDetail('Lint, auto-fix, compile, probe, sanity, then the full build…');
-                    steps.set(`verify${e.attempt}`, s);
-                    if (e.attempt === 1) this.showMessage(COPY.warming, 'busy');
-                    break;
-                }
-                case 'verified': {
-                    this.showMessage(null);
-                    const s = steps.get(`verify${e.attempt}`);
-                    const rungs = e.result.report.rungs.map(r => `${r.rung} ${RUNG_NAMES[r.rung]} ${r.ok ? '✓' : '✗'} ${fmtMs(r.ms)}`).join(' · ');
-                    if (e.result.ok) {
-                        s?.ok(rungs, fmtMs(e.result.report.totalMs));
-                        this.showDiagnostics([]);
-                    } else {
-                        const f = e.result.failure;
-                        s?.error(`${f.rung}: ${f.message}`, fmtMs(e.result.report.totalMs));
-                        if (f.diagnostics[0]) s?.attach(diagnosticBlock(f.diagnostics[0]));
-                        this.showFailure(f);
-                    }
-                    if (e.result.report.probe) {
-                        const p = e.result.report.probe;
-                        const draw = p.frameMs === null ? 'draw not timed' : `draw ${p.frameMs.toFixed(1)}`;
-                        const measured = p.measuredFrameMs === null ? `${p.measuredStepMs.toFixed(2)} ms a step` : `${p.measuredStepMs.toFixed(2)} and ${p.measuredFrameMs.toFixed(2)} ms`;
-                        s?.attach(h('div', { class: 'snippet' }, h('div', { class: 'snippet-msg' }, `Probe: ${Math.round(p.predictedMs)} ms a frame predicted (step ${p.stepMs.toFixed(1)}, ${draw}); measured ${measured} in the small probe; budget ${p.budgetMs} ms`)));
-                    }
-                    break;
-                }
-                case 'repairing': {
-                    // The text the repair starts from, kept here: the stream's function-text events overwrite
-                    // texts[fn] as the repair arrives, so at 'repaired' the old text would already be gone.
-                    bases.set(e.fn, this.texts[e.fn] ?? '');
-                    this.journey.detail('check', COPY.repairing);
-                    const s = this.trace.add(`Repair ${e.fn} · attempt ${e.attempt}`, 'code');
-                    s.setDetail(`Sending ${e.failure.diagnostics.length} finding${e.failure.diagnostics.length === 1 ? '' : 's'} from ${e.failure.rung}…`);
-                    s.attach(h('pre', { class: 'payload' }, formatJson(e.failure.diagnostics.map(d => ({ source: d.source, line: d.line, column: d.column, message: d.message, snippet: d.snippet })))));
-                    steps.set(e.fn, s);
-                    break;
-                }
-                case 'repaired': {
-                    this.account(e.generation);
-                    const before = bases.get(e.fn) ?? '';
-                    this.texts[e.fn] = e.text;
-                    this.marks[e.fn] = changedLines(before, e.text).map(line => ({ line, kind: 'patched' as const, message: 'changed by the repair' }));
-                    this.showTarget(e.fn);
-                    steps.get(e.fn)?.ok(`${e.fn} rewritten: ${this.marks[e.fn]!.length} line${this.marks[e.fn]!.length === 1 ? '' : 's'} changed`, callMeta(e.generation));
-                    break;
-                }
-                case 'retrying': {
-                    // The failed try closes with its reason, and the retry gets a row of its own: no clock runs on
-                    // after a failure (the user, 10-28: "planner never get closed once downstream fails").
-                    const key = e.what;
-                    steps.get(key)?.warn(`${e.error.code}: ${e.error.message} Trying once more…`);
-                    const again = key === 'plan' ? this.trace.add('Plan the world · try 2', 'spark') : this.trace.add(`Write ${key} · try 2`, 'code');
-                    again.setDetail(key === 'plan' ? COPY.reading : COPY.writing[key]);
-                    steps.set(key, again);
-                    break;
-                }
-                case 'slow': {
-                    const text = e.what === 'plan' ? COPY.slow.plan : e.what === 'repair' ? COPY.slow.repair : COPY.slow[e.what];
-                    this.journey.detail(stage, text);
-                    if (e.what !== 'repair') steps.get(e.what)?.setDetail(text);
-                    break;
-                }
-            }
-        };
-
+        this.showSourceBadge('mock');
+        // The backdrop is held by the ladder once it is on the viewport (createLadder's wrapper above), not here: a hold
+        // taken before then is a no-op that would stand in for the real one, and the probe would time the backdrop too
+        // (EA9.6's independent review).
+        let check: TraceStep | null = null;
         try {
-            const outcome: LoopOutcome<SceneRuntime> = await runLoop({ client, verifier: this.ladder }, req, onEvent, ac.signal);
-            if (!outcome.ok) {
-                // Whatever was still running stops with the run, with the reason on its own row.
-                for (const s of steps.values()) {
-                    if (!s.running) continue;
-                    if (outcome.kind === 'cancelled') s.warn('Cancelled');
-                    else s.error(outcome.detail);
-                }
-                if (outcome.kind === 'cancelled') return;
-                this.trace.add('Stopped', stage === 'plan' ? 'spark' : stage === 'build' ? 'code' : 'gate').error(`${outcome.sentence} (${outcome.detail})`);
-                this.journey.fail(stage, outcome.sentence);
-                // W1: the free world spent, or today's made: the limit dialog, the idea in its box and the world on stage kept.
-                if (outcome.kind === 'allowance' || outcome.kind === 'quota') this.accountControl?.limit(outcome.kind, outcome.sentence);
+            const spec = loadExample(prompt, this.style.value as Style | 'auto');
+            this.journey.done('plan', spec.title);
+            this.journey.done('build', 'Playground example · no model call');
+            this.journey.start('check', COPY.checking);
+            // The example in the editor while it is checked, so a refusal's marks land on its lines (as h1's loop did).
+            this.draftSpec = spec;
+            this.draftIsLive = false;
+            this.syncTexts(spec);
+            check = this.trace.add('Verify on this graphics card', 'gate');
+            check.setDetail('Lint, auto-fix, compile, probe, sanity, then the full build…');
+            const result = await this.ladder.verify(spec, ac.signal);
+            if (ac.signal.aborted) { check.warn('Cancelled'); return; }
+            const rungs = result.report.rungs.map(r => `${r.rung} ${RUNG_NAMES[r.rung]} ${r.ok ? '✓' : '✗'} ${fmtMs(r.ms)}`).join(' · ');
+            if (!result.ok) {
+                const f = result.failure;
+                check.error(`${f.rung}: ${f.message} · ${rungs}`, fmtMs(result.report.totalMs));
+                this.showFailure(f);
+                this.journey.fail('check', COPY.failures[f.reason === 'probe' ? 'too-heavy' : 'verify']);
                 this.restoreControls();
-                // A world the ladder refused is evidence too (F6): reported now, with no fps.
-                if (outcome.outcome) this.send(client, completeOutcome(outcome.outcome, { fps: null, ...this.gpuLabels() }));
-                if (candidate) {
-                    // The draft stays in the editor for a manual fix (Developer view).
-                    this.draftSpec = candidate;
-                    this.wgslView.setEditable(true);
-                }
+                // The draft stays in the editor for a manual fix (Developer view).
+                this.wgslView.setEditable(true);
                 return;
             }
-            const { world, spec, stats } = outcome;
-            if (!this.install(world, spec, false, client.source)) {
-                // Not switched: the world on the stage stays, and the one built is gone (its teardown said in the trace).
+            check.ok(rungs, fmtMs(result.report.totalMs));
+            this.showDiagnostics([]);
+            if (!this.install(result.world, result.spec, false, 'mock')) {
                 this.journey.fail('check', COPY.failures.internal);
                 this.restoreControls();
                 return;
             }
+            // The build line the drives wait for (dev/shots-studio.mjs, dev/film-smoke.mjs).
             this.builds++;
-            console.info(`Wexy: build ${this.builds} "${spec.title}" live (${client.source}), ${world.count} particles, plan ${Math.round(stats.planMs)} ms, author ${Math.round(stats.authorMs)} ms, ${stats.repairs} repair(s), ${stats.autofixes} auto-fix(es)`);
+            const autofixes = Object.values(result.report.autofixes).reduce((n, fixes) => n + (fixes?.length ?? 0), 0);
+            console.info(`Wexy: build ${this.builds} "${result.spec.title}" live (mock), ${result.world.count} particles, ${autofixes} auto-fix(es)`);
             this.journey.done('check', COPY.runs);
             this.journey.done('ready', COPY.ready);
             this.nudgeRecord();
-            this.report(client, world, outcome.outcome);
-        } catch (e) {
-            if ((e as Error).name === 'AbortError') return;
-            for (const s of steps.values()) if (s.running) s.error((e as Error).message);
-            this.trace.add('Pipeline stopped', 'gpu').error((e as Error).message);
-            this.journey.fail(stage, COPY.failures.internal);
-            this.restoreControls();
+        } catch (error) {
+            if ((error as Error).name === 'AbortError') {
+                if (check?.running) check.warn('Cancelled');
+            } else {
+                if (check?.running) check.error((error as Error).message ?? String(error));
+                this.trace.add('Example stopped', 'gpu').error(String(error));
+                this.journey.fail('check', COPY.failures.internal);
+                this.restoreControls();
+            }
         } finally {
             if (this.abort === ac) this.abort = null;
-            // A run that brought no world lets the backdrop play again.
             this.releaseBackdrop();
             this.setBusy(false);
-            // The call made or found an identity: who it is, and what the server says is left (W1).
-            if (client === this.live) void this.accountControl?.afterEntry();
         }
-    }
-
-    /** The outcome report, once the preview has settled; the backend turns these into Wexy's numbers. */
-    private report(client: ForgeClient, world: SceneRuntime, outcome: OutcomeReport): void {
-        const vp = this.viewport!;
-        const live = this.trace.add('Live preview', 'live');
-        live.setDetail('Letting the frame-time guard settle…');
-        window.setTimeout(() => {
-            if (this.runtime !== world) { live.warn('Replaced before it settled'); return; }
-            const s = vp.frameStats;
-            live.ok(`${Math.round(s.fps)} fps at ${s.width}×${s.height}${world.qualityFloor !== null ? ` · quality ${s.quality.toFixed(2)}` : ''} · director ready`, 'export always renders at full quality');
-            this.send(client, completeOutcome(outcome, { fps: s.fps, ...this.gpuLabels() }));
-        }, 4000);
-    }
-
-    /** This graphics card and browser, as an outcome names them. */
-    private gpuLabels(): { adapter: string | null; browser: string | null } {
-        const vp = this.viewport!;
-        const brand = (navigator as Navigator & { userAgentData?: { brands?: { brand: string; version: string }[] } }).userAgentData?.brands?.find(b => !/Not.A.Brand/i.test(b.brand));
-        return {
-            adapter: `${vp.gpu.vendor} ${vp.gpu.architecture}`.trim() || null,
-            browser: brand ? `${brand.brand} ${brand.version}` : navigator.userAgent.slice(0, 64),
-        };
-    }
-
-    /** An outcome to the backend, with its own row in the trace; a playground example is heard by no backend. */
-    private send(client: ForgeClient, complete: OutcomeReport): void {
-        if (client.source === 'mock') return;
-        const step = this.trace.add('Report the outcome', 'spark');
-        step.setDetail(`${complete.generationIds.length} generations · first pass ${complete.firstPassOk ? 'ok' : 'failed'} · ${complete.repairs} repairs · ${complete.fps ?? 'no'} fps`);
-        client.report(complete).then(() => step.ok('Recorded by the backend (202)'), e => step.warn(`Not recorded: ${(e as Error).message}`));
     }
 
     /** The failing rung's diagnostics in the editor, on the lines they name. */
@@ -2011,13 +1812,6 @@ class Studio {
         this.diagList.replaceChildren();
         this.swapBtn.disabled = true;
         this.revertBtn.disabled = true;
-    }
-
-    /** Count a model call. A mock call made no request. */
-    private account(g: GenerationInfo): void {
-        if (g.source === 'mock') return;
-        this.calls.push(g);
-        this.trace.setCalls(this.calls);
     }
 
     private setBusy(busy: boolean): void {
@@ -2180,7 +1974,7 @@ class Studio {
                 // review). Only the first press of the keys counts, on either path.
                 if (e.repeat) return;
                 if (this.path.create === 'agent' && !this.playground) this.creationView?.shortcut();
-                else void this.forge(this.playground || !this.live ? 'mock' : 'live');
+                else void this.forge('mock');
                 return;
             }
             if (isTyping() || e.ctrlKey || e.metaKey || e.altKey || this.exporter.el.open) return;
@@ -2467,18 +2261,5 @@ function round3(v: number): number {
     return Math.round(v * 1000) / 1000;
 }
 
-/** The lines of `after` that differ from `before`, 1-based. */
-function changedLines(before: string, after: string): number[] {
-    const a = before.split('\n'), b = after.split('\n');
-    const lines: number[] = [];
-    for (let i = 0; i < b.length; i++) if (a[i] !== b[i]) lines.push(i + 1);
-    return lines;
-}
-
-function diagnosticBlock(d: GateDiagnostic): HTMLElement {
-    return h('div', { class: 'snippet snippet-error' },
-        h('div', { class: 'snippet-msg' }, `${d.target}${d.line ? ` line ${d.line}` : ''}: ${d.message}`),
-        d.snippet ? h('code', { html: `<span class="ln-no">${d.line}</span>${highlightWgslLine(d.snippet)}` }) : null);
-}
 
 void new Studio().init();

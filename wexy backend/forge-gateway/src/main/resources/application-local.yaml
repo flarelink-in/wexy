@@ -29,15 +29,10 @@ wexy:
       burst-capacity: 500
     ban:
       enabled: false
-    # Development is never rate limited by its own gateway (forge-loop design §9): a smoke run makes
-    # four creates at once, and the compiled defaults (0.05 to 0.5 a second) answer 429 to a second
-    # run. Everything here comes from one address, so the address-keyed buckets are raised too.
+    # Development is never rate limited by its own gateway (forge-loop design §9): a drive makes
+    # several worlds in a row, and the compiled defaults answer 429 to a second run. Everything here
+    # comes from one address, so the address-keyed buckets are raised too.
     buckets:
-      forge-create: { refill-per-second: 5, burst-capacity: 100 }
-      forge-create-user: { refill-per-second: 5, burst-capacity: 100 }
-      forge-create-anonymous: { refill-per-second: 5, burst-capacity: 100 }
-      forge-edit: { refill-per-second: 5, burst-capacity: 100 }
-      forge-edit-user: { refill-per-second: 5, burst-capacity: 100 }
       agent-turn: { refill-per-second: 30, burst-capacity: 600, request-cost: 6 }
       agent-turn-user: { refill-per-second: 30, burst-capacity: 600, request-cost: 6 }
       agent-turn-anonymous: { refill-per-second: 30, burst-capacity: 600, request-cost: 6 }

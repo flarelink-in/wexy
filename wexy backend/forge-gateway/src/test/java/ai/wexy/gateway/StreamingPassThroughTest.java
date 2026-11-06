@@ -87,7 +87,7 @@ class StreamingPassThroughTest {
         List<Long> arrivals = new CopyOnWriteArrayList<>();
 
         FluxExchangeResult<ServerSentEvent<String>> result = client.mutate().responseTimeout(Duration.ofSeconds(20)).build()
-                .post().uri("/v1/forge/plan")
+                .post().uri("/v1/agent/turn")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer dev.anonymous.g1")
                 .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"prompt\":\"a spiral galaxy\"}")
                 .exchange()

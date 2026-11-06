@@ -12,9 +12,9 @@ public sealed interface SseEvent {
 
     /**
      * @param source        {@code live} or {@code archive}
-     * @param role          the role that answered: planner, author, repairer, escalator, director
-     * @param fn            the function an author or repair call writes, or null
-     * @param promptVersion the template that built the call, e.g. {@code author.evolve.v1}
+     * @param role          the role that answered (h1's planner, author, repairer, escalator or director until EA9.6)
+     * @param fn            the function an author or repair call wrote, or null
+     * @param promptVersion the template that built the call, e.g. {@code module.author.v4}
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     record Meta(String generationId, String model, String source, String role, String fn, String promptVersion)

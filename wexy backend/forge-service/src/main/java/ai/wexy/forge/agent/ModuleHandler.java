@@ -312,8 +312,8 @@ public class ModuleHandler {
     }
 
     /**
-     * One call's lifecycle, from {@code begin} to its single finish, as the loop's own calls keep theirs
-     * ({@code LoopHandler}): what the model has said, what the meter decided, and whether the client is still there. A
+     * One call's lifecycle, from {@code begin} to its single finish, as h1's loop kept its calls' until EA9.6: what the
+     * model has said, what the meter decided, and whether the client is still there. A
      * cancel before the meter answered waits for its answer, then records CANCELLED with the reservation, or DENIED;
      * {@code finished} lets only the first finish count.
      */

@@ -393,6 +393,29 @@ class TurnAllowanceRoutesTest {
         assertThat(early.path("left").asLong()).isEqualTo(1);
     }
 
+    /**
+     * PL-T19 on the allowance route itself (EA9.6's independent review: h1's AllowanceRoutesTest held these): exactly
+     * {label, left, resetsAt}, never cached; an anonymous caller the gateway gave no network has none left; a store that
+     * cannot answer is 503, never a zero; and without the gateway's token there is no caller, so no answer.
+     */
+    @Test
+    void theAllowanceIsTheCallersOwnNeverCachedAndNeverAPublicRead() throws Exception {
+        start();
+        client.get().uri("/v1/forge/allowance").header(InternalToken.HEADER, anonymous("u1")).exchange()
+                .expectStatus().isOk().expectHeader().valueEquals("Cache-Control", "no-store");
+        JsonNode early = allowance(google("u1"));
+        assertThat(early.size()).isEqualTo(3);
+        assertThat(early.path("resetsAt").asText()).matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z");
+        assertThat(allowance(AgentRoutesTest.token("u5", true, null)).path("left").asLong()).as("no network, nothing left").isZero();
+
+        client.get().uri("/v1/forge/allowance").exchange().expectStatus().isUnauthorized()
+                .expectBody().jsonPath("$.code").isEqualTo("auth");
+        admit.store().down(true);
+        client.get().uri("/v1/forge/allowance").header(InternalToken.HEADER, anonymous("u1")).exchange()
+                .expectStatus().isEqualTo(503).expectBody().jsonPath("$.code").isEqualTo("unavailable");
+        assertThat(fake.chatRequests()).isZero();
+    }
+
     /** I13 on the turn route: a turn's own answer carries no allowance: only the allowance route says what is left. */
     @Test
     void noTurnAnswerCarriesTheAllowance() {

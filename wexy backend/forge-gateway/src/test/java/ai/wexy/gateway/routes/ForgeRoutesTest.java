@@ -30,8 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ForgeRoutesTest {
 
     private static final List<String> PUBLIC_READS = List.of("forge-mode", "archive-match", "stats");
-    private static final List<String> SIGNED_IN = List.of("forge-plan", "forge-author", "forge-repair",
-            "forge-direct", "forge-outcomes", "agent-turn", "agent-module", "agent-review", "agent-review-terms",
+    private static final List<String> SIGNED_IN = List.of("agent-turn", "agent-module", "agent-review", "agent-review-terms",
             "forge-allowance");
     /** The platform's routes (W2; PlatformRoutes), all of §10's table. */
     static final List<String> PLATFORM = List.of("me-bootstrap", "me-read", "me-profile", "me-usage", "me-operation",
@@ -59,8 +58,7 @@ class ForgeRoutesTest {
     void theRoutesAreExactlyTheApiTable() {
         List<String> ids = routeLocator.getRoutes().map(Route::getId).collectList().block();
 
-        List<String> forge = List.of("forge-plan", "forge-author", "forge-repair", "forge-direct",
-                "forge-outcomes", "agent-turn", "agent-module", "agent-review", "agent-review-terms", "forge-allowance",
+        List<String> forge = List.of("agent-turn", "agent-module", "agent-review", "agent-review-terms", "forge-allowance",
                 "forge-mode", "archive-match", "stats", "admin");
         // W2: the worlds and the showcase left forge for the platform (share links' complete and report are gone).
         assertThat(ids).containsExactlyInAnyOrderElementsOf(java.util.stream.Stream.concat(forge.stream(), PLATFORM.stream()).toList());
@@ -68,7 +66,7 @@ class ForgeRoutesTest {
 
     /**
      * The routes that spend App Check, as the frontend's SINGLE_USE_ROUTES names them (test/http.test.mjs pins the same
-     * list): POST /v1/forge/plan, /v1/agent/turn and /v1/agent/module; POST /v1/agent/review (EA6.4); since W2 (§10)
+     * list): POST /v1/agent/turn and /v1/agent/module; POST /v1/agent/review (EA6.4); since W2 (§10)
      * POST /v1/me, DELETE /v1/me, POST /v1/worlds/{id}/submissions and POST /v1/waitlist. POST /v1/worlds left the set:
      * a save takes the cached token.
      */
@@ -80,11 +78,10 @@ class ForgeRoutesTest {
                 .collectList()
                 .block();
 
-        assertThat(spending).containsExactlyInAnyOrder("forge-plan", "agent-turn", "agent-module", "agent-review",
+        assertThat(spending).containsExactlyInAnyOrder("agent-turn", "agent-module", "agent-review",
                 "me-bootstrap", "me-delete", "worlds-submit", "waitlist");
 
         // Spending includes the attestation, so neither runs the plain check as well.
-        assertThat(route("forge-plan").getFilters()).doesNotContain(appCheck);
         assertThat(route("me-bootstrap").getFilters()).doesNotContain(appCheck);
         assertThat(route("worlds-create").getFilters()).contains(appCheck).doesNotContain(appCheck.singleUse());
     }
@@ -147,17 +144,9 @@ class ForgeRoutesTest {
         assertThat(body.limitFor("GET", "/v1/agent/review")).isEqualTo(256 * 1024L);
         assertThat(body.limitFor("POST", "/v1/agent/review/")).isEqualTo(256 * 1024L);
         assertThat(body.limitFor("POST", "/v1/agent/module")).isEqualTo(256 * 1024L);
-        assertThat(body.limitFor("POST", "/v1/forge/plan")).isEqualTo(256 * 1024L);
+        assertThat(body.limitFor("POST", "/v1/agent/turn")).isEqualTo(256 * 1024L);
     }
 
-    @Test
-    void theOtherWritesKeepTheOrdinaryCheck() {
-        for (String id : List.of("forge-author", "forge-repair", "forge-direct", "forge-outcomes")) {
-            assertThat(route(id).getFilters()).as(id)
-                    .contains(appCheck)
-                    .doesNotContain(appCheck.singleUse());
-        }
-    }
 
     /** Share pages and crawlers carry neither a sign-in nor an App Check token. */
     @Test
@@ -177,7 +166,7 @@ class ForgeRoutesTest {
      */
     @Test
     void everyRouteThatSpendsAsksTheAccountsStanding() {
-        for (String id : List.of("forge-plan", "forge-author", "forge-repair", "forge-direct", "forge-outcomes", "agent-turn",
+        for (String id : List.of("agent-turn",
                 "agent-module", "agent-review", "forge-allowance")) {
             assertThat(route(id).getFilters()).as(id).contains(standing.spending());
         }
@@ -220,14 +209,14 @@ class ForgeRoutesTest {
     /** An anonymous account costs a script nothing, so creating gets a tighter per-account budget. */
     @Test
     void createRoutesAreTieredForAnonymousCallers() {
-        for (String id : List.of("forge-plan", "forge-author")) {
+        for (String id : List.of("agent-module")) {
             RateLimits.Tiered tiered = route(id).getFilters().stream()
                     .filter(f -> f instanceof RateLimits.Tiered)
                     .map(f -> (RateLimits.Tiered) f)
                     .findFirst()
                     .orElseThrow(() -> new AssertionError(id + " has no tiered limiter"));
-            assertThat(tiered.signedIn().bucket()).isEqualTo("forge-create-user");
-            assertThat(tiered.anonymous().bucket()).isEqualTo("forge-create-anonymous");
+            assertThat(tiered.signedIn().bucket()).isEqualTo("agent-module-user");
+            assertThat(tiered.anonymous().bucket()).isEqualTo("agent-module-anonymous");
             assertThat(tiered.getOrder()).isEqualTo(RateLimits.POST_AUTH_ORDER);
         }
     }
@@ -245,7 +234,7 @@ class ForgeRoutesTest {
         for (String bucket : List.of("agent-turn", "agent-turn-user", "agent-turn-anonymous")) {
             assertThat(shield.getBuckets().get(bucket).getRequestCost()).as(bucket).isEqualTo(ai.wexy.common.AgentTurn.MAX_CALLS);
         }
-        assertThat(shield.getBuckets().get("forge-create-user").getRequestCost()).isEqualTo(1);
+        assertThat(shield.getBuckets().get("agent-module-user").getRequestCost()).isEqualTo(1);
     }
 
     /**
@@ -321,7 +310,7 @@ class ForgeRoutesTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("request-cost must be " + ai.wexy.common.AgentTurn.MAX_CALLS);
         assertThat(properties.bucket("agent-turn").getRequestCost()).isEqualTo(ai.wexy.common.AgentTurn.MAX_CALLS);
-        assertThat(properties.bucket("forge-create-user").getRequestCost()).isEqualTo(1);
+        assertThat(properties.bucket("agent-module-user").getRequestCost()).isEqualTo(1);
     }
 
     private Route route(String id) {

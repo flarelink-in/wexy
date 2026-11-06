@@ -15,7 +15,7 @@ import java.util.Map;
  * binder reads as path separators. Such keys must be bracketed in YAML: {@code "[muse-spark-1.3]"}
  * (gotchas; ModelCatalogTest pins it).
  *
- * @param roles  by role name: planner, author, repairer, escalator, director
+ * @param roles  by role name: agent, module and review (and paper, under its profile); h1's went at EA9.6
  * @param prices by model id, in USD per million tokens
  */
 @ConfigurationProperties(prefix = "wexy")
@@ -35,8 +35,8 @@ public record ModelProperties(Map<String, Role> roles, Map<String, Price> prices
      * @param timeout         the whole call's deadline
      * @param reasoningEffort Meta's {@code reasoning_effort}: minimal, low, medium, high, xhigh or max;
      *                        null lets the model choose. Reasoning cannot be turned off
-     * @param response        the schema the answer must match ({@code scene-draft.v1},
-     *                        {@code edit-plan.v1}), or null when the answer is text
+     * @param response        the schema the answer must match, or null when the answer is text or the caller
+     *                        names its own response format (the agent's {@code agent-action.v3})
      */
     public record Role(String model, String provider, Integer maxOutputTokens, Duration timeout,
                        String reasoningEffort, String response) {

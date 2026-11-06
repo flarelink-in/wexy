@@ -40,7 +40,7 @@ public class PromptAdmission {
         this.safety = safety;
     }
 
-    /** An entry request (a plan, a turn without a base): its grant, or the refusal. `route` names it in the log. */
+    /** An entry request (a turn without a base): its grant, or the refusal. `route` names it in the log. */
     public Grant entry(Caller caller, String entryId, String text, String route) {
         grants.check(caller);
         checkSafety(text, route);
@@ -149,45 +149,6 @@ public class PromptAdmission {
     }
 
     /**
-     * A Director turn: its instruction is the creator's own words each time, so it is always checked; then inside its
-     * plan's prompt (null) when it names one of the caller's with a turn left, an entry of its own otherwise.
-     */
-    public Grant director(Caller caller, String planId, String directId, String turn) {
-        checkSafety(turn, "direct");
-        if (planId != null && grants.join(caller, planId, PromptGrants.Kind.DIRECTOR, null, null)) {
-            return null;
-        }
-        grants.check(caller);
-        return grants.grant(caller, directId, sha256(turn));
-    }
-
-    /**
-     * A plan that replaces one the model failed (the studio's own retry; the W1 bug hunt, 2026-11-02): inside that plan's
-     * prompt when it names one of the caller's, carries the same idea and a re-plan is left, since that plan's call was
-     * dispatched and its prompt spent; an entry otherwise. The idea was checked when the prompt was granted.
-     */
-    public Grant replan(Caller caller, String failedPlanId, String planId, String prompt) {
-        if (failedPlanId != null && grants.join(caller, failedPlanId, PromptGrants.Kind.REPLAN, sha256(prompt), planId)) {
-            return null;
-        }
-        return entry(caller, planId, prompt, "plan");
-    }
-
-    /**
-     * A plan's author or repair call (the W1 bug hunt, 2026-11-02): inside the plan's prompt, within its budget of `kind`
-     * (siblings included), or refused before anything is recorded or sent: {@code 404} when the prompt is gone,
-     * {@code 429 rate} when the budget is spent. It carries no text of the creator's: the plan's is the server's. Blocking.
-     */
-    public void planCall(Caller caller, String planId, PromptGrants.Kind kind) {
-        switch (grants.follow(caller, planId, kind, null, null)) {
-            case JOINED -> { }
-            case FULL -> throw new ForgeException(ErrorCode.RATE, kind == PromptGrants.Kind.REPAIR
-                    ? "This world has made all of its repair calls." : "This world has made all of its function calls.");
-            case NONE -> throw new ForgeException(ErrorCode.NOT_FOUND, "This world isn't available.");
-        }
-    }
-
-    /**
      * A module call (the W1 review, 2026-11-02): inside its turn's prompt or refused, never an entry of its own. It must
      * carry the prompt its turn was granted for, whose text was checked then, so it is not checked again; the grant must
      * still be alive and the caller's, with a module call left. Otherwise nothing is recorded or sent: {@code 404} as for
@@ -249,7 +210,7 @@ public class PromptAdmission {
                         Schedulers.boundedElastic().schedule(((Grant) grant)::release)));
     }
 
-    /** One text (an idea, a Director turn), with its joined words spelled out where it has any (the EA9.4 review). */
+    /** One text (an idea, a follow-up's changed idea), with its joined words spelled out where it has any (the EA9.4 review). */
     private void checkSafety(String text, String route) {
         String spelled = JOINED.matcher(text).find() ? spelledOut(text) : "";
         ContentSafety.Verdict verdict = safety.check(spelled.isEmpty() || spelled.equals(text) ? text : text + "\n" + spelled);

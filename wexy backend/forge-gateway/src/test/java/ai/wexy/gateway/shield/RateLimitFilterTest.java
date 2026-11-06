@@ -37,14 +37,14 @@ class RateLimitFilterTest {
     }
 
     private static MockServerWebExchange exchange() {
-        return MockServerWebExchange.from(MockServerHttpRequest.post("/v1/forge/plan"));
+        return MockServerWebExchange.from(MockServerHttpRequest.post("/v1/agent/turn"));
     }
 
     @Test
     void aDenialAnswers429WithTheRateCodeAndTheLimitersRetryAfter() {
         KeyResolver key = exchange -> Mono.just("ip:203.0.113.7");
         RateLimitFilter filter = new RateLimitFilter(limiter(false, Map.of("Retry-After", "12",
-                "X-RateLimit-Remaining", "0")), key, RateLimits.PRE_AUTH_ORDER, "forge-create");
+                "X-RateLimit-Remaining", "0")), key, RateLimits.PRE_AUTH_ORDER, "agent-module");
         MockServerWebExchange exchange = exchange();
 
         filter.filter(exchange, chain).block();
@@ -74,7 +74,7 @@ class RateLimitFilterTest {
     void anAllowedRequestPassesWithTheLimitersHeaders() {
         KeyResolver key = exchange -> Mono.just("u:uid-1");
         RateLimitFilter filter = new RateLimitFilter(limiter(true, Map.of("X-RateLimit-Remaining", "7")), key,
-                RateLimits.POST_AUTH_ORDER, "forge-edit-user");
+                RateLimits.POST_AUTH_ORDER, "agent-review-user");
         MockServerWebExchange exchange = exchange();
 
         filter.filter(exchange, chain).block();

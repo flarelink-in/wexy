@@ -34,7 +34,7 @@ class DevTokenVerifierProfileTest {
 
     @Test
     void aDevTokenIsRefusedOutsideTheLocalProfile() {
-        client.post().uri("/v1/forge/plan")
+        client.post().uri("/v1/agent/turn")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer dev.anonymous.x")
                 .contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
                 .exchange()

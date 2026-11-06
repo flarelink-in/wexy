@@ -70,11 +70,11 @@ class GatewayShieldTests {
     @Test
     void userKeyFallsBackToAddressWhenNotAuthenticated() {
         MockServerWebExchange unauthenticated = exchangeFrom("203.0.113.9",
-                MockServerHttpRequest.post("/v1/forge/plan"));
+                MockServerHttpRequest.post("/v1/agent/turn"));
         assertThat(authenticatedUserKeyResolver.resolve(unauthenticated).block()).isEqualTo("ip:203.0.113.9");
 
         MockServerWebExchange authenticated = exchangeFrom("203.0.113.9",
-                MockServerHttpRequest.post("/v1/forge/plan"));
+                MockServerHttpRequest.post("/v1/agent/turn"));
         authenticated.getAttributes().put(AuthAttributes.UID, "firebase-uid-1");
         assertThat(authenticatedUserKeyResolver.resolve(authenticated).block()).isEqualTo("u:firebase-uid-1");
     }
@@ -82,18 +82,18 @@ class GatewayShieldTests {
     /** Limits are tunable from configuration, not baked into code. */
     @Test
     void bucketLimitsBindFromConfiguration() {
-        // application-test.yaml raises forge-edit above its compiled default.
-        assertThat(properties.bucket("forge-edit").getRefillPerSecond()).isEqualTo(5d);
-        assertThat(properties.bucket("forge-edit").getBurstCapacity()).isEqualTo(30d);
+        // application-test.yaml raises review-read above its compiled default.
+        assertThat(properties.bucket("review-read").getRefillPerSecond()).isEqualTo(5d);
+        assertThat(properties.bucket("review-read").getBurstCapacity()).isEqualTo(30d);
         assertThat(properties.getEdge().getBurstCapacity()).isEqualTo(500d);
         // The others keep their defaults.
-        assertThat(properties.bucket("forge-create-anonymous").getBurstCapacity()).isEqualTo(8d);
+        assertThat(properties.bucket("agent-module-anonymous").getBurstCapacity()).isEqualTo(22d);
     }
 
     /** One world is about four create requests at once: a create bucket smaller than that breaks the studio. */
     @Test
     void everyCreateBucketHoldsAWholeWorld() {
-        for (String name : new String[]{"forge-create", "forge-create-user", "forge-create-anonymous"}) {
+        for (String name : new String[]{"agent-module", "agent-module-user", "agent-module-anonymous"}) {
             assertThat(properties.bucket(name).getBurstCapacity()).as(name).isGreaterThanOrEqualTo(4d);
         }
     }

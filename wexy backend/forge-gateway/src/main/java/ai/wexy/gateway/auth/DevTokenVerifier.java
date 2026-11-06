@@ -23,7 +23,7 @@ import java.util.regex.Pattern;
  * <p>The bean exists under {@code local} alone ({@code DevTokenVerifierProfileTest} pins it, and a
  * mutation removes the condition): a deployment can never accept a token anyone can type. The studio
  * sends one from a development build on a loopback page with no Firebase config
- * ({@code forge-client/identity.ts}); {@code tools/loop-smoke.sh} sends one from the shell.
+ * ({@code forge-client/identity.ts}), as the frontend's local drives do ({@code dev/drive-allowance.mjs}).
  */
 @Component
 @Primary

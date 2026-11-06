@@ -2,8 +2,8 @@
 
 Java 21 services for the browser studio. `forge-common` holds shared contracts;
 `forge-gateway` provides authentication, App Check, limits and routing on port 8400;
-`forge-service` provides metered model calls, generation streams, repair, direct and
-outcome reporting on port 8410; `platform-service` keeps accounts and their profiles
+`forge-service` provides metered model calls and the agent's turn, module and review
+streams on port 8410; `platform-service` keeps accounts and their profiles
 (handles) in MariaDB on port 8430. Private saved worlds and revisions use MariaDB metadata
 and a configured private B2 object store; forge's transient generation records remain in memory.
 Public publishing and the showcase remain under development. Try the hosted application

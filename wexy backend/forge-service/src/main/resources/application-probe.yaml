@@ -1,9 +1,0 @@
-# The hour-one probe: no web server, one run, then exit. Use with the local profile:
-#   ./mvnw -pl forge-service spring-boot:run -Dspring-boot.run.profiles=local,probe
-spring:
-  main:
-    web-application-type: none
-
-wexy:
-  probe:
-    enabled: true

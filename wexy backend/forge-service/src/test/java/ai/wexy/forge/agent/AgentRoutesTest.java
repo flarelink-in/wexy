@@ -306,6 +306,44 @@ class AgentRoutesTest {
         assertThat(agentCalls()).isEmpty();
     }
 
+    /**
+     * Each of a turn's request caps at its boundary (EA9.6's independent review: they were held on h1's plan route alone,
+     * whose test went with it, while `AgentRequest.validated` checks every turn). 600 code points and 4 or 30 seconds are a
+     * turn; 601 code points are 413; a blank prompt, a style that is none of the five, and seconds outside 4 to 30 or none
+     * are 400. Every refusal comes before any record or charge.
+     */
+    @Test
+    void aTurnsCapsHoldAtTheirBoundaries() throws Exception {
+        start(5_000_000L);
+        answers(USAGE, READ, PROGRAM);
+        assertThat(data(stream(Map.of("prompt", "é".repeat(600), "style", "auto", "seconds", 4)), "done").path("status").asText())
+                .isEqualTo("handed-off");
+        answers(USAGE, READ, PROGRAM);
+        assertThat(data(stream(Map.of("prompt", "a reef at night", "style", "brutalist", "seconds", 30)), "done").path("status").asText())
+                .isEqualTo("handed-off");
+        int records = agentCalls().size();
+        long sent = fake.chatRequests();
+
+        post(Map.of("prompt", "é".repeat(601), "style", "auto", "seconds", 12)).expectStatus().isEqualTo(413)
+                .expectBody().jsonPath("$.code").isEqualTo("too-large");
+        post(Map.of("prompt", "  ", "style", "auto", "seconds", 12)).expectStatus().isEqualTo(400)
+                .expectBody().jsonPath("$.code").isEqualTo("bad-request");
+        post(Map.of("style", "auto", "seconds", 12)).expectStatus().isEqualTo(400);
+        assertThat(refusal(Map.of("prompt", "a reef", "style", "neon", "seconds", 12))).contains("style");
+        assertThat(refusal(Map.of("prompt", "a reef", "seconds", 12))).contains("style");
+        assertThat(refusal(Map.of("prompt", "a reef", "style", "auto", "seconds", 3))).contains("seconds");
+        assertThat(refusal(Map.of("prompt", "a reef", "style", "auto", "seconds", 31))).contains("seconds");
+        assertThat(refusal(Map.of("prompt", "a reef", "style", "auto"))).contains("seconds");
+
+        assertThat(fake.chatRequests()).isEqualTo(sent);
+        assertThat(agentCalls()).hasSize(records);
+    }
+
+    /** A 400's message, for what it names. */
+    private String refusal(Object body) throws Exception {
+        return JSON.readTree(post(body).expectStatus().isEqualTo(400).expectBody().returnResult().getResponseBody()).path("message").asText();
+    }
+
     // Gate A (agent-loop design §15.1): the review of EA2.2 to EA2.4.
 
     /** The handler's request without a server, as the identity filter would leave it. */
@@ -779,13 +817,22 @@ class AgentRoutesTest {
 
     /** An anonymous caller's token, or (`anonymous` false) the same uid's after it linked Google: W2's link keeps the uid. */
     static String token(String uid, boolean anonymous) {
+        return token(uid, anonymous, TestAdmissions.NETWORK);
+    }
+
+    /** As {@link #token(String, boolean)}, on the network `ipk`; null is a caller the gateway gave no network key. */
+    static String token(String uid, boolean anonymous, String ipk) {
         try {
             long now = System.currentTimeMillis();
-            JWTClaimsSet claims = new JWTClaimsSet.Builder().issuer(InternalToken.ISSUER)
+            JWTClaimsSet.Builder builder = new JWTClaimsSet.Builder().issuer(InternalToken.ISSUER)
                     .audience(InternalToken.AUDIENCE_FORGE).subject(uid)
                     .issueTime(new Date(now)).expirationTime(new Date(now + 60_000))
                     .claim(InternalToken.CLAIM_ANONYMOUS, anonymous).claim(InternalToken.CLAIM_ADMIN, false)
-                    .claim(InternalToken.CLAIM_PROVIDER, anonymous ? "anonymous" : "google.com").claim(InternalToken.CLAIM_IPK, TestAdmissions.NETWORK).build();
+                    .claim(InternalToken.CLAIM_PROVIDER, anonymous ? "anonymous" : "google.com");
+            if (ipk != null) {
+                builder.claim(InternalToken.CLAIM_IPK, ipk);
+            }
+            JWTClaimsSet claims = builder.build();
             SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(GATEWAY.getKeyID())
                     .type(JOSEObjectType.JWT).build(), claims);
             jwt.sign(new RSASSASigner(GATEWAY));

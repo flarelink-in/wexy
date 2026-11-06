@@ -13,6 +13,11 @@
 # BROKEN (the mutation does not compile, so the test never ran: rewrite the mutation), ERROR (Maven
 # failed before the test ran), or SKIP (the mutation no longer matches the code: update it); with
 # MUTATION_DRY_RUN, MATCHES or SKIP. Exit 1 if any mutation is not CAUGHT (or MATCHES).
+# First, a preflight reads every entry, whatever MUTATION_ONLY or MUTATION_RANGE select: an entry whose file
+# or test class does not exist is MISSING, and the run stops with exit 2 before anything is mutated. Maven runs
+# with -Dsurefire.failIfNoSpecifiedTests=false (for the modules -am builds), so a deleted test would run nothing
+# and pass, and its mutation would read as SURVIVED (EA9.6's outside review, 2026-11-06). The test is a class
+# name in the module's src/test/java, or several separated by commas; a #method is allowed.
 # In a Perl pattern, escape @ and $ (\@Profile): unescaped, Perl interpolates them as variables.
 set -u
 cd "$(dirname "$0")/.." || exit 2
@@ -26,9 +31,14 @@ CURRENT=""
 ONLY=${MUTATION_ONLY:-}
 RANGE=${MUTATION_RANGE:-}
 DRY=${MUTATION_DRY_RUN:-}
+PREFLIGHT=""
 status=0
 ran=0
 index=0
+missing=0
+# Every test class of every module, one "module Class" a line, for the preflight.
+TEST_CLASSES=$'\n'$(find . -path '*/target' -prune -o -path './*/src/test/java/*' -name '*.java' -print \
+    | sed -E 's#^\./([^/]+)/.*/([^/]+)\.java$#\1 \2#')$'\n'
 
 restore() {
     if [ -n "$CURRENT" ]; then
@@ -41,7 +51,22 @@ trap 'echo "interrupted: restoring"; exit 130' INT TERM
 
 mutate() { # name file module test perl-expression
     local name=$1 file=$2 module=$3 test=$4 expr=$5
-    local before
+    local before class
+    if [ -n "$PREFLIGHT" ]; then
+        if [ ! -f "$file" ]; then
+            echo "MISSING  $name: no file $file"
+            missing=$((missing + 1))
+        fi
+        for class in ${test//,/ }; do
+            class=${class%%#*}
+            case $TEST_CLASSES in
+                *$'\n'"$module $class"$'\n'*) ;;
+                *) echo "MISSING  $name: no test class $class in $module/src/test/java"
+                   missing=$((missing + 1)) ;;
+            esac
+        done
+        return
+    fi
     index=$((index + 1))
     if [ -n "$RANGE" ] && { [ "$index" -lt "${RANGE%-*}" ] || [ "$index" -gt "${RANGE#*-}" ]; }; then
         return
@@ -76,6 +101,8 @@ mutate() { # name file module test perl-expression
     [ "$(sha256sum "$file" | cut -d' ' -f1)" = "$before" ] || { echo "!! could not restore $file"; exit 3; }
 }
 
+# The list, read twice: once by the preflight, then to mutate.
+mutations() {
 mutate "charge skipped" "$S/upstream/MeteredModelClient.java" forge-service MeteredModelClientTest \
     's/switch \(receipt\.outcome\(\)\) \{/switch (SpendGuard.Charge.ALLOWED) {/'
 mutate "missing cap allowed" "$S/spend/SpendGuard.java" forge-service SpendGuardTest \
@@ -88,15 +115,14 @@ mutate "client identity not stripped" "$G/shield/EdgeShieldFilter.java" forge-ga
     's/ServerWebExchange sanitised = stripSpoofableHeaders\(exchange\);/ServerWebExchange sanitised = exchange;/'
 mutate "anonymous takes account action" "$G/auth/AuthorizationFilter.java" forge-gateway AuthorizationFilterTest \
     's/if \(policy == Policy\.ACCOUNT_REQUIRED && caller\.anonymous\(\)\) \{/if (false) {/'
-mutate "author spends App Check" "$G/routes/ForgeRoutes.java" forge-gateway ForgeRoutesTest \
-    's/\.filter\(appCheck\)\n/.filter(appCheck.singleUse())\n/'
-# B0.2 (forge-loop design §12, M2): the loop's own protections. "charge skipped" above now guards charge().
-mutate "plan schema not checked" "$S/loop/LoopHandler.java" forge-service LoopRoutesTest \
-    's/new ArrayList<>\(schemas\.validate\(schema, answer\)\)/new ArrayList<String>()/'
-mutate "another caller's plan served" "$S/loop/LoopHandler.java" forge-service LoopRoutesTest \
-    's/\.filter\(g -> g\.uid\(\)\.equals\(caller\.uid\(\)\)\)/.filter(g -> true)/'
-mutate "denied call not recorded" "$S/loop/LoopHandler.java" forge-service LoopRoutesTest \
-    's/store\.finish\(g\.id\(\), new Generation\.Finish\(null, null, null, null, 0, null, null, null, Generation\.Status\.DENIED\)\);//'
+# A read that takes the cached App Check token spends none. This was "author spends App Check" until EA9.6 retired h1's
+# author route (2026-11-06); its unanchored pattern then matched the review terms' read, so each read is named now.
+mutate "the review terms' read spending App Check" "$G/routes/ForgeRoutes.java" forge-gateway ForgeRoutesTest \
+    's/(\.filter\(rateLimits\.byClient\("review-read"\)\)\n\s*)\.filter\(appCheck\)\n/$1.filter(appCheck.singleUse())\n/'
+mutate "the allowance read spending App Check" "$G/routes/ForgeRoutes.java" forge-gateway ForgeRoutesTest \
+    's/(\.filter\(rateLimits\.byClient\("account-read"\)\)\n\s*)\.filter\(appCheck\)\n/$1.filter(appCheck.singleUse())\n/'
+# B0.2 and B0.4 (forge-loop design §12, M2, M3): h1's loop and its repair depth. Their mutations went with h1's routes at
+# EA9.6 (2026-11-06); "charge skipped" above guards charge().
 
 # B0.3 (forge-loop design §12, M4): dev tokens must not exist outside the local profile. The @ is
 # escaped since 2026-10-31: unescaped, Perl read it as an empty array and the mutation left a bare
@@ -104,29 +130,17 @@ mutate "denied call not recorded" "$S/loop/LoopHandler.java" forge-service LoopR
 mutate "dev tokens outside local" "$G/auth/DevTokenVerifier.java" forge-gateway DevTokenVerifierProfileTest \
     's/\@Profile\("local"\)\n//'
 
-# B0.4 (forge-loop design §12, M3): the repair depth, and the escalation that comes with it.
-mutate "fourth repair allowed" "$S/loop/LoopHandler.java" forge-service RepairDirectOutcomesTest \
-    's/if \(depth >= MAX_REPAIRS\) \{/if (false) {/'
-mutate "repairs never escalate" "$S/loop/LoopHandler.java" forge-service RepairDirectOutcomesTest \
-    's/String role = depth < MAX_REPAIRS - 1 \? "repairer" : "escalator";/String role = "repairer";/'
-mutate "another caller's function repaired" "$S/loop/LoopHandler.java" forge-service RepairDirectOutcomesTest \
-    's/(\.filter\(g -> g\.status\(\) == Generation\.Status\.OK\)\n\s*)\.filter\(g -> g\.uid\(\)\.equals\(caller\.uid\(\)\)\)\n(\s*\.orElseThrow\(LoopHandler::unknownWorld\);\n\s*int depth)/$1$2/'
-mutate "edit plan not validated" "$S/loop/LoopHandler.java" forge-service RepairDirectOutcomesTest \
-    's/if \(!problems\.isEmpty\(\)\) \{\n(\s*return unusable\(call, "invalid")/if (false) {\n$1/'
-
-# The review of 2026-10-27 (forge-loop design, Results): the record and the meter stay honest.
-mutate "settlement skipped" "$S/upstream/MeteredModelClient.java" forge-service LoopLifecycleTest \
+# The review of 2026-10-27 (forge-loop design, Results): the record and the meter stay honest. Since EA9.6 the meter's
+# half is held by MeteredModelClientTest, as h1's LoopLifecycleTest held it through the plan route: a call settled to its
+# usage once, and the meter's own failure after a cancel told to its listener.
+mutate "settlement skipped" "$S/upstream/MeteredModelClient.java" forge-service MeteredModelClientTest \
     's/spendGuard\.settle\(receipt, cost, detail\)/SpendGuard.Settlement.NONE/'
 mutate "debt ignored" "$S/spend/SpendGuard.java" forge-service SpendGuardSettlementTest \
     's/if \(!settleDebts\(\)\) \{/if (false) {/'
-mutate "meter failure after a cancel unreported" "$S/upstream/MeteredModelClient.java" forge-service LoopLifecycleTest \
+mutate "meter failure after a cancel unreported" "$S/upstream/MeteredModelClient.java" forge-service MeteredModelClientTest \
     's/tellFailed\(listener, e, detail\);//'
-mutate "cancel during the charge ignored" "$S/loop/LoopHandler.java" forge-service LoopLifecycleTest \
-    's/\n\s*\.doOnCancel\(call::cancelled\);/;/g'
 mutate "charge listener silenced" "$S/upstream/MeteredModelClient.java" forge-service MeteredModelClientTest \
     's/tell\(listener, new Reservation\(receipt\.outcome\(\), bound, inputTokens\), detail\);//'
-mutate "empty function accepted" "$S/loop/LoopHandler.java" forge-service LoopLifecycleTest \
-    's/if \(function\.isBlank\(\)\) \{/if (false) {/'
 
 # F7 of the frontend's pass-graph design (2026-10-29): a usage without whole token counts is no usage.
 mutate "an empty usage counted as zero" "$S/upstream/MetaApiClient.java" forge-service MetaApiClientTest \
@@ -186,8 +200,10 @@ mutate "the call event never sent" "$S/agent/MeteredModelCaller.java" forge-serv
 mutate "the check event's findings renamed" "$S/agent/AgentLoop.java" forge-service AgentWireTest \
     's/"findings", listed/"diagnostics", listed/'
 # EA3.6: the program check on adapter nodes (the frontend's checkNodes, in Java) and the v2 schema.
+# Re-aimed on 2026-11-06: since EA9.4's review the mapper is a JsonMapper builder (with duplicate keys refused), which the
+# old pattern no longer matched.
 mutate "trailing text after a config read as JSON" "$S/agent/NodeCheck.java" forge-service NodeCheckTest \
-    's/new ObjectMapper\(\)\.enable\(DeserializationFeature\.FAIL_ON_TRAILING_TOKENS\)/new ObjectMapper()/'
+    's/\.enable\(DeserializationFeature\.FAIL_ON_TRAILING_TOKENS\)\.build\(\)/.build()/'
 mutate "a stage's writes not filling a drawn buffer" "$S/agent/ProgramCheck.java" forge-service ProgramCheckTest \
     's/&& !written\.contains\(n\.id\(\)\)//'
 mutate "every zeroed buffer to be filled, drawn or not" "$S/agent/ProgramCheck.java" forge-service ProgramCheckTest \
@@ -344,8 +360,10 @@ mutate "ipk from the client's forwarded-for" "$G/shield/ClientNetworkKey.java" f
     's/byte\[\] network = network\(resolver\.resolve\(exchange\)\);/byte[] network = network(String.valueOf(exchange.getRequest().getHeaders().getFirst("X-Forwarded-For")));/'
 mutate "ipk keeps a whole IPv6 address" "$G/shield/ClientNetworkKey.java" forge-gateway ClientNetworkKeyTest \
     's/byte\[\] out = new byte\[1 \+ \(bytes\.length == 4 \? 4 : 8\)\];/byte[] out = new byte[1 + bytes.length];/'
+# Re-aimed on 2026-11-06: since Q98's revision (account-guards) the key names its family, which the old pattern no longer
+# matched.
 mutate "ipk unkeyed" "$G/shield/ClientNetworkKey.java" forge-gateway ClientNetworkKeyTest \
-    's/return network == null \? null : hmac\(network\);/return network == null ? null : HexFormat.of().formatHex(network);/'
+    's/\(network\[0\] == 4 \? "v4\." : "v6\."\) \+ hmac\(network\);/(network[0] == 4 ? "v4." : "v6.") + HexFormat.of().formatHex(network);/'
 mutate "an unset required network key allowed" "$G/shield/ClientNetworkKey.java" forge-gateway ClientNetworkKeyTest \
     's/if \(required\) \{/if (false) {/'
 mutate "no network key in the token" "$G/auth/AuthorizationFilter.java" forge-gateway AuthorizationFilterTest \
@@ -383,12 +401,12 @@ mutate "a revision of another prompt joined" "$A/PromptGrants.java" forge-servic
     's/store\.join\(GRANT \+ grantId, owner, kind\.field, limit\(kind\), promptHash,/store.join(GRANT + grantId, owner, kind.field, limit(kind), null,/'
 mutate "a prompt never given back" "$A/Grant.java" forge-service PromptGrantsTest \
     's/: store\.release\(recordKey, indexKey, counters\);/: false;/'
-mutate "an unsafe idea let through" "$A/PromptAdmission.java" forge-service AllowanceRoutesTest \
+# An entry's order: the allowance, then the idea's content safety, then the grant. Held on the turn route since EA9.6
+# (2026-11-06), as h1's AllowanceRoutesTest held it on the plan route; its Director turn went with h1's routes.
+mutate "an unsafe idea let through" "$A/PromptAdmission.java" forge-service TurnAllowanceRoutesTest \
     's/        grants\.check\(caller\);\n        checkSafety\(text, route\);/        grants.check(caller);/'
-mutate "the safety check before the allowance" "$A/PromptAdmission.java" forge-service AllowanceRoutesTest \
+mutate "the safety check before the allowance" "$A/PromptAdmission.java" forge-service TurnAllowanceRoutesTest \
     's/        grants\.check\(caller\);\n        checkSafety\(text, route\);/        checkSafety(text, route);/'
-mutate "a Director turn unchecked inside its prompt" "$A/PromptAdmission.java" forge-service AllowanceRoutesTest \
-    's/        checkSafety\(turn, "direct"\);\n//'
 
 # The W1 review (2026-11-02): a module call runs inside its turn's granted prompt, carrying that prompt, within its
 # budget; an admission its request left mid-way gives its grant back; Retry-After never ends before the reset.
@@ -405,28 +423,28 @@ mutate "a dropped admission keeping its grant" "$A/PromptAdmission.java" forge-s
 mutate "Retry-After floored" "$A/PromptGrants.java" forge-service PromptGrantsTest \
     's/Math\.ceilDiv\(millis, 1000L\)/millis \/ 1000L/'
 
-# The W1 bug hunt (2026-11-02): a plan's authors and repairs run inside its prompt, within their budgets (siblings
-# included); the studio's re-plan of a failed plan runs inside it once, with the same idea; retryOf is a plan's id.
-mutate "an author outside its plan's prompt" "$S/loop/LoopHandler.java" forge-service AllowanceRoutesTest \
-    's/inside\(caller, plan\.id\(\), PromptGrants\.Kind\.AUTHOR\)/Mono.just(Boolean.TRUE)/'
-mutate "a repair outside its plan's prompt" "$S/loop/LoopHandler.java" forge-service AllowanceRoutesTest \
-    's/inside\(caller, plan\.id\(\), PromptGrants\.Kind\.REPAIR\)/Mono.just(Boolean.TRUE)/'
-mutate "authors past their budget" "$A/PromptGrants.java" forge-service PromptGrantsTest \
-    's/case AUTHOR -> properties\.authorCalls\(\);/case AUTHOR -> Long.MAX_VALUE;/'
-mutate "repairs past their budget" "$A/PromptGrants.java" forge-service PromptGrantsTest \
-    's/case REPAIR -> properties\.repairCalls\(\);/case REPAIR -> Long.MAX_VALUE;/'
-mutate "re-plans past their budget" "$A/PromptGrants.java" forge-service PromptGrantsTest \
-    's/case REPLAN -> properties\.replans\(\);/case REPLAN -> Long.MAX_VALUE;/'
-mutate "a re-plan never inside its prompt" "$A/PromptAdmission.java" forge-service AllowanceRoutesTest \
-    's/if \(failedPlanId != null && grants\.join/if (false \&\& grants.join/'
-mutate "a re-plan of another idea joined" "$A/PromptAdmission.java" forge-service AllowanceRoutesTest \
-    's/PromptGrants\.Kind\.REPLAN, sha256\(prompt\), planId\)/PromptGrants.Kind.REPLAN, null, planId)/'
-mutate "a retryOf that is no plan's id" "$S/loop/PlanRequest.java" forge-service AllowanceRoutesTest \
-    's/if \(retryOf != null && !DirectRequest\.ULID\.matcher\(retryOf\)\.matches\(\)\) \{/if (false) {/'
-mutate "a plan not admitted" "$S/loop/LoopHandler.java" forge-service AllowanceRoutesTest \
-    's/return admit\(\(\) -> admission\.replan\(caller, plan\.retryOf\(\), id, plan\.prompt\(\)\)\)\.flatMap/return admit(() -> null).flatMap/'
+# The W1 bug hunt (2026-11-02): a turn is admitted before anything is recorded or sent. Its plan route's half (a plan's
+# authors, repairs and re-plan inside its prompt) went with h1's routes at EA9.6; Q120 (b)'s follow-up is below.
 mutate "a turn not admitted" "$S/agent/AgentHandler.java" forge-service AgentRoutesTest \
     's/: admission\.entry\(caller, turnId, turn\.prompt\(\), "turn"\)\)/: null)/'
+
+# EA9.6's independent review (2026-11-06): what h1's deleted tests alone held. A turn's request caps (h1's plan route's
+# test, while AgentRequest.validated checks every turn), the allowance read never cached (h1's AllowanceRoutesTest), and
+# the mock profile answering on the loopback only (its Docker-backed test, now hermetic).
+mutate "a style none of the five taken" "$S/agent/AgentRequest.java" forge-service AgentRoutesTest \
+    's/if \(style == null \|\| !STYLES\.contains\(style\)\) \{/if (style == null) {/'
+mutate "seconds past the longest taken" "$S/agent/AgentRequest.java" forge-service AgentRoutesTest \
+    's/ \|\| seconds > caps\.maxSeconds\(\)\) \{/ || seconds > caps.maxSeconds() + 1) {/'
+mutate "seconds under the shortest taken" "$S/agent/AgentRequest.java" forge-service AgentRoutesTest \
+    's/seconds < caps\.minSeconds\(\)/seconds < caps.minSeconds() - 1/'
+mutate "a prompt counted in bytes" "$S/agent/AgentRequest.java" forge-service AgentRoutesTest \
+    's/prompt\.codePointCount\(0, prompt\.length\(\)\) > caps\.promptChars\(\)/prompt.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > caps.promptChars()/'
+mutate "the allowance cached" "$A/AllowanceHandler.java" forge-service TurnAllowanceRoutesTest \
+    's/\.header\(HttpHeaders\.CACHE_CONTROL, "no-store"\)//'
+mutate "a mock that answers off the loopback" "$S/mock/MockMetaApi.java" forge-service MockMetaApiTest \
+    's/if \(!"127\.0\.0\.1"\.equals\(base\.getHost\(\)\) \|\| base\.getPort\(\) != properties\.port\(\) \|\| !"\/v1"\.equals\(base\.getPath\(\)\)\) \{/if (false) {/'
+mutate "a mock template without a recording answered" "$S/mock/MockMetaApi.java" forge-service MockMetaApiTest \
+    's/        if \(!template\.equals\("agent"\)\) \{\n.*?\n            return;\n        \}\n//s'
 
 # Q120 (b) (EA9.5, 2026-11-05; the creations platform design §10, "Q120's follow-up"): a turn that ended with no world is
 # followed once inside its prompt, its changed idea screened; any other follow-up is 409, never an entry; one that
@@ -754,6 +772,16 @@ mutate "W3 the assets bucket's endpoint read for the private one" platform-servi
     's/endpoint: \$\{B2_PRIVATE_ENDPOINT:\}/endpoint: \${B2_ENDPOINT:}/'
 mutate "W3 the assets bucket's region read for the private one" platform-service/src/main/resources/application.yaml platform-service StorageConfigurationTest \
     's/region: \$\{B2_PRIVATE_REGION:\}/region: \${B2_REGION:}/'
+}
+
+PREFLIGHT=1
+mutations
+PREFLIGHT=""
+if [ "$missing" -gt 0 ]; then
+    echo "preflight: $missing missing file(s) or test class(es); nothing was mutated. Retarget or delete those entries."
+    exit 2
+fi
+mutations
 
 echo "$ran mutation(s)${DRY:+, a dry run}"
 exit $status

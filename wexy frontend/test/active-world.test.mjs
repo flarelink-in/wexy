@@ -227,14 +227,22 @@ test('EA9-U7 the studio\'s wiring: H is the one world field, set only by put and
     assert.doesNotMatch(run, /^\s+this\.reviews\?\.installed\(/m);
     // h1's install says whether it switched, and its callers stop when it did not.
     assert.match(main, /if \(this\.runtime !== runtime\) return false;/);
-    assert.match(main, /if \(!this\.install\(world, spec, false, client\.source\)\) \{\n[^\n]*\n\s+this\.journey\.fail\('check', COPY\.failures\.internal\);/);
+    assert.match(main, /if \(!this\.install\(result\.world, result\.spec, false, 'mock'\)\) \{\n\s+this\.journey\.fail\('check', COPY\.failures\.internal\);/);
     assert.match(main, /if \(!this\.install\(result\.world, result\.spec, sameScene, this\.draftSource\)\) this\.showMessage\(COPY\.editFailed, 'error'\);/);
     // The Controls panel by H's kind after an h1 build that brought no world.
     assert.match(main, /else if \(this\.agentWorld\) this\.director\.note\(this\.agentControlsNote\(\)\);\n\s+else this\.director\.clear\(\);/);
     assert.match(main, /this\.director\.note\(this\.agentControlsNote\(\)\);\n\s+this\.exportBtn\.disabled = false;/, 'publishAgent says the same');
     // A film waits for an example's build; h1's Create and hot-swap wait for a Run, as a Run waits for them.
     assert.match(main, /if \(this\.stage\?\.busy \|\| this\.busy\) return;\n\s+const world = this\.agentWorld;/);
-    assert.equal([...main.matchAll(/\n\s+if \(this\.stage\?\.busy\) return;\n/g)].length >= 3, true, 'forge, hotSwap and the photo');
+    assert.equal([...main.matchAll(/\n\s+if \(this\.stage\?\.busy\) return;\n/g)].length >= 3, true, 'forge (the examples), hotSwap and the photo');
+    const forge = main.slice(main.indexOf('    private async forge('), main.indexOf('    /** The failing rung\'s diagnostics in the editor'));
+    assert.match(forge, /\n\s+if \(this\.stage\?\.busy\) return;\n/, 'an example never builds beside a Run');
+    // EA9.6's independent review: the example takes no backdrop hold of its own (a no-op until the backdrop is on the
+    // viewport, which would stand in for the ladder's real one), and a refusal reads as the loop's did.
+    assert.doesNotMatch(forge, /this\.holdBackdrop\(\)/);
+    assert.match(forge, /this\.syncTexts\(spec\);[\s\S]*await this\.ladder\.verify\(spec, ac\.signal\)/, 'the example in the editor before its check');
+    assert.match(forge, /COPY\.failures\[f\.reason === 'probe' \? 'too-heavy' : 'verify'\]/);
+    assert.match(forge, /console\.info\(`Wexy: build \$\{this\.builds\} /, 'the build line the drives wait for');
     assert.match(main, /this\.forgeBtn\.disabled = this\.busy \|\| !this\.viewport \|\| !!this\.accountControl\?\.changing \|\| !!this\.stage\?\.busy;/);
 });
 

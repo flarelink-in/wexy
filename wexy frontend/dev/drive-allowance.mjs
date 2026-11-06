@@ -10,10 +10,9 @@
 // backend is not up.
 //
 //   node dev/drive-allowance.mjs [--gpu nvidia] [--gateway http://localhost:8400] [--service http://localhost:8410]
-//                                [--admin-uid <32 hex>|none] [--keep] [--legacy] [--timeout 300] [--out dir] [--chrome path]
+//                                [--admin-uid <32 hex>|none] [--keep] [--timeout 300] [--out dir] [--chrome path]
 //
-// --legacy walks h1's page, `?legacy=1` (the rollback until EA9.6), as this drive did before EA9.5: h1's plans, its
-// authors and its ladder, an h1 world installed by its own run.
+// (--legacy walked h1's page, `?legacy=1`, the rollback until EA9.6, which retired it with h1's Create.)
 //
 // Local only, mock only: the gateway under the local profile with no Firebase credentials (dev tokens; its local
 // operator, 000…001, is on its admin list unless WEXY_ADMIN_UIDS replaces it), the service under local,mock (no key, no
@@ -37,8 +36,10 @@ const service = opt('service', 'http://localhost:8410').replace(/\/+$/, '');
 const adminUid = opt('admin-uid', '00000000000000000000000000000001') === 'none' ? null : opt('admin-uid', '00000000000000000000000000000001');
 const timeoutMs = Number(opt('timeout', '300')) * 1000;
 /** EA9.5: h1's page, the rollback, as before the switch; without it, the agent path, the default. */
-const legacy = argv.includes('--legacy');
-const pageQuery = legacy ? '&legacy=1' : '';
+if (argv.includes('--legacy')) {
+    console.error("drive-allowance: --legacy walked h1's page, which EA9.6 retired with h1's Create.");
+    process.exit(2);
+}
 const GALAXY = 'A spiral galaxy, gold at the core and blue along the arms, threaded with dark dust';
 const STORM = 'A dark thunderstorm cloud that churns and turns in place while lightning flickers inside it';
 /** A recorded refusal of the local profile's content safety (forge-service resources/mock/safety-refusals.txt). */
@@ -53,7 +54,7 @@ const CHROME = [opt('chrome'), process.env.CHROME_PATH, 'C:/Program Files/Google
     'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe'].filter(Boolean).find(p => existsSync(p));
 if (!CHROME) { console.error('drive-allowance: no Chrome found; pass --chrome <path>.'); await quit(2); }
 
-const OUT = resolve(opt('out', join(ROOT, 'dev', 'out', 'drive-allowance', `${legacy ? 'legacy-' : ''}${gpu}-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`)));
+const OUT = resolve(opt('out', join(ROOT, 'dev', 'out', 'drive-allowance', `${gpu}-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`)));
 mkdirSync(OUT, { recursive: true });
 const steps = [];
 const step = (name, ok, detail = null) => { steps.push({ name, ok: !!ok, detail }); console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail != null ? ` — ${JSON.stringify(detail).slice(0, 400)}` : ''}`); save(false); };
@@ -146,7 +147,6 @@ async function browser(name) {
     return { name, send, evaluate, waitFor, shot, close, lines };
 }
 
-const runEnded = `(() => { const b = document.querySelector('.btn-forge'); return !!b && !b.disabled && document.querySelectorAll('.trace-list .step').length > 0; })()`;
 const chip = `document.querySelector('.account-chip')?.hidden ? null : (document.querySelector('.account-chip')?.textContent ?? null)`;
 const dialog = `(() => { const d = document.querySelector('.account-dialog'); return d?.open ? { title: d.querySelector('h2')?.textContent, body: d.querySelector('.acct-body')?.textContent, actions: [...d.querySelectorAll('button')].map(b => b.textContent) } : null; })()`;
 const promptText = `document.querySelector('#prompt')?.value ?? null`;
@@ -159,18 +159,13 @@ const turnsAsked = `performance.getEntriesByType('resource').filter(e => new URL
 const studioReady = `!!document.querySelector('.btn-forge') && !document.querySelector('.btn-forge').disabled`;
 
 /**
- * Types `idea` in the box and presses Create; resolves once it has ended. h1's page (--legacy): its run, to its end. The
- * agent path: its turn answered (a refusal at entry, an end with no world), or its modules written and Show it pressed,
+ * Types `idea` in the box and presses Create; resolves once it has ended: its turn answered (a refusal at entry, an end with no world), or its modules written and Show it pressed,
  * the GPU go, to the world installed or its Run refused. Returns what came of it: 'installed', 'ended' (a sentence, no
  * world), 'dialog' (W1's limit dialog), 'refused-run', or null when it did not settle in time.
  */
 async function create(b, idea) {
-    const before = legacy ? 0 : await b.evaluate(turnsAsked);
+    const before = await b.evaluate(turnsAsked);
     await b.evaluate(`(() => { const p = document.querySelector('#prompt'); p.value = ${JSON.stringify(idea)}; p.dispatchEvent(new Event('input')); document.querySelector('.btn-forge').click(); return true; })()`);
-    if (legacy) {
-        await sleep(400);
-        return (await b.waitFor(runEnded, timeoutMs, 'the run to end')) ? 'ended' : null;
-    }
     // Its turn has been answered (or refused), and the button says what comes next: Show it, or Create world again.
     const settled = `(() => { if ((${turnsAsked}) <= ${before}) return null; const f = ${forge}; if (document.querySelector('.account-dialog')?.open) return 'dialog';
         if (!f || f.disabled) return null; return f.label === 'Show it' ? 'ready' : f.label === 'Create world' ? 'ended' : null; })()`;
@@ -194,7 +189,7 @@ const browsers = [];
 
 /** Writes the steps so far, after every step: a run this laptop cuts short (gotchas) still leaves what it saw. */
 function save(done) {
-    writeFileSync(join(OUT, 'steps.json'), JSON.stringify({ gpu: gpuLabel, gpuFlag: gpu, gateway, service, label: 'mock', path: legacy ? 'legacy' : 'agent', done, steps }, null, 1));
+    writeFileSync(join(OUT, 'steps.json'), JSON.stringify({ gpu: gpuLabel, gpuFlag: gpu, gateway, service, label: 'mock', path: 'agent', done, steps }, null, 1));
 }
 
 /** Closes a browser whose steps are done, so no more than one renders at a time: three at once made step 7 the
@@ -208,7 +203,7 @@ try {
     // 1. A fresh browser makes its one world.
     const a = await browser('first');
     browsers.push(a);
-    await a.send('Page.navigate', { url: `${origin}/studio.html?prompt=${encodeURIComponent(GALAXY)}${pageQuery}` });
+    await a.send('Page.navigate', { url: `${origin}/studio.html?prompt=${encodeURIComponent(GALAXY)}` });
     await a.waitFor(studioReady, 60000, 'the studio');
     const fresh = await a.evaluate(`(() => ({ buttons: [...document.querySelectorAll('.account button')].map(b => (b.getAttribute('aria-label') ?? b.textContent ?? '').trim() + (b.hidden ? ' (hidden)' : '')),
         chip: ${chip} }))()`);
@@ -217,7 +212,7 @@ try {
     const made = await create(a, GALAXY);
     const firstWorld = await a.evaluate(worldTitle);
     await a.waitFor(`${chip} === 'Free world made'`, 15000, 'the chip after the free world');
-    step('a fresh browser makes its one free world, and the chip says it is made', (legacy ? made === 'ended' : made === 'installed') && firstWorld && firstWorld !== 'Untitled world'
+    step('a fresh browser makes its one free world, and the chip says it is made', made === 'installed' && firstWorld && firstWorld !== 'Untitled world'
         && (await a.evaluate(chip)) === 'Free world made', { made, world: firstWorld, chip: await a.evaluate(chip) });
     gpuLabel = await a.evaluate(`document.querySelector('#gpu-pill')?.textContent ?? null`);
     await a.shot('01-free-world');
@@ -252,7 +247,7 @@ try {
     // 5. One world, then the reset time.
     const early = await create(a, STORM);
     await a.waitFor(`/^Early access: next world at /.test(${chip} ?? '')`, 15000, 'the reset on the chip');
-    step('early access makes one world, and the chip then shows when the next opens', (legacy || early === 'installed') && /^Early access: next world at /.test((await a.evaluate(chip)) ?? ''),
+    step('early access makes one world, and the chip then shows when the next opens', early === 'installed' && /^Early access: next world at /.test((await a.evaluate(chip)) ?? ''),
         { made: early, chip: await a.evaluate(chip), world: await a.evaluate(worldTitle) });
     await create(a, GALAXY);
     await a.waitFor(`!!(${dialog})`, 15000, 'the quota dialog');
@@ -266,7 +261,7 @@ try {
     // 6. A second fresh browser on the same network: its first Create meets the dialog (the network's one is spent).
     const b = await browser('second');
     browsers.push(b);
-    await b.send('Page.navigate', { url: `${origin}/studio.html?prompt=${encodeURIComponent(GALAXY)}${pageQuery}` });
+    await b.send('Page.navigate', { url: `${origin}/studio.html?prompt=${encodeURIComponent(GALAXY)}` });
     await b.waitFor(studioReady, 60000, 'the studio');
     await create(b, GALAXY);
     await b.waitFor(`!!(${dialog})`, 15000, 'the limit dialog');
@@ -279,14 +274,14 @@ try {
         const c = await browser('admin');
         browsers.push(c);
         await c.send('Page.addScriptToEvaluateOnNewDocument', { source: `localStorage.setItem('wexy.devUid', ${JSON.stringify(adminUid)}); localStorage.setItem('wexy.devProvider', 'google');` });
-        await c.send('Page.navigate', { url: `${origin}/studio.html?prompt=${encodeURIComponent(GALAXY)}${pageQuery}` });
+        await c.send('Page.navigate', { url: `${origin}/studio.html?prompt=${encodeURIComponent(GALAXY)}` });
         await c.waitFor(studioReady, 60000, 'the studio');
         const worlds = [];
         for (const idea of [GALAXY, STORM, GALAXY]) {
             const outcome = await create(c, idea);
             worlds.push({ outcome, world: await c.evaluate(worldTitle), dialog: await c.evaluate(dialog) });
         }
-        step('an admin makes three worlds in a row', worlds.every(m => !m.dialog && (legacy || m.outcome === 'installed')), worlds);
+        step('an admin makes three worlds in a row', worlds.every(m => !m.dialog && m.outcome === 'installed'), worlds);
         await c.shot('07-admin');
     }
 } finally {
@@ -294,6 +289,6 @@ try {
     for (const b of [...browsers]) await b.close();
     spawnSync('taskkill', ['/PID', String(vite.pid), '/T', '/F']);
     const failed = steps.filter(s => !s.ok).length;
-    console.log(`\ndrive-allowance (mock, ${legacy ? 'h1\'s page' : 'the agent path'}, ${gpuLabel ?? gpu}): ${steps.length - failed}/${steps.length} steps ok — evidence in ${OUT}`);
+    console.log(`\ndrive-allowance (mock, the agent path, ${gpuLabel ?? gpu}): ${steps.length - failed}/${steps.length} steps ok — evidence in ${OUT}`);
     await quit(failed ? 1 : 0);
 }

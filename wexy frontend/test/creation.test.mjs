@@ -1177,51 +1177,39 @@ test('EA9-U12 the controller and the creator\'s controls reach no runtime, verif
     assert.match(main, /import\('\.\/creation-view'\)/);
     assert.match(main, /if \(path\.agentPath\) void this\.mountCreation\(api\)/);
     // The machine's failure table moved out, so the controller shares it without h1's loop; h1's loop still uses it.
-    assert.match(readFileSync(join(ROOT, 'src/loop/machine.ts'), 'utf8'), /import \{ classifyError \} from '\.\/failures'/);
+    assert.doesNotMatch(readFileSync(join(ROOT, 'src/loop/machine.ts'), 'utf8'), /runLoop|client\.plan/);
     assert.deepEqual([...reach(['src/shell/studio/creation-path.ts'])], ['src/shell/studio/creation-path.ts'], 'the selection imports nothing');
 });
 
-test('EA9-U16 the creation path from the URL: one path, legacy wins, a loader suppresses autorun, no silent fallback, no URL GPU go', () => {
+test('EA9-U16 only agent creation remains; loaders suppress autorun and old legacy URLs are refused', () => {
     const say = { unavailable: 'no backend', invalid: 'unknown selector' };
-    const pick = (query, facts = {}) => selectCreationPath(new URLSearchParams(query), { switched: false, gateway: true, ...facts }, say);
+    const pick = (query, facts = {}) => selectCreationPath(new URLSearchParams(query), { switched: true, gateway: true, ...facts }, say);
     const row = s => [s.create, s.agentPanels, s.agentPath, s.devView, s.autorun, s.unavailable, s.invalid];
-    // Before the switch (EA9.1 to EA9.4): h1 unless ?create=agent.
-    assert.deepEqual(row(pick('')), ['h1', false, false, false, false, null, null]);
+    // The agent's path whatever `switched` says (EA9.6): the flag no longer selects anything.
+    for (const switched of [true, false]) assert.deepEqual(row(pick('', { switched })), ['agent', false, true, false, false, null, null], `switched ${switched}`);
     assert.deepEqual(row(pick('?create=agent')), ['agent', false, true, false, false, null, null]);
-    assert.deepEqual(row(pick('?create=agent&legacy=1')), ['h1', false, false, false, false, null, null], 'legacy wins');
-    assert.deepEqual(row(pick('?agent=1')), ['h1', true, true, true, false, null, null], 'today\'s harness entry: h1\'s Create, the agent\'s panels');
-    assert.deepEqual(row(pick('?agent=1&create=agent')), ['agent', true, true, true, false, null, null]);
-    assert.deepEqual(row(pick('?legacy=1&agent=1&create=agent')), ['h1', true, true, true, false, null, null], '?agent=1 never overrides legacy');
-    assert.deepEqual(row(pick('?dev=1')), ['h1', false, false, true, false, null, null], '?dev=1 alone chooses no path');
-    assert.deepEqual(row(pick('?dev=0')), ['h1', false, false, false, false, null, null]);
-    // A Create on load: on the selected path only, and only with no loader beside it.
+    assert.deepEqual(row(pick('?agent=1')), ['agent', true, true, true, false, null, null], 'Developer view with the agent\'s panels');
+    assert.deepEqual(row(pick('?dev=1')), ['agent', false, true, true, false, null, null], '?dev=1 alone chooses no path');
+    assert.deepEqual(row(pick('?dev=0')), ['agent', false, true, false, false, null, null]);
+    assert.deepEqual(row(pick('?legacy=0')), ['agent', false, true, false, false, null, null], 'legacy=0 is known and changes nothing');
+    // A Create on load, only with no loader beside it; a loader calls no model.
     assert.deepEqual(row(pick('?create=agent&autorun=1&prompt=a%20castle')), ['agent', false, true, false, true, null, null]);
-    const scene = pick('?create=agent&scene=galaxy&autorun=1&prompt=a%20castle');
-    assert.deepEqual([scene.loader, scene.autorun], [{ kind: 'scene', name: 'galaxy' }, false], 'a loader calls no model, and suppresses the autorun');
-    const replay = pick('?agent=1&create=agent&replay=castle&autorun=1');
-    assert.deepEqual([replay.loader, replay.autorun], [{ kind: 'replay', name: 'castle' }, false]);
-    // W3.6: a saved world by its id is a loader too, and it needs the stage, so it selects the agent path; legacy still
-    // wins, and then nothing opens (the studio needs the agent path's stage for it).
-    const world = pick('?world=01JC3W5F6Q7R8S9T0V1W2X3Y4Z&autorun=1');
-    assert.deepEqual([world.create, world.agentPath, world.loader, world.autorun], ['agent', true, { kind: 'world', name: '01JC3W5F6Q7R8S9T0V1W2X3Y4Z' }, false]);
-    assert.deepEqual(row(pick('?world=01JC3W5F6Q7R8S9T0V1W2X3Y4Z&legacy=1')), ['h1', false, false, false, false, null, null], 'legacy wins');
-    assert.equal(worldLink('01JC3W5F6Q7R8S9T0V1W2X3Y4Z'), '/studio.html?create=agent&world=01JC3W5F6Q7R8S9T0V1W2X3Y4Z');
-    assert.deepEqual(pick(new URL(worldLink('a b&c'), 'http://x').search).loader, { kind: 'world', name: 'a b&c' }, 'an id is carried as given, for the studio to check');
-    // Unknown selectors start nothing and say so; they never pick a path of their own.
-    for (const q of ['?create=h2&autorun=1', '?legacy=yes&autorun=1', '?create=&autorun=1']) {
-        const s = pick(q);
-        assert.deepEqual([s.create, s.autorun, s.invalid], ['h1', false, 'unknown selector'], q);
+    for (const kind of ['scene', 'world', 'replay']) {
+        const selected = pick(kind + '=example&autorun=1');
+        assert.deepEqual([selected.loader, selected.autorun], [{ kind, name: 'example' }, false], kind);
     }
-    // No backend: the agent's Create says so and starts nothing; h1's page is unaffected.
-    assert.deepEqual(row(pick('?create=agent&autorun=1', { gateway: false })), ['agent', false, true, false, false, 'no backend', null]);
-    assert.deepEqual(row(pick('?autorun=1', { gateway: false })), ['h1', false, false, false, true, null, null]);
-    // After the switch (EA9.5): the agent's by default, ?legacy=1 for h1, and an unknown selector never falls back to h1.
-    assert.deepEqual(row(pick('', { switched: true })), ['agent', false, true, false, false, null, null]);
-    assert.deepEqual(row(pick('?legacy=1', { switched: true })), ['h1', false, false, false, false, null, null]);
-    assert.deepEqual(row(pick('?legacy=0', { switched: true })), ['agent', false, true, false, false, null, null]);
-    assert.deepEqual(row(pick('?create=bogus&autorun=1', { switched: true })), ['agent', false, true, false, false, null, 'unknown selector']);
+    // h1's selector and the selectors this build does not know start nothing and say so; none picks a path of its own,
+    // and none is a fallback to h1.
+    for (const q of ['?legacy=1&autorun=1', '?legacy=1&agent=1&create=agent&autorun=1', '?create=h2&autorun=1', '?legacy=yes&autorun=1', '?create=&autorun=1']) {
+        const s = pick(q);
+        assert.deepEqual([s.create, s.agentPath, s.autorun, s.invalid], ['agent', true, false, 'unknown selector'], q);
+    }
+    // No backend: the agent's Create says so and starts nothing.
+    assert.deepEqual(row(pick('?autorun=1', { gateway: false })), ['agent', false, true, false, false, 'no backend', null]);
     // Nothing in a selection can show a world: the go is a press (I5).
     assert.deepEqual(Object.keys(pick('?create=agent&autorun=1')).sort(), ['agentPanels', 'agentPath', 'autorun', 'create', 'devView', 'invalid', 'loader', 'unavailable']);
+    assert.equal(worldLink('a b'), '/studio.html?create=agent&world=a%20b');
+    assert.deepEqual(pick(new URL(worldLink('a b&c'), 'http://x').search).loader, { kind: 'world', name: 'a b&c' }, 'an id is carried as given, for the studio to check');
     // The studio's autorun waits for the stage and for the creator's controls, whichever loads last, so it is never lost
     // (the EA9.1 independent review).
     const main = readFileSync(join(ROOT, 'src/shell/studio/main.ts'), 'utf8');

@@ -177,13 +177,15 @@ console.log(`  mode: HTTP ${report.probe.mode.status} in ${report.probe.mode.ms}
 if (report.probe.mode.status !== 200) { console.error('agent-live: the gateway is not ready (the mode read failed).'); await quit(2); }
 if (probeOnly) {
     report.probe.emptyTurn = await answer('/v1/agent/turn', { method: 'POST', headers: { ...auth, ...(await attested()), 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: '{}' });
-    report.probe.emptyPlan = await answer('/v1/forge/plan', { method: 'POST', headers: { ...auth, ...(await attested()), 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: '{}' });
+    // EA9.6: h1's plan route is gone from an EA9.6 gateway, which answers 404 before any filter; an older one still routes
+    // it and refuses this request, which carries no caller and no App Check token (none is minted for it), at its filters.
+    report.probe.retiredPlan = await answer('/v1/forge/plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     // EA9.5 (Q120 (b)): a turn naming a turn it cannot follow, a well-formed ULID no turn has. EA9.5's forge refuses it
     // `409 conflict` before any safety call or charge, and never as an entry; an older forge refuses the field itself,
     // 400. Nothing is spent either way, and the answer says which forge is deployed. It takes the turn bucket's second turn.
     report.probe.followUp = await answer('/v1/agent/turn', { method: 'POST', headers: { ...auth, ...(await attested()), 'Content-Type': 'application/json', Accept: 'text/event-stream' },
         body: JSON.stringify({ prompt: 'A probe that follows no turn.', style: 'auto', seconds: 15, retryOf: `01JZ${'0'.repeat(22)}` }) });
-    for (const [name, r] of Object.entries({ 'empty turn': report.probe.emptyTurn, 'empty plan': report.probe.emptyPlan, 'a follow-up of no turn': report.probe.followUp })) {
+    for (const [name, r] of Object.entries({ 'empty turn': report.probe.emptyTurn, 'h1\'s plan route': report.probe.retiredPlan, 'a follow-up of no turn': report.probe.followUp })) {
         console.log(`  ${name}: HTTP ${r.status} in ${r.ms} ms ${r.body.replace(/\s+/g, ' ').slice(0, 160)}`);
     }
     save();
@@ -192,7 +194,8 @@ if (probeOnly) {
     const followUp = report.probe.followUp.status === 409 ? 'served (EA9.5\'s forge: refused as conflict, no charge)'
         : report.probe.followUp.status === 400 && /takes only prompt, style, seconds and base\b(?! and retryOf)/.test(report.probe.followUp.body)
             ? 'not served (an older forge refuses retryOf itself, no charge)' : `unexpected (HTTP ${report.probe.followUp.status})`;
-    console.log(`agent-live: /v1/agent/turn ${turnRoute}; Q120 (b)'s follow-up ${followUp}; probe only, nothing spent. ${join(OUT, 'report.json')}`);
+    const planRoute = report.probe.retiredPlan.status === 404 ? 'retired (EA9.6\'s gateway)' : `still routed (a gateway before EA9.6: HTTP ${report.probe.retiredPlan.status})`;
+    console.log(`agent-live: /v1/agent/turn ${turnRoute}; Q120 (b)'s follow-up ${followUp}; h1's plan route ${planRoute}; probe only, nothing spent. ${join(OUT, 'report.json')}`);
     await quit(report.probe.emptyTurn.status === 400 ? 0 : 1);
 }
 save();

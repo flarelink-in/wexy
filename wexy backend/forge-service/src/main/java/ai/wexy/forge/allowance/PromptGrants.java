@@ -21,8 +21,8 @@ import java.util.Map;
 /**
  * Prompt grants by role (W1; the creations platform design §11, I6, I11, I13): an anonymous account is granted one
  * prompt, ever, and its network one anonymous prompt a day (Q98); a signed-in caller one a day (early access); an
- * admin its own number. A prompt is one entry request, a plan or a turn without a base, and the follow-ups that name
- * it: a revision of its turn, a Director turn on its plan's world, each within its budget and the prompt's life. One
+ * admin its own number. A prompt is one entry request, a turn without a base, and the follow-ups that name
+ * it: revisions, module calls and reviews, each within its budget and the prompt's life. One
  * naming none the caller has is a new prompt. The one exception is a turn that follows one of its turns that ended with
  * no world (Q120 (b), {@link #follow}): inside it, once, or refused, never a new prompt. Checking and counting are one
  * atomic step ({@link GrantStore}).
@@ -43,7 +43,7 @@ public class PromptGrants {
      * module call does (EA6.4).
      */
     public enum Kind {
-        DIRECTOR("director"), REVISION("revision"), MODULE("modules"), AUTHOR("authors"), REPAIR("repairs"), REPLAN("replans"),
+        REVISION("revision"), MODULE("modules"),
         REVIEW("reviews");
 
         final String field;
@@ -204,7 +204,7 @@ public class PromptGrants {
     }
 
     /**
-     * A follow-up naming `namedId` (a turn it revises, a plan whose world it edits): true when it runs inside that
+     * A follow-up naming `namedId` (a turn it revises, or whose prompt its call runs inside): true when it runs inside that
      * prompt, which then counts it against its `kind`'s budget and, when `newId` is not null, answers to it too; false
      * when it names no live prompt of the caller's, one past its budget, or (when `promptHash` is not null) another
      * prompt's text: it is then a new prompt. {@code 503 unavailable} when the store cannot answer.
@@ -257,12 +257,8 @@ public class PromptGrants {
     /** How many follow-ups of `kind` one prompt covers. */
     private long limit(Kind kind) {
         return switch (kind) {
-            case DIRECTOR -> properties.directorTurns();
             case REVISION -> properties.revisions();
             case MODULE -> properties.moduleCalls();
-            case AUTHOR -> properties.authorCalls();
-            case REPAIR -> properties.repairCalls();
-            case REPLAN -> properties.replans();
             case REVIEW -> properties.reviewCalls();
         };
     }

@@ -4,7 +4,8 @@ Worlds, not videos. Wexy's browser studio runs 3D worlds on the viewer's GPU and
 captures films in wide, vertical or square formats. Model clients, checked GPU function
 contracts and verification connect the studio to the backend. The engine-aware agent creator
 is the default; its checked build still requires device admission and the separate **Show it**
-step. Developer view is available through `?agent=1`; `?legacy=1` selects the earlier creator.
+step. Developer view is available through `?agent=1`. The earlier creator (h1) was retired in EA9.6:
+its hand-written examples and archives still play, with no model call.
 Try the hosted build directly at **https://wexy.ai**, or see the root README for local setup.
 
 ## Setup

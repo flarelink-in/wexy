@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { test } from 'node:test';
-import { MockClient } from '../src/forge-client/mock-client.ts';
+import { loadExample } from '../src/forge-client/example.ts';
 
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const landing = readFileSync(new URL('../src/shell/landing/main.ts', import.meta.url), 'utf8');
@@ -30,17 +30,14 @@ test('rotating homepage ideas do not advertise the disabled shrine', () => {
 test('each featured link resolves to a studio starter and routes to its unpaid world', async () => {
     const studio = readFileSync(new URL('../src/shell/studio/main.ts', import.meta.url), 'utf8');
     assert.match(studio, /ARCHETYPES\.filter\(a => a\.id !== 'celestial-torii'\)/);
-    assert.match(studio, /starter \|\| !this\.live \? 'mock' : 'live'/);
+    assert.match(studio, /await this\.forge\('mock'\)/);
     const { ARCHETYPES } = await import('../src/forge-client/archetypes/index.ts');
     const prompts = [
         ...['kerr-black-hole', 'magnetic-star'].map(id => ARCHETYPES.find(a => a.id === id).examplePrompt),
         'A dark thunderstorm cloud that churns and turns in place while lightning flickers inside it',
     ];
     for (const [i, prompt] of prompts.entries()) {
-        const result = await new MockClient({ pace: 0 }).plan(
-            { prompt, style: 'auto', seconds: 12 }, {}, new AbortController().signal,
-        );
-        assert.equal(result.generation.source, 'mock');
-        assert.match(result.draft.title, [/Kerr|black hole/i, /magnet/i, /^Thunderhead$/][i]);
+        const result = loadExample(prompt, 'auto');
+        assert.match(result.title, [/Kerr|black hole/i, /magnet/i, /^Thunderhead$/][i]);
     }
 });

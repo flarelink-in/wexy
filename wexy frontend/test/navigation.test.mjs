@@ -62,12 +62,13 @@ test('homepage and studio expose Creations outside account controls and collapsi
     }
 });
 
-test('studio switches to agent creation by default, keeping legacy and loader precedence', () => {
+test('studio creates on the agent path only: legacy URLs refused, loaders first (EA9.6)', () => {
     const main = read('src/shell/studio/main.ts');
     assert.match(main, /selectCreationPath\(params, \{ switched: true, gateway: !!this\.live \}/);
     const pick = query => selectCreationPath(new URLSearchParams(query), { switched: true, gateway: true }, { unavailable: 'offline', invalid: 'invalid' });
     assert.equal(pick('').create, 'agent');
-    assert.equal(pick('legacy=1').create, 'h1');
+    assert.equal(pick('legacy=1').create, 'agent');
+    assert.ok(pick('legacy=1').invalid);
     for (const kind of ['scene', 'world', 'replay']) {
         const path = pick(`${kind}=example&autorun=1`);
         assert.deepEqual(path.loader, { kind, name: 'example' });

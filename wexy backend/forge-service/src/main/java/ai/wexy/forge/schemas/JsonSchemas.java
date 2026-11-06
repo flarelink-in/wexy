@@ -22,9 +22,9 @@ import java.util.TreeSet;
 
 /**
  * The JSON the models answer with, and the schemas both sides validate it against (forge-loop
- * design §5.4, Q27): {@code scene-draft.v1} for the planner, {@code edit-plan.v1} for the director,
- * {@code agent-action.v3} for the agent loop (its program made of adapter nodes since EA3.6, v2; a revision's notes to
- * its modules since EA6.3, v3; v1's and v2's files stay as deployed, and are not loaded), in {@code resources/schemas/}.
+ * design §5.4, Q27): {@code agent-action.v3} for the agent loop (its program made of adapter nodes since EA3.6, v2; a
+ * revision's notes to its modules since EA6.3, v3; v1's and v2's files stay as deployed, and are not loaded) and
+ * {@code review-verdict.v1} for a review, in {@code resources/schemas/}. (h1's planner and director schemas went at EA9.6.)
  * The same text goes to Meta as {@code response_format}, so each
  * schema must stay inside Meta's strict subset (§4.1); startup refuses one that leaves it, because
  * Meta would answer {@code 400} to every call that sent it with {@code strict: true}.
@@ -36,8 +36,6 @@ import java.util.TreeSet;
 @Component
 public class JsonSchemas {
 
-    public static final String SCENE_DRAFT = "scene-draft.v1";
-    public static final String EDIT_PLAN = "edit-plan.v1";
     /**
      * The agent loop's action (the agent-loop design §5.2; v2 since EA3.6, the frontend's engine-adapters design §16; v3
      * since EA6.3, the frontend's visual-review design §8.2: {@code revision.moduleRepairs}).
@@ -59,7 +57,7 @@ public class JsonSchemas {
     public JsonSchemas() {
         ObjectMapper json = new ObjectMapper();
         JsonSchemaFactory factory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
-        for (String id : List.of(SCENE_DRAFT, EDIT_PLAN, AGENT_ACTION, REVIEW_VERDICT)) {
+        for (String id : List.of(AGENT_ACTION, REVIEW_VERDICT)) {
             String path = "schemas/" + id + ".json";
             try {
                 String text = new ClassPathResource(path).getContentAsString(StandardCharsets.UTF_8);

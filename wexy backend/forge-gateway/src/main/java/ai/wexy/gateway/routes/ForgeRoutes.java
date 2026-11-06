@@ -25,16 +25,11 @@ import java.util.function.Function;
  * <ul>
  *   <li><b>publicRead:</b> an address budget. No sign-in, no App Check: share pages and crawlers
  *       carry neither.</li>
- *   <li><b>forgeEntry:</b> plan, the call that starts a world and the one a script would repeat.
- *       Address budget, App Check spent once, sign-in (anonymous allowed), then a per-account
- *       budget that is tighter for anonymous accounts.</li>
- *   <li><b>forgeCreate:</b> author, the parallel calls that follow a plan. As above, with the cached
- *       App Check token.</li>
- *   <li><b>forgeEdit:</b> repair, direct and outcomes.</li>
+ *   <li><b>agent:</b> turns, modules and reviews, each with its own model-call budget and single-use App Check.</li>
  *   <li><b>admin:</b> an address budget and the admin allow-list.</li>
  * </ul>
  *
- * Four of forge's routes spend App Check tokens: forge-plan, agent-turn, agent-module and agent-review
+ * Three of forge's routes spend App Check tokens: agent-turn, agent-module and agent-review
  * (EA6.4). With the platform's (PlatformRoutes) they are the routes the frontend mints a fresh token for
  * (ForgeRoutesTest pins the whole set). Every token minted here is for forge alone (W2's audience).
  *
@@ -54,13 +49,6 @@ public class ForgeRoutes {
 
         Function<GatewayFilterSpec, UriSpec> publicRead = f -> f
                 .filter(rateLimits.byClient("public-read"));
-
-        Function<GatewayFilterSpec, UriSpec> forgeEntry = f -> f
-                .filter(rateLimits.byClient("forge-create"))
-                .filter(appCheck.singleUse())
-                .filter(authorization.anonymousAllowed())
-                .filter(standing.spending())
-                .filter(rateLimits.byUserTiered("forge-create-user", "forge-create-anonymous"));
 
         // The agent turn (the agent-loop design §10): an expensive entry, like a plan, whose buckets count model calls (Q66).
         Function<GatewayFilterSpec, UriSpec> agentEntry = f -> f
@@ -95,20 +83,6 @@ public class ForgeRoutes {
                 .filter(authorization.anonymousAllowed())
                 .filter(rateLimits.byUser("review-read-user"));
 
-        Function<GatewayFilterSpec, UriSpec> forgeCreate = f -> f
-                .filter(rateLimits.byClient("forge-create"))
-                .filter(appCheck)
-                .filter(authorization.anonymousAllowed())
-                .filter(standing.spending())
-                .filter(rateLimits.byUserTiered("forge-create-user", "forge-create-anonymous"));
-
-        Function<GatewayFilterSpec, UriSpec> forgeEdit = f -> f
-                .filter(rateLimits.byClient("forge-edit"))
-                .filter(appCheck)
-                .filter(authorization.anonymousAllowed())
-                .filter(standing.spending())
-                .filter(rateLimits.byUser("forge-edit-user"));
-
         Function<GatewayFilterSpec, UriSpec> admin = f -> f
                 .filter(rateLimits.byClient("admin"))
                 .filter(authorization.adminOnly());
@@ -125,16 +99,6 @@ public class ForgeRoutes {
 
         return builder.routes()
                 // --- Forge: the model calls (streamed) and the browser's reports ---
-                .route("forge-plan", r -> r.path("/v1/forge/plan").and().method(HttpMethod.POST)
-                        .filters(forgeEntry).uri(forgeService))
-                .route("forge-author", r -> r.path("/v1/forge/author").and().method(HttpMethod.POST)
-                        .filters(forgeCreate).uri(forgeService))
-                .route("forge-repair", r -> r.path("/v1/forge/repair").and().method(HttpMethod.POST)
-                        .filters(forgeEdit).uri(forgeService))
-                .route("forge-direct", r -> r.path("/v1/forge/direct").and().method(HttpMethod.POST)
-                        .filters(forgeEdit).uri(forgeService))
-                .route("forge-outcomes", r -> r.path("/v1/forge/outcomes").and().method(HttpMethod.POST)
-                        .filters(forgeEdit).uri(forgeService))
                 .route("agent-turn", r -> r.path("/v1/agent/turn").and().method(HttpMethod.POST)
                         .filters(agentEntry).uri(forgeService))
                 .route("agent-module", r -> r.path("/v1/agent/module").and().method(HttpMethod.POST)

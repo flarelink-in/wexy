@@ -81,13 +81,15 @@ try {
     writeFileSync(join(OUT, 'agent-view.png'), Buffer.from(shot.data, 'base64'));
 
     // EA-V6, the studio itself, its GPU still off: the panel mounts only behind ?agent=1, before WebGPU is asked for,
-    // above h1's trace in Developer view; h1's page (?legacy=1, the rollback) loads none of the agent path.
+    // above h1's trace in Developer view.
     // EA9-E1b (EA9.1): ?create=agent loads the creation controller and the creator's controls, not Developer view; with
     // no backend to reach (?source=mock) its Create stays off and the steps say why. Since 11-04's switch the plain page
     // is the agent path too, and ?source=mock selects the Playground (master's switch), whose button the idea box shows.
+    // EA9.6 retired h1's page, ?legacy=1, which these checked loaded none of the agent path: it is an unknown selector
+    // now (EA9-U16 and test/retired-creation.test.mjs hold that).
     const evaluate = async expression => (await page.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })).result?.value;
     const studio = {};
-    for (const [label, query] of [['agent', '?agent=1&source=mock'], ['create', '?create=agent&source=mock'], ['plain', '?source=mock'], ['legacy', '?legacy=1&source=mock']]) {
+    for (const [label, query] of [['agent', '?agent=1&source=mock'], ['create', '?create=agent&source=mock'], ['plain', '?source=mock']]) {
         await page.send('Page.navigate', { url: `${origin}/studio.html${query}` });
         let seen = null;
         for (let i = 0; i < 50 && !seen?.settled; i++) {
@@ -114,27 +116,24 @@ try {
         }
         studio[label] = seen;
     }
-    await sleep(1000); // a late-loading agent chunk would show on h1's page now
-    studio.legacyLate = await evaluate(`performance.getEntriesByType('resource').map(e => new URL(e.name).pathname).filter(n => /agent-(view|stream|client|turn)|contract\\/agent|loop\\/creation|creation-view/.test(n))`);
     const a = studio.agent ?? {};
     const c = studio.create ?? {};
     const p = studio.plain ?? {};
-    const l = studio.legacy ?? {};
     result.checks.push({
-        name: 'EA-V6 the studio mounts the panel only behind ?agent=1: above h1\'s trace, in Developer view; h1\'s page (?legacy=1) loads none of the agent path',
+        name: 'EA-V6 the studio mounts the panel only behind ?agent=1: above h1\'s trace, in Developer view',
         // With the GPU off the studio stops at its "no WebGPU" card part way through its start, so the button's words are
         // whatever was said before it (11-05: they varied run to run); that nothing can be pressed is what holds.
         ok: !!(a.panel && a.aboveTrace && a.dev && /^(No backend|No turn yet)$/.test(a.status ?? '') && a.forgeDisabled
-            && !p.panel && !p.dev && !l.panel && !l.dev && l.agentCode?.length === 0 && studio.legacyLate?.length === 0 && l.forgeDisabled),
+            && !p.panel && !p.dev),
         detail: studio,
     });
     result.ok = result.ok && result.checks.at(-1).ok;
     result.checks.push({
-        name: 'EA9-E1b ?create=agent and the plain page (the default since 11-04) load the creation controller and the creator\'s controls, not Developer view; with no backend its Create stays off and says why; h1\'s page loads none of it',
+        name: 'EA9-E1b ?create=agent and the plain page (the default since 11-04) load the creation controller and the creator\'s controls, not Developer view; with no backend its Create stays off and says why',
         ok: !!(c.creationCode?.length >= 2 && !c.panel && !c.dev && c.forgeDisabled && p.forgeDisabled
             && /^Making a new world needs the Wexy service/.test(c.idle ?? '') && p.creationCode?.length >= 2 && /^Making a new world needs the Wexy service/.test(p.idle ?? '')
-            && l.creationCode?.length === 0 && a.creationCode?.length >= 1),
-        detail: { create: c, plain: p, legacyCreation: l.creationCode, agentCreation: a.creationCode },
+            && a.creationCode?.length >= 1),
+        detail: { create: c, plain: p, agentCreation: a.creationCode },
     });
     result.ok = result.ok && result.checks.at(-1).ok;
 

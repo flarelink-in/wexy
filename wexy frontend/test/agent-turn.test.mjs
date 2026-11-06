@@ -289,6 +289,5 @@ test('EA-T6 the agent\'s modules reach no runtime, verifier, capture or engine c
     }
     const selection = readFileSync(join(ROOT, 'src/shell/studio/creation-path.ts'), 'utf8');
     assert.match(selection, /params\.get\('agent'\) === '1'/);
-    assert.match(selection, /params\.get\('create'\) === 'agent'/);
     assert.ok(!/^import /m.test(selection), 'the selection imports nothing: the plain page pays for none of the agent path');
 });

@@ -32,7 +32,7 @@ public class ClientNetworkKeyTest {
     }
 
     private static String of(ClientNetworkKey key, String peer) {
-        return key.of(from(peer, MockServerHttpRequest.post("/v1/forge/plan")));
+        return key.of(from(peer, MockServerHttpRequest.post("/v1/agent/turn")));
     }
 
     @Test
@@ -73,7 +73,7 @@ public class ClientNetworkKeyTest {
     void theTrustedHeaderIsReadAsTheResolverReadsIt() {
         ClientNetworkKey behindCloudflare = key(KEY, 1, "CF-Connecting-IP");
 
-        String key = behindCloudflare.of(from("172.18.0.5", MockServerHttpRequest.post("/v1/forge/plan")
+        String key = behindCloudflare.of(from("172.18.0.5", MockServerHttpRequest.post("/v1/agent/turn")
                 .header("CF-Connecting-IP", "[2001:db8:abcd:12::9]")));
         assertThat(key).isEqualTo(of(key(KEY, 0, ""), "2001:db8:abcd:12::1"));
     }
@@ -83,7 +83,7 @@ public class ClientNetworkKeyTest {
     void aSpoofedForwardedForChangesNothing() {
         ClientNetworkKey key = key(KEY, 0, "");
 
-        String spoofed = key.of(from("203.0.113.42", MockServerHttpRequest.post("/v1/forge/plan")
+        String spoofed = key.of(from("203.0.113.42", MockServerHttpRequest.post("/v1/agent/turn")
                 .header("X-Forwarded-For", "198.51.100.1").header("CF-Connecting-IP", "198.51.100.1")));
         assertThat(spoofed).isEqualTo(of(key, "203.0.113.42"));
     }
@@ -96,7 +96,7 @@ public class ClientNetworkKeyTest {
         assertThat(ClientNetworkKey.network("evil.example.com")).isNull();
         assertThat(ClientNetworkKey.network("")).isNull();
         assertThat(ClientNetworkKey.network(null)).isNull();
-        assertThat(key.of(MockServerWebExchange.from(MockServerHttpRequest.post("/v1/forge/plan")))).as("no peer at all").isNull();
+        assertThat(key.of(MockServerWebExchange.from(MockServerHttpRequest.post("/v1/agent/turn")))).as("no peer at all").isNull();
     }
 
     @Test
