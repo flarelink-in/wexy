@@ -21,15 +21,22 @@
 //               admission, and comes back if that turn is refused at entry or stopped before it (Q126 (b))
 //   staleness   every continuation checks, after each await, that its creation is neither superseded nor ended and that
 //               its account is still the one signed in (I9): a late answer changes nothing and opens no dialog
+//   follow-up   Q120 (b) (the user, 2026-11-05: "Build the follow-up"; EA9.5): a turn admitted that ended with no world
+//               (asked, declined, exhausted, failed, stopped) spent its world's grant, so the next Create follows it
+//               (`retryOf`), inside that grant, once, for the same uid. A failure in the stream on the model's side
+//               (`upstream`, terminal) is tried once more by itself, with the same idea, as h1's plan retry. Each such
+//               end says whether the next Create is a second try or a new world. A follow-up the service refuses
+//               (`409 conflict`) is said, and the next Create is a new world, sent as one; nothing becomes one by itself
 
 import type { CompiledBody } from '../contract/adapters/bodies';
 import type { SolutionDesign } from '../contract/agent';
 import type { DeepReadonly } from '../contract/engine/frozen';
 import { cutCodePoints } from '../contract/text';
 import type { AgentTurnRequest } from '../forge-client/agent-client';
+import type { AgentMeta } from '../forge-client/agent-stream';
 import { ForgeError, isErrorCode } from '../forge-client/errors';
-import type { AgentSession, AgentTurnState } from './agent-turn';
-import { turnCallsOf, type CandidateSession, type CandidateState, type HandOff } from './candidate';
+import { endSeen, type AgentSession, type AgentTurnState } from './agent-turn';
+import { turnCallsOf, type CandidateSession, type CandidateState, type FollowedTurn, type HandOff, type TurnCallRecord } from './candidate';
 import { COPY } from './copy';
 import { classifyError } from './failures';
 import type { SealedCandidate } from './snapshot';
@@ -160,6 +167,11 @@ export interface CreationState {
      * waiting for Show it, whose go shows a new version of that world. False for a new idea's creation.
      */
     readonly improves: boolean;
+    /**
+     * The turn its turn follows (Q120 (b)), by the id its meta named: the creator's own second try after an end with no
+     * world, or the studio's retry of a failure on the model's side. Null for a turn that follows none.
+     */
+    readonly follows: string | null;
 }
 
 export interface CreationController {
@@ -321,9 +333,43 @@ interface End {
     discarded?: boolean;
 }
 
+/**
+ * A turn the next Create may follow (Q120 (b)): admitted, so its world's grant is spent, and ended with no world; no
+ * follow-up itself. Kept for the uid that made it (another uid's Create cannot follow it: the backend refuses it), with its
+ * calls, which count into the follow-up's attempt (Q_C), and how its end was known.
+ */
+export interface Followable {
+    readonly turnId: string;
+    readonly uid: string | null;
+    readonly calls: readonly TurnCallRecord[];
+    /** Its meta's model and template: the bundle names what made its calls, as it does a hand-off's turn's. */
+    readonly model: string;
+    readonly promptVersion: string;
+    /**
+     * Its end was the service's own last word (`endSeen`): its calls are all it made. Unseen, Q_C counts its whole
+     * allowance (candidate.ts's `followedCalls`; the outside review of EA9.5, its mid).
+     */
+    readonly end: FollowedTurn['end'];
+}
+
+/** `t`, admitted (its meta named it), as the turn a follow-up follows: for `uid`, with its calls and how its end was known. */
+function followableOf(t: AgentTurnState & { meta: AgentMeta }, uid: string | null): Followable {
+    return {
+        turnId: t.meta.turnId, uid, calls: turnCallsOf(t.calls), model: t.meta.model, promptVersion: t.meta.promptVersion, end: endSeen(t) ? 'seen' : 'unseen',
+    };
+}
+
 interface Creation {
     readonly idea: AgentTurnRequest;
     readonly title: string;
+    /** The turn its turn follows (Q120 (b)): the creator's second try, or its own retry; null for a turn that follows none. */
+    follows: Followable | null;
+    /** Its own retry of a failure on the model's side is under way (Q120 (b)): the plan row says so. */
+    retrying: boolean;
+    /** One of its turns was admitted (its stream began): its world's grant is spent, so a world kept for its go went (Q126 (b)). */
+    admitted: boolean;
+    /** What its last turn leaves for the next Create is settled (Q120 (b)): at its end, its Stop or its supersession, once. */
+    followSettled: boolean;
     /** Developer view's turn: it stops at the hand-off until "Write the modules". */
     readonly manual: boolean;
     /**
@@ -362,10 +408,62 @@ interface Creation {
 
 /** The turn's failure in the creator's words (failures.ts, as h1's plan's), and the limit dialog it opens. */
 function turnFailure(t: AgentTurnState): { sentence: string; limit: LimitKind | null } {
+    // A follow-up the service refused (Q120 (b)): it could not be continued, and nothing became a new world by itself.
+    if (t.request.retryOf && t.meta === null && t.code === 'conflict') return { sentence: COPY.creation.followRefused, limit: null };
     if (!t.code || !isErrorCode(t.code)) return { sentence: COPY.failures.internal, limit: null };
     const f = classifyError(new ForgeError(t.code, t.httpStatus ?? 0, t.reason ?? '', t.retryAfterSeconds, t.bare === true), 'plan');
     return { sentence: f.sentence, limit: f.kind === 'allowance' ? 'allowance' : f.kind === 'quota' ? 'quota' : null };
 }
+
+/**
+ * The one failure the studio tries again by itself (Q120 (b)), as h1's plan retry does: the turn was admitted (its meta
+ * came, so its id is known and its world's grant spent) and the service ended its stream with `upstream` (the model's
+ * service, or an answer that missed the action schema after its repairs: the backend's terminal `error`). Never a
+ * question, a decline, a spent budget, a cancel, a timeout, a dropped connection or a cap of the client's, whose end on
+ * the server's side is unknown, and never a turn that was itself a follow-up.
+ */
+export function retriable(t: AgentTurnState): boolean {
+    return t.phase === 'failed' && t.code === 'upstream' && t.terminal && t.meta !== null && !t.request.retryOf;
+}
+
+/**
+ * The codes of a refusal before admission that spent nothing and may pass when sent again (Q120 (b)): a rate, the
+ * service, its meter or an edge unable to answer now, the changed idea's words or size, a deadline, an App Check token.
+ */
+const PASSING: ReadonlySet<string> = new Set(['rate', 'unavailable', 'budget', 'paused', 'upstream', 'timeout', 'content-refused', 'too-large', 'appcheck']);
+
+/**
+ * A follow-up refused before its admission may be sent again (Q120 (b)): the creator's own Stop, no answer at all, or a
+ * refusal that may pass (`PASSING`). Anything else the service said of the request itself (a forge before EA9.5
+ * answers `retryOf` with 400; a 404, a 500, another build's versions) would be said again: it is no second try to keep
+ * (the independent review of EA9.5, its mid: every later Create resent it).
+ */
+function passes(t: AgentTurnState): boolean {
+    return t.phase === 'cancelled' || t.httpStatus === 0 || (t.code !== null && PASSING.has(t.code));
+}
+
+/**
+ * What a creation's last turn leaves for the next Create once it has ended with no world (Q120 (b)): the turn to follow
+ * and the clause its sentence ends with. Admitted, it spent its world's grant: a second try follows it, unless it was a
+ * follow-up itself (one a world), and then the next Create is a new world. Never admitted, it spent nothing: a follow-up
+ * not admitted is still the creator's (`kept`) when its refusal may pass, and gone otherwise (a `409 conflict` says so
+ * itself); an entry leaves nothing.
+ */
+export function nextTry(t: AgentTurnState | null, uid: string | null, kept: Followable | null): { follow: Followable | null; note: string | null } {
+    if (!t || t.phase === 'handed-off' || t.phase === 'running') return { follow: null, note: null };
+    const following = t.request.retryOf ?? null;
+    if (t.meta !== null) {
+        return following === null
+            ? { follow: followableOf({ ...t, meta: t.meta }, uid), note: COPY.creation.secondTry }
+            : { follow: null, note: COPY.creation.newWorld };
+    }
+    if (following === null) return { follow: null, note: null };
+    if (t.code === 'conflict') return { follow: null, note: null };
+    return passes(t) ? { follow: kept, note: COPY.creation.secondTry } : { follow: null, note: COPY.creation.newWorld };
+}
+
+/** `sentence`, and then what the next Create is (Q120 (b)), when the end leaves one to say. */
+const withNote = (sentence: string, note: string | null) => (note ? `${sentence} ${note}` : sentence);
 
 function phaseOf(c: Creation): CreationPhase {
     if (c.end) return c.end.phase;
@@ -418,7 +516,7 @@ function stepsOf(c: Creation | null, phase: CreationPhase): Record<CreationRow, 
         return steps;
     }
     switch (phase) {
-        case 'turn': steps.plan = step('running', COPY.creation.planning, c.planSince); break;
+        case 'turn': steps.plan = step('running', c.retrying ? COPY.creation.retrying : COPY.creation.planning, c.planSince); break;
         case 'handed-off': steps.build = pending(COPY.creation.writingStart); break;
         case 'writing': steps.build = step('running', total ? COPY.creation.writing(written, total) : COPY.creation.writingStart, c.buildSince); break;
         case 'ready': steps.check = c.notice ? step(c.notice.failed ? 'failed' : 'pending', c.notice.sentence) : pending(COPY.creation.readyToShow); break;
@@ -442,6 +540,8 @@ export function createCreationController(deps: CreationDeps): CreationController
     let lost = false;
     /** A world written and waiting for its go, kept while the newer creation's turn waits for its admission (Q126 (b)). */
     let kept: Creation | null = null;
+    /** The turn the next Create follows, inside its world (Q120 (b)): taken by the Create that sends it. */
+    let followable: Followable | null = null;
     const clock = deps.now ?? (() => performance.now());
     const listeners = new Set<(state: CreationState) => void>();
     let state: CreationState = view();
@@ -449,6 +549,7 @@ export function createCreationController(deps: CreationDeps): CreationController
         const c = turnOwner;
         if (!c || c.closed) return;
         c.turn = s;
+        if (s.meta) c.admitted = true;
         // Admitted the moment its stream begins (meta, after W1's entry admission): a world kept for its go goes then, so
         // a newer Create that supersedes this one cannot bring it back (Q126 (b): once admitted, it goes; the EA9.2 review).
         if (s.meta && kept && current === c) decide(c, true);
@@ -473,6 +574,7 @@ export function createCreationController(deps: CreationDeps): CreationController
             run: c?.run && shown !== null && c.run.candidate === shown ? c.run.summary : null,
             onStage: installed !== null,
             improves: !!c && c === installed,
+            follows: c?.follows?.turnId ?? null,
         });
     }
 
@@ -504,7 +606,8 @@ export function createCreationController(deps: CreationDeps): CreationController
         const authEpoch = from ? from.authEpoch : deps.account?.established() ? deps.account.epoch() : null;
         const authUid = from ? from.authUid : authEpoch !== null ? deps.account?.uid() ?? null : null;
         return {
-            idea, title: titleOf(idea.prompt), manual, authEpoch, authUid, session: null,
+            idea, title: titleOf(idea.prompt), follows: from?.follows ?? null, retrying: false, admitted: from?.admitted ?? false,
+            followSettled: from !== undefined, manual, authEpoch, authUid, session: null,
             turn: from?.turn ?? null, handOff: from?.handOff ?? null, candidate: null, running: false, run: null, onStage: null, notice: null,
             planSince: clock(), planMs: from?.planMs ?? null, buildSince: null, buildMs: null, runSince: null, runMs: null,
             end: null, closed: false,
@@ -541,9 +644,25 @@ export function createCreationController(deps: CreationDeps): CreationController
         publish(c);
     }
 
+    /**
+     * What `c`'s last turn leaves for the next Create (Q120 (b)), settled once, from `t`, its last state: when it ended,
+     * when it was stopped, or when a newer Create superseded it, whichever came first (the independent review of EA9.5: a
+     * Create that landed first lost a follow-up the superseded one took, or the stopped one's own). Nothing when no turn
+     * of it was sent. Another uid's Create never follows it.
+     */
+    function settleFollow(c: Creation, t: AgentTurnState | null): void {
+        if (c.followSettled) return;
+        c.followSettled = true;
+        if (!t) return;
+        const next = nextTry(t, c.authUid, c.follows);
+        followable = next.follow && (!deps.account || deps.account.uid() === next.follow.uid) ? next.follow : null;
+    }
+
     /** A newer creation took its place: its turn and its attempt cancelled, nothing of it shown again. Never H's (I8). */
     function supersede(c: Creation): void {
         if (c.closed || c === installed) return;
+        // Its turn stops here, so what it leaves for the next Create is settled before that Create takes it (Q120 (b)).
+        settleFollow(c, c.turn?.phase === 'running' ? { ...c.turn, phase: 'cancelled' } : c.turn);
         c.closed = true;
         if (turnOwner === c) {
             turnOwner = null;
@@ -645,20 +764,28 @@ export function createCreationController(deps: CreationDeps): CreationController
             c.authEpoch = account.epoch();
             c.authUid = account.uid();
         }
-        // The turn session is this creation's only from here: what the one it superseded still says is not shown as its.
-        turnOwner = c;
-        let end: AgentTurnState;
-        try {
-            end = await turns.start(idea);
-        } finally {
-            if (turnOwner === c) turnOwner = null;
-            // The call made or found an identity: who it is, and what the server says is left (W1), however it ended.
-            if (deps.account) void Promise.resolve().then(() => deps.account?.afterEntry()).catch(() => {});
+        // Q120 (b): a turn of this creator's that ended with no world is followed, inside its world, once. Taken now: a
+        // follow-up spent or refused never comes back, and one that never reached its admission is given back below.
+        const follow = followable && (!deps.account || followable.uid === c.authUid) ? followable : null;
+        followable = null;
+        c.follows = follow;
+        let end = await turnOf(c, follow ? { ...idea, retryOf: follow.turnId } : idea);
+        // The studio's own retry, once: a failure in the stream on the model's side, with the same idea, inside the same
+        // world (as h1's plan retry), unless the creation was stopped, superseded or moved to another account meanwhile.
+        if (!c.closed && !c.end && retriable(end) && !accountMovedFor(c) && !lost && !disposed && end.meta) {
+            c.follows = followableOf({ ...end, meta: end.meta }, c.authUid);
+            c.retrying = true;
+            publish(c);
+            end = await turnOf(c, { ...idea, retryOf: c.follows.turnId });
+            c.retrying = false;
         }
+        // What the next Create is (Q120 (b)), settled once its last turn has ended, however it ended, unless its Stop or a
+        // newer Create settled it first.
+        if (!c.closed) settleFollow(c, c.turn);
         if (!c.closed && !c.end) ended(c, end);
         // Admitted once its stream began: meta is the backend's first word, after the entry's admission (W1). An entry's
         // refusal comes before any stream.
-        decide(c, end.meta !== null);
+        decide(c, c.admitted);
         if (c.closed || c.end || c.manual || !deps.candidateSession) {
             if (!c.closed && !c.end) publish(c);
             return state;
@@ -666,38 +793,61 @@ export function createCreationController(deps: CreationDeps): CreationController
         return writing(c);
     }
 
-    /** What `c`'s turn came to: its hand-off, or its end in one sentence. */
+    /** One turn of `c`'s, the turn session its own while it runs; then the account read again (W1), however it ended. */
+    async function turnOf(c: Creation, request: AgentTurnRequest): Promise<AgentTurnState> {
+        // The turn session is this creation's only from here: what the one it superseded still says is not shown as its.
+        turnOwner = c;
+        try {
+            return await turns.start(request);
+        } finally {
+            if (turnOwner === c) turnOwner = null;
+            // The call made or found an identity: who it is, and what the server says is left (W1), however it ended.
+            if (deps.account) void Promise.resolve().then(() => deps.account?.afterEntry()).catch(() => {});
+        }
+    }
+
+    /**
+     * What `c`'s turn came to: its hand-off, or its end in one sentence, ending, when it leaves one, with what the next
+     * Create is (Q120 (b)): a second try in the same world, or a new world.
+     */
     function ended(c: Creation, end: AgentTurnState): void {
         c.turn = end;
         if (accountMovedFor(c)) {
             finish(c, 'stopped', COPY.creation.accountChanged);
             return;
         }
+        const note = nextTry(end, c.authUid, c.follows).note;
         switch (end.phase) {
             case 'handed-off':
                 c.handOff = handOffFrom(end);
+                // A second try's attempt counts the turn it followed into Q_C (Q120 (b)): one world's calls, never reset; all
+                // that turn could have made when its end was not seen (the outside review of EA9.5).
+                if (c.handOff && c.follows) {
+                    const f = c.follows;
+                    c.handOff = { ...c.handOff, followed: { turnId: f.turnId, model: f.model, promptVersion: f.promptVersion, calls: [...f.calls], end: f.end } };
+                }
                 c.planMs = clock() - c.planSince;
                 if (!c.handOff) finish(c, 'stopped', COPY.failures.internal);
                 return;
             case 'asked': {
                 const question = cutCodePoints(end.question ?? '', QUESTION_CHARS);
-                finish(c, 'stopped', COPY.creation.asked(question), { question });
+                finish(c, 'stopped', withNote(COPY.creation.asked(question), note), { question });
                 return;
             }
             case 'declined':
-                finish(c, 'stopped', COPY.creation.declined);
+                finish(c, 'stopped', withNote(COPY.creation.declined, note));
                 return;
             case 'exhausted':
-                finish(c, 'stopped', COPY.creation.exhausted);
+                finish(c, 'stopped', withNote(COPY.creation.exhausted, note));
                 return;
             case 'failed': {
                 const f = turnFailure(end);
-                finish(c, 'stopped', f.sentence, { limit: f.limit });
+                finish(c, 'stopped', withNote(f.sentence, note), { limit: f.limit });
                 return;
             }
             case 'cancelled':
             case 'running':
-                finish(c, 'cancelled', COPY.creation.cancelled);
+                finish(c, 'cancelled', withNote(COPY.creation.cancelled, note));
         }
     }
 
@@ -831,13 +981,18 @@ export function createCreationController(deps: CreationDeps): CreationController
             publish(c);
             return;
         }
-        c.end = { phase: 'cancelled', at: rowOf(phase), sentence: COPY.creation.cancelled, question: null, limit: null };
+        // A turn stopped now says nothing more, so whether it was admitted says what the next Create is (Q120 (b)), settled
+        // now: a Create pressed before the stopped turn's request settles finds it.
+        const t = phase === 'turn' && c.turn ? { ...c.turn, phase: 'cancelled' as const } : null;
+        const note = t ? nextTry(t, c.authUid, c.follows).note : null;
+        if (t) settleFollow(c, t);
+        c.end = { phase: 'cancelled', at: rowOf(phase), sentence: withNote(COPY.creation.cancelled, note), question: null, limit: null };
         if (turnOwner === c) turns.cancel();
         c.session?.cancel();
         publish(c);
         // Stopped before its turn was admitted (its sign-in, or its turn before the stream): the world kept for its go
         // comes back now, not when a stalled sign-in or request settles (Q126 (b)).
-        decide(c, c.turn?.meta != null);
+        decide(c, c.admitted);
     }
 
     function deviceLost(): void {
@@ -877,6 +1032,8 @@ export function createCreationController(deps: CreationDeps): CreationController
             release(kept);
             kept = null;
         }
+        // A turn to follow is its uid's (Q120 (b)): another account's Create starts its own world; a link keeps it.
+        if (followable && deps.account && deps.account.uid() !== followable.uid) followable = null;
         const c = current;
         if (c && !c.closed && !c.end && accountMovedFor(c)) {
             const phase = phaseOf(c);
@@ -900,7 +1057,7 @@ export function createCreationController(deps: CreationDeps): CreationController
                 if (turnOwner === c) turns.cancel();
                 c.session?.cancel();
                 // A world kept for its go comes back now (Q126 (b)), unless the account changed: then it went above.
-                decide(c, c.turn?.meta != null);
+                decide(c, c.admitted);
             } else if (other && (phase === 'ready' || phase === 'running')) {
                 // κ moves, so a Run of it under way stops at its next check with the Head unchanged; the world goes.
                 n++;

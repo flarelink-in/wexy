@@ -119,6 +119,93 @@ class RedisGrantStoreTest {
         assertThat(store.counts(List.of("wexy:allow:early:d:o1", "wexy:allow:none"))).containsExactly(1L, 0L);
     }
 
+    /** A grant as PromptGrants writes one since Q120 (b): its entry's own id beside the rest. */
+    private void granted(String id, String entry) {
+        List<String> counters = List.of("wexy:allow:early:d:" + id);
+        store.grant(counters, List.of(5L), List.of(3600L), "wexy:grant:" + id, id, "wexy:grant:of:" + entry,
+                Map.of("owner", "o1", "prompt", "p1", "counters", String.join(" ", counters), "dispatched", "1", "entry", entry), 7200);
+    }
+
+    /**
+     * Q120 (b), the real scripts: the probe and the join read the same checks (owner, follow-ups, an end written and
+     * without a world, the idea); only the grant's own turn writes its end; a join moves the idea, clears the end and
+     * indexes the follow-up; a follow-up that dispatched nothing is given back exactly; one that dispatched is not.
+     */
+    @Test
+    void theRealFollowUpScriptsFollowOnceGiveBackExactlyAndKeepTheirOrder() {
+        granted("g5", "turn-1");
+        assertThat(store.probeFollow("wexy:grant:none", "o1", 1, "p1")).isEqualTo(GrantStore.Follow.NONE);
+        assertThat(store.probeFollow("wexy:grant:g5", "o2", 1, "p1")).as("another owner's").isEqualTo(GrantStore.Follow.NONE);
+        assertThat(store.probeFollow("wexy:grant:g5", "o1", 1, "p1")).as("no end written: running").isEqualTo(GrantStore.Follow.OPEN);
+
+        assertThat(store.ended("wexy:grant:g5", "turn-9", "asked")).as("another turn's end").isFalse();
+        assertThat(store.ended("wexy:grant:g5", "turn-1", "handed-off")).isTrue();
+        assertThat(store.probeFollow("wexy:grant:g5", "o1", 1, "p1")).as("it made a world").isEqualTo(GrantStore.Follow.WORLD);
+        assertThat(store.follow("wexy:grant:g5", "o1", 1, "p2", "wexy:grant:of:turn-2", "g5", "turn-2")).isEqualTo(GrantStore.Follow.WORLD);
+        store.ended("wexy:grant:g5", "turn-1", "something-else");
+        assertThat(store.probeFollow("wexy:grant:g5", "o1", 1, "p1")).as("an end no follow-up follows").isEqualTo(GrantStore.Follow.WORLD);
+
+        store.ended("wexy:grant:g5", "turn-1", "asked");
+        assertThat(store.probeFollow("wexy:grant:g5", "o1", 1, "p1")).isEqualTo(GrantStore.Follow.SAME);
+        assertThat(store.probeFollow("wexy:grant:g5", "o1", 1, "p2")).isEqualTo(GrantStore.Follow.CHANGED);
+        assertThat(store.probeFollow("wexy:grant:g5", "o1", 0, "p2")).as("no follow-ups at all").isEqualTo(GrantStore.Follow.FULL);
+        assertThat(redis.opsForHash().get("wexy:grant:g5", "followups")).as("the probe writes nothing").isNull();
+
+        assertThat(store.follow("wexy:grant:g5", "o2", 1, "p2", "wexy:grant:of:turn-2", "g5", "turn-2")).isEqualTo(GrantStore.Follow.NONE);
+        assertThat(store.follow("wexy:grant:g5", "o1", 1, "p2", "wexy:grant:of:turn-2", "g5", "turn-2")).isEqualTo(GrantStore.Follow.JOINED);
+        assertThat(redis.<String, String>opsForHash().entries("wexy:grant:g5")).containsEntry("followups", "1").containsEntry("prompt", "p2")
+                .containsEntry("prevPrompt", "p1").containsEntry("prevEnd", "asked").containsEntry("following", "turn-2").doesNotContainKey("end");
+        assertThat(store.lookup("wexy:grant:of:turn-2")).isEqualTo("g5");
+        assertThat(redis.getExpire("wexy:grant:of:turn-2")).isBetween(1L, 7200L);
+        assertThat(store.follow("wexy:grant:g5", "o1", 1, "p3", "wexy:grant:of:turn-3", "g5", "turn-3")).as("one a prompt").isEqualTo(GrantStore.Follow.FULL);
+        assertThat(store.ended("wexy:grant:g5", "turn-1", "failed")).as("once followed, only the follow-up writes the end").isFalse();
+
+        // Given back while it dispatched nothing: as it was before the join, its index gone; then it may join again.
+        assertThat(store.unfollow("wexy:grant:g5", "wexy:grant:of:turn-9", "turn-9")).as("another follow-up's").isFalse();
+        assertThat(store.unfollow("wexy:grant:g5", "wexy:grant:of:turn-2", "turn-2")).isTrue();
+        assertThat(redis.<String, String>opsForHash().entries("wexy:grant:g5")).containsEntry("followups", "0").containsEntry("prompt", "p1")
+                .containsEntry("end", "asked").doesNotContainKeys("following", "followDispatched", "prevPrompt", "prevEnd");
+        assertThat(redis.hasKey("wexy:grant:of:turn-2")).isFalse();
+        assertThat(store.unfollow("wexy:grant:g5", "wexy:grant:of:turn-2", "turn-2")).as("given back once").isFalse();
+
+        // Joined again and dispatched: spent, never given back; its own end is written.
+        assertThat(store.follow("wexy:grant:g5", "o1", 1, "p2", "wexy:grant:of:turn-4", "g5", "turn-4")).isEqualTo(GrantStore.Follow.JOINED);
+        store.followDispatched("wexy:grant:g5", "turn-4");
+        assertThat(store.unfollow("wexy:grant:g5", "wexy:grant:of:turn-4", "turn-4")).as("spent").isFalse();
+        assertThat(store.ended("wexy:grant:g5", "turn-4", "asked")).isTrue();
+        assertThat(store.probeFollow("wexy:grant:g5", "o1", 1, "p2")).as("its one follow-up spent").isEqualTo(GrantStore.Follow.FULL);
+    }
+
+    /** Q120 (b), the real join under a race: of twenty follow-ups of one prompt at once, one joins. */
+    @Test
+    void theRealFollowUpJoinsOneUnderARace() throws Exception {
+        granted("g6", "turn-1");
+        store.ended("wexy:grant:g6", "turn-1", "failed");
+        ExecutorService pool = Executors.newFixedThreadPool(8);
+        try {
+            CountDownLatch go = new CountDownLatch(1);
+            List<Future<GrantStore.Follow>> tries = new ArrayList<>();
+            for (int i = 0; i < 20; i++) {
+                String turn = "turn-r" + i;
+                tries.add(pool.submit(() -> {
+                    go.await();
+                    return store.follow("wexy:grant:g6", "o1", 1, "p" + turn, "wexy:grant:of:" + turn, "g6", turn);
+                }));
+            }
+            go.countDown();
+            int joined = 0;
+            for (Future<GrantStore.Follow> t : tries) {
+                GrantStore.Follow f = t.get();
+                assertThat(f).isIn(GrantStore.Follow.JOINED, GrantStore.Follow.FULL);
+                joined += f == GrantStore.Follow.JOINED ? 1 : 0;
+            }
+            assertThat(joined).isEqualTo(1);
+            assertThat(redis.opsForHash().get("wexy:grant:g6", "followups")).isEqualTo("1");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     /** The probe (the EA9.4 review): join's checks, in its order, writing nothing; and join's answer after it. */
     @Test
     void theRealProbeAnswersAsJoinWouldAndWritesNothing() {

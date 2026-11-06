@@ -1626,3 +1626,19 @@ test('EA9.4 review: the panel drops a round\'s late answer once another world is
         dom.restore();
     }
 });
+
+test('EA9.5\'s outside review: a followed turn whose end was not seen counts in the improvements left, its whole allowance unknown (Q120 (b))', async () => {
+    // The hand-off's three calls, the followed turn's as counted, then three authors; Q_C at 23 calls, so its count decides.
+    const left = {};
+    for (const end of ['seen', 'unseen']) {
+        const t = studio({ limits: { ...Q_C, calls: 23 } });
+        const st = await t.s.start(handOff(world(), { followed: { turnId: 'turn-0', model: 'model-0', promptVersion: 'agent.v5', calls: [TURN_CALLS[0]], end } }));
+        assert.equal(st.phase, 'static-verified', end);
+        left[end] = { rounds: t.reviews.roundsLeft(), budget: t.reviews.budget() };
+    }
+    // Seen: 3 + 1 + 3 = 7 calls, so two rounds of six fit. Unseen: 3 + 6 + 3 = 12, so one: the cost of the safe count
+    // (the independent review's low), said in the creator's count and the developer's line alike.
+    assert.deepEqual([left.seen.rounds, left.unseen.rounds], [2, 1], JSON.stringify(left));
+    assert.match(left.unseen.budget, /calls 12 of 23 \(6 unknown\)/);
+    assert.match(left.seen.budget, /calls 7 of 23 · /);
+});

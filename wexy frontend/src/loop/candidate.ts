@@ -60,7 +60,7 @@ import {
     EVIDENCE_LIMITS, EvidenceLimitError, EvidenceStore, route, verifyEnvelope, type CandidateEvidence, type EvidenceFinding, type EvidenceLimits,
     type EvidencePhase, type EvidenceSubject, type Envelope, type ProducedBy, type Scope, type Verdict,
 } from './candidate-evidence';
-import { Ledger, Q_C, budgetDiagnostic, type Budget, type CandidateLimits, type LedgerState, type Reservation } from './candidate-ledger';
+import { Ledger, Q_C, TURN_CALLS, budgetDiagnostic, type Budget, type CandidateLimits, type LedgerState, type Reservation } from './candidate-ledger';
 import { COPY } from './copy';
 import { sealCandidate, type SealedCandidate } from './snapshot';
 
@@ -98,6 +98,39 @@ export interface HandOff {
     promptVersion: string;
     /** The turn's own calls, as its records told them: the ledger is seeded with them (the design §8), the bundle lists them. */
     calls: TurnCallRecord[];
+    /**
+     * The turn this one followed, when it was a follow-up (Q120 (b), EA9.5): a turn of the same world that ended with no
+     * world, and its calls. They count against the attempt's calls too (`followedCalls`), unknown charges included, so a
+     * second try never resets Q_C, and the state and the bundle list them (`followed`). Absent for a turn that followed
+     * none.
+     */
+    followed?: FollowedTurn;
+}
+
+/** The turn a hand-off's turn followed (Q120 (b)): its id, as its meta named it, its calls, and how its end was known. */
+export interface FollowedTurn {
+    turnId: string;
+    /** Its model and template, from its meta, as a turn record names them: the bundle lists the template with the rest. */
+    model: string;
+    promptVersion: string;
+    /** Its calls as the browser saw them. */
+    calls: TurnCallRecord[];
+    /**
+     * `seen`: it ended on the service's own last word (agent-turn.ts's `endSeen`), so its calls are every call it made.
+     * `unseen`: a Stop, a dropped connection, a deadline, a cap of the client's; the service may have made more before it
+     * saw the client go, so Q_C counts the turn's whole allowance (the outside review of EA9.5, its mid).
+     */
+    end: 'seen' | 'unseen';
+}
+
+/**
+ * What Q_C counts for the turn a hand-off's followed (Q120 (b)): its calls, settled, when its end was seen; otherwise a
+ * turn's whole allowance ({@link TURN_CALLS}, or the calls seen if more), unknown, as a program revision whose end was
+ * not seen keeps its whole reservation (the design §8). Never fewer than were seen; anything but `seen` counts as unseen.
+ */
+export function followedCalls(f: DeepReadonly<FollowedTurn> | null): { settled: number; unknown: number } {
+    if (!f) return { settled: 0, unknown: 0 };
+    return f.end === 'seen' ? { settled: f.calls.length, unknown: 0 } : { settled: 0, unknown: Math.max(TURN_CALLS, f.calls.length) };
 }
 
 /** A handed-off turn's result as a hand-off. */
@@ -292,6 +325,8 @@ export interface CandidateState {
     limits: CandidateLimits;
     /** The hand-off's turn, then each program revision's. */
     turns: TurnRecord[];
+    /** The turn the hand-off's turn followed (Q120 (b)), whose calls Q_C counts too; null when it followed none. */
+    followed: FollowedTurn | null;
     jobs: JobRecord[];
     /** A model's reviews of the stage (EA6.4), each one call Q_C counts. */
     reviews: ReviewCallRecord[];
@@ -549,6 +584,8 @@ class Attempt {
     modules = new Map<string, ModuleState>();
     readonly reuse = new Map<string, ReuseEntry>();
     readonly turns: TurnRecord[];
+    /** The turn the hand-off's turn followed (Q120 (b)), frozen as it came; null when it followed none. */
+    readonly followed: FollowedTurn | null;
     readonly jobs: JobRecord[] = [];
     readonly reviews: ReviewCallRecord[] = [];
     /** A model's review is in flight (EA6.4): no other paid action starts meanwhile. */
@@ -601,7 +638,12 @@ class Attempt {
             role: 'hand-off', turnId: handOff.turnId, revision: 0, status: 'handed-off', model: handOff.model, promptVersion: handOff.promptVersion,
             charge: calls.every(c => c.charge === 'known') ? 'known' : 'unknown', calls, error: null,
         }];
-        this.ledger = new Ledger(limits, calls.length);
+        // A follow-up's attempt counts the turn it followed too (Q120 (b)): one world's calls, never reset by a second try.
+        // That turn's end not seen, its whole allowance is counted, unknown: the browser may not have heard of every call
+        // the service made before it saw the client go (the outside review of EA9.5, its mid).
+        this.followed = handOff.followed ? deepFreeze(structuredClone(handOff.followed)) as FollowedTurn : null;
+        const followed = followedCalls(this.followed);
+        this.ledger = new Ledger(limits, calls.length + followed.settled, followed.unknown);
         this.store = new EvidenceStore(evidence, () => this.pinned());
         this.startedMs = now;
     }
@@ -707,6 +749,7 @@ class Attempt {
             evidence: this.store.list(), omitted: this.store.omissions,
             budget: this.ledger.state, limits: this.ledger.limits,
             turns: this.turns.map(t => ({ ...t, calls: t.calls.map(c => ({ ...c })) })),
+            followed: this.followed ? { ...this.followed, calls: this.followed.calls.map(c => ({ ...c })) } : null,
             jobs: this.jobs.map(j => ({ ...j })),
             reviews: this.reviews.map(r => ({ ...r })),
             l3: this.compiler ? { producedBy: this.compiler.producedBy, gpu: this.compiler.gpu ?? null } : null,
@@ -1684,13 +1727,17 @@ export interface BundleReviewsSection {
 /**
  * A candidate as a downloadable bundle (the design §9): the candidate, its bodies, its evidence and its identities;
  * the omissions, the checker and template versions, and each call's usage, known or unknown: the turns' calls (the
- * hand-off's and each revision's) and the module jobs, so every call Q_C counts has its record. No credential or App
+ * hand-off's and each revision's, and the turn the hand-off's followed, Q120 (b)) and the module jobs, so every call Q_C
+ * counts has its record. No credential or App
  * Check token is anywhere in a state, so none is here. It holds R and the bodies, so exporting it is a developer's act.
  */
 export function candidateBundle(state: DeepReadonly<CandidateState>, reviews: BundleReviewsSection | null = null) {
     const omitted = Object.values(state.omitted).reduce((sum, n) => sum + n, 0);
-    const templates = [...state.turns.map(t => t.promptVersion), ...state.jobs.map(j => j.promptVersion), ...(state.reviews ?? []).map(r => r.promptVersion)]
-        .filter((v): v is string => v !== null);
+    // Every template a call Q_C counts was made under: the turns', the followed turn's (Q120 (b)), the jobs' and reviews'.
+    const templates = [...state.turns.map(t => t.promptVersion), state.followed?.promptVersion ?? null, ...state.jobs.map(j => j.promptVersion),
+        ...(state.reviews ?? []).map(r => r.promptVersion)].filter((v): v is string => typeof v === 'string');
+    const counted = followedCalls(state.followed ?? null);
+    const followedCount = counted.settled + counted.unknown;
     return {
         format: CANDIDATE_BUNDLE,
         attempt: state.attempt,
@@ -1716,6 +1763,16 @@ export function candidateBundle(state: DeepReadonly<CandidateState>, reviews: Bu
                 role: t.role, turnId: t.turnId, revision: t.revision, status: t.status, model: t.model, promptVersion: t.promptVersion, charge: t.charge,
                 calls: t.calls.map(c => ({ n: c.n, purpose: c.purpose, charge: c.charge, costMicroUsd: c.costMicroUsd, generationId: c.generationId })), error: t.error,
             })),
+            // The turn the hand-off's turn followed (Q120 (b)): its calls are among Q_C's, so they have their records too, and
+            // what Q_C counts for it, more than its records when its end was not seen (the outside review of EA9.5).
+            followed: state.followed ? {
+                turnId: state.followed.turnId,
+                model: state.followed.model,
+                promptVersion: state.followed.promptVersion,
+                end: state.followed.end,
+                counted: followedCount,
+                calls: state.followed.calls.map(c => ({ n: c.n, purpose: c.purpose, charge: c.charge, costMicroUsd: c.costMicroUsd, generationId: c.generationId })),
+            } : null,
             jobs: state.jobs.map(j => ({ jobId: j.jobId, module: j.module, purpose: j.purpose, status: j.status, charge: j.charge, costMicroUsd: j.costMicroUsd, model: j.model, generationId: j.generationId, promptVersion: j.promptVersion })),
             // A model's reviews (EA6.4): each one call Q_C counts, with its charge.
             reviews: (state.reviews ?? []).map(r => ({ reviewId: r.reviewId, candidate: r.candidate, status: r.status, charge: r.charge, costMicroUsd: r.costMicroUsd, model: r.model, generationId: r.generationId, promptVersion: r.promptVersion })),

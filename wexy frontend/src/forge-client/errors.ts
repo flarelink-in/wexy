@@ -73,14 +73,21 @@ export class ForgeError extends Error {
      * word. A bare 403 is never read as the account's standing (2026-11-04).
      */
     readonly bare: boolean;
+    /**
+     * The backend ended a stream with it, as its own last event (an agent turn's `error`): the service's word that the
+     * turn is over there. False for anything the client decided or could not see (its own caps, a dropped connection, a
+     * deadline), whose end on the server's side is unknown (Q120 (b): only a terminal failure is retried by itself).
+     */
+    readonly terminal: boolean;
 
-    constructor(code: ErrorCode, status: number, message: string, retryAfterSeconds: number | null = null, bare = false) {
+    constructor(code: ErrorCode, status: number, message: string, retryAfterSeconds: number | null = null, bare = false, terminal = false) {
         super(message);
         this.name = 'ForgeError';
         this.code = code;
         this.status = status;
         this.retryAfterSeconds = retryAfterSeconds;
         this.bare = bare;
+        this.terminal = terminal;
     }
 }
 

@@ -70,8 +70,10 @@ async function stopPlatform() {
 }
 
 // Vite for the studio, told the gateway through the environment, with no Firebase config: the loopback dev identity.
+// The main checkout's git-ignored .env.local holds the dev project's Firebase and App Check keys: each is blanked.
+const NO_FIREBASE = { VITE_FIREBASE_API_KEY: '', VITE_FIREBASE_AUTH_DOMAIN: '', VITE_FIREBASE_PROJECT_ID: '', VITE_FIREBASE_APP_ID: '', VITE_APPCHECK_SITE_KEY: '' };
 const vite = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--port', '5173', '--strictPort', '--host', 'localhost'],
-    { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, VITE_API_ORIGIN: gateway, VITE_FIREBASE_API_KEY: '' } });
+    { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, VITE_API_ORIGIN: gateway, ...NO_FIREBASE } });
 let viteOut = '';
 vite.stdout.on('data', d => { viteOut += d; });
 vite.stderr.on('data', d => { viteOut += d; });

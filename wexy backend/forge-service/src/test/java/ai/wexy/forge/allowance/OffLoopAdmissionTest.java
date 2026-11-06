@@ -164,5 +164,30 @@ class OffLoopAdmissionTest {
             released.countDown();
             return given;
         }
+
+        @Override
+        public Follow probeFollow(String grantKey, String owner, long limit, String prompt) {
+            return inner.probeFollow(grantKey, owner, limit, prompt);
+        }
+
+        @Override
+        public Follow follow(String grantKey, String owner, long limit, String prompt, String newIndexKey, String grantId, String turnId) {
+            return inner.follow(grantKey, owner, limit, prompt, newIndexKey, grantId, turnId);
+        }
+
+        @Override
+        public void followDispatched(String grantKey, String turnId) {
+            inner.followDispatched(grantKey, turnId);
+        }
+
+        @Override
+        public boolean unfollow(String grantKey, String indexKey, String turnId) {
+            return inner.unfollow(grantKey, indexKey, turnId);
+        }
+
+        @Override
+        public boolean ended(String grantKey, String turnId, String end) {
+            return inner.ended(grantKey, turnId, end);
+        }
     }
 }

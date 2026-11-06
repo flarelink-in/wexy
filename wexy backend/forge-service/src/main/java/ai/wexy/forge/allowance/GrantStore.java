@@ -14,6 +14,17 @@ interface GrantStore {
     /** What a join found. */
     enum Join { JOINED, FULL, NONE }
 
+    /**
+     * What a follow-up's step found (Q120 (b); the creations platform design §10, "Q120's follow-up"). The probe says
+     * SAME or CHANGED when one may run (its idea's hash the grant's, or another); the join says JOINED. Why not: FULL, the
+     * grant's follow-up is spent; OPEN, the turn it follows has no end written (still running, or never written); WORLD,
+     * that turn ended with a world (`handed-off`, or an end no follow-up may follow); NONE, no live grant of the owner's.
+     */
+    enum Follow { JOINED, SAME, CHANGED, FULL, OPEN, WORLD, NONE }
+
+    /** The ends a turn writes into its grant from which a follow-up may run: every end without a world. */
+    java.util.Set<String> FOLLOWABLE = java.util.Set.of("asked", "declined", "exhausted", "failed", "cancelled");
+
     /** Each counter's value, 0 when absent, in order. */
     List<Long> counts(List<String> counters);
 
@@ -52,4 +63,37 @@ interface GrantStore {
      * @return true when given back; false when it was spent, gone, or not the grant those counters belong to
      */
     boolean release(String grantKey, String indexKey, List<String> counters);
+
+    /**
+     * Whether a follow-up may run inside a grant now (Q120 (b)), writing nothing: SAME or CHANGED (`prompt`, the follow-up's
+     * idea's hash, is the grant's, or not) when the grant is `owner`'s, alive, its follow-ups under `limit`, and its `end`
+     * written and one of {@link #FOLLOWABLE}; FULL, OPEN, WORLD or NONE otherwise, checked in that order after NONE.
+     */
+    Follow probeFollow(String grantKey, String owner, long limit, String prompt);
+
+    /**
+     * The follow-up `turnId` joins the grant, in one atomic step: the probe's checks again; then its follow-up counted,
+     * the grant's prompt hash set to `prompt` and its end cleared (the two kept, to give back), `turnId` recorded as its
+     * follow-up, and the grant indexed under `newIndexKey` for its remaining life. JOINED, or why not with nothing written.
+     */
+    Follow follow(String grantKey, String owner, long limit, String prompt, String newIndexKey, String grantId, String turnId);
+
+    /** The follow-up `turnId` dispatched its first call: it is spent, and stays counted. */
+    void followDispatched(String grantKey, String turnId);
+
+    /**
+     * Gives back the follow-up `turnId` when it never dispatched a call: its count, and the grant's prompt hash and end as
+     * they were before it; its index gone.
+     *
+     * @return true when given back; false when it was spent, gone, or not this follow-up's
+     */
+    boolean unfollow(String grantKey, String indexKey, String turnId);
+
+    /**
+     * Writes the end of the turn `turnId` into its grant (Q120 (b)): what a follow-up of it may be. Only the grant's own
+     * turn writes it, its entry or, once one joined, its follow-up; another's end, or a grant gone, writes nothing.
+     *
+     * @return true when written
+     */
+    boolean ended(String grantKey, String turnId, String end);
 }

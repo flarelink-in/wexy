@@ -225,8 +225,9 @@ function look(p: AgentPanel) {
 const cancelButton = (p: AgentPanel) => [...p.el.querySelectorAll('button')].find(b => b.textContent === 'Cancel')!;
 const ms = (shown: string | null) => (shown === null ? NaN : shown.endsWith(' ms') ? parseFloat(shown) : parseFloat(shown) * 1000);
 
-async function ending(text: string, label: string): Promise<ReturnType<typeof look>> {
-    const p = panel(liveClient(() => stream(text).response), label);
+/** One turn's recorded ending, answered `times` times (Q120 (b): a failure on the model's side is tried once more). */
+async function ending(text: string, label: string, times = 1): Promise<ReturnType<typeof look>> {
+    const p = panel(liveClient(...Array.from({ length: times }, () => () => stream(text).response)), label);
     await p.run();
     return look(p);
 }
@@ -244,9 +245,10 @@ async function endings(): Promise<void> {
         { program: shown.slice(0, 600), meta: v.meta });
 
     v = await ending(askedWire, 'asked');
-    check('EA-V1 asked: not a success; its question shown as written, with no promise of an answer', v.phase === 'asked' && v.success === 'false'
+    // Since EA9.5 (Q120 (b)) its answer follows it inside the same world, once: the note says so, and no more.
+    check('EA-V1 asked: not a success; its question shown as written; its answer follows it inside the same world, once', v.phase === 'asked' && v.success === 'false'
         && v.question === 'Blocks of stone, or of wood — and does the river run?' && /: no world$/.test(v.status ?? '')
-        && /no way to answer it yet/.test(v.note ?? '') && v.design === null && v.program === null, v);
+        && /follows this one inside the same world/.test(v.note ?? '') && v.design === null && v.program === null, v);
 
     v = await ending(declinedWire, 'declined');
     check('EA-V1 declined: not a success; the model\'s reason shown', v.phase === 'declined' && v.success === 'false'
@@ -275,9 +277,10 @@ async function endings(): Promise<void> {
         && v.reason === 'budget in the stream: Live creation has reached its spending limit for now.'
         && v.calls[0].includes(`? in / ? out · ${RECORDED_BUDGET_HELD} held, no usage came`), v);
 
-    v = await ending(errorUpstreamWire, 'error-upstream');
-    check('EA-V1 answers off the schema twice: failed, as upstream', v.phase === 'failed'
-        && (v.reason ?? '').startsWith('upstream in the stream: the model\'s answer missed the action schema after a repair'), v);
+    // A failure in the stream on the model's side is tried once more by itself (Q120 (b)): the panel shows the second turn.
+    v = await ending(errorUpstreamWire, 'error-upstream', 2);
+    check('EA-V1 answers off the schema twice: failed, as upstream, then tried once more by itself and failed again (Q120 (b))', v.phase === 'failed'
+        && /^Turn 2: /.test(v.status ?? '') && (v.reason ?? '').startsWith('upstream in the stream: the model\'s answer missed the action schema after a repair'), v);
 
     const envelope = JSON.parse(deniedJson) as { status: number; body: unknown };
     const p = panel(liveClient(() => new Response(JSON.stringify(envelope.body), { status: envelope.status, headers: { 'Content-Type': 'application/json' } })), 'denied');
@@ -495,6 +498,23 @@ async function candidates(): Promise<void> {
     check('EA-V7 a turn not handed off offers no modules: not while it runs with its design and program, nor once it is cancelled',
         look(unfinished).phase === 'cancelled' && look(unfinished).program !== null && whileRunning.enabled['Write the modules'] === false
         && once.enabled['Write the modules'] === false && once.note === 'A turn that hands off comes first.' && once.phase === 'idle', { whileRunning, once });
+
+    // EA9.5's outside review (its mid; Q120 (b)): a turn whose stream was cut after its first call, then its second try,
+    // handed off and written. The service may have made more calls than the one seen, so Q_C counts the first turn's whole
+    // allowance (AgentTurn.MAX_CALLS, 6), unknown, and its row says so beside the call seen.
+    const cut = lf(handedOffWire).split(/(?<=\n\n)/).slice(0, 3).join('');
+    const secondTry = lf(handedOffWire).replaceAll('"turnId":"turn-1"', '"turnId":"turn-2"');
+    const following = candidatePanel(liveClient(() => stream(cut).response, () => stream(secondTry).response),
+        moduleClient(r => stream(echoed(moduleAuthorWire, r)).response), 'candidate: a second try after an end not seen');
+    const first = await following.run();
+    await following.run();
+    candidateButton(following, 'Write the modules').click();
+    await until(() => settled(following), 5_000);
+    v = lookCandidate(following);
+    check('EA9.5 review: a second try after a turn whose end was not seen lists that turn, its one call seen, and Q_C counts its whole allowance, unknown',
+        first?.phase === 'failed' && v.phase === 'static-verified' && v.turns.length === 2 && v.turns[0].role === 'followed'
+        && v.turns[0].head === 'turn-1 followed: no world · 1 call seen, its end unseen: Q_C counts 6 · $0.0460 reported, charge unknown · muse-spark-1.3 · agent.v7'
+        && v.turns[1].role === 'hand-off' && v.budget === 'Q_C: 10 of 34 calls, 6 unknown · authors 1/12 · repairs 0/10 · revisions 0/3', { first: first?.phase, v });
 
     // EA-V8: an answer the server judged unusable is called again within Q_C; a refusal before the stream ends it.
     let calls = 0;

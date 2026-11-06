@@ -16,9 +16,9 @@ import { programHash, resolveProgram } from '../src/contract/adapters/resolve.ts
 import { createDeviceCompiler } from '../src/exec/device-compiler.ts';
 import { ForgeError } from '../src/forge-client/errors.ts';
 import { MODULE_VERSIONS } from '../src/forge-client/module-client.ts';
-import { NOTE_CODE, REPAIR_BUDGET_CODE, SET_ASIDE_CODE, candidateBundle, createCandidateSession, noteMessage } from '../src/loop/candidate.ts';
+import { NOTE_CODE, REPAIR_BUDGET_CODE, SET_ASIDE_CODE, candidateBundle, createCandidateSession, followedCalls, noteMessage } from '../src/loop/candidate.ts';
 import { route, verifyEnvelope } from '../src/loop/candidate-evidence.ts';
-import { Ledger, Q_C, budgetDiagnostic } from '../src/loop/candidate-ledger.ts';
+import { Ledger, Q_C, TURN_CALLS as TURN_ALLOWANCE, budgetDiagnostic } from '../src/loop/candidate-ledger.ts';
 import { COPY } from '../src/loop/copy.ts';
 import { candidateId, isSealed } from '../src/loop/snapshot.ts';
 
@@ -572,6 +572,48 @@ test('EA-K5b Q84 in both repositories: the backend holds a turn to Q_C\'s module
     const constant = name => Number(new RegExp(`${name} = ([\\d_]+);`).exec(java)?.[1].replace(/_/g, ''));
     assert.equal(constant('MAX_MODULES'), Q_C.modules, 'the turn\'s program check holds a program to the modules a candidate builds');
     assert.equal(constant('MODULE_CALLS'), Q_C.authors + Q_C.repairs, 'the gateway\'s module buckets pace an attempt\'s authors and repairs');
+    // The most a turn makes: what a followed turn whose end was not seen counts (Q120 (b), the outside review of EA9.5).
+    assert.equal(constant('MAX_CALLS'), TURN_ALLOWANCE, 'a turn\'s whole allowance is the calls the gateway charges a turn');
+});
+
+test('EA-K5c a hand-off that followed a turn (Q120 (b)): that turn\'s calls count into Q_C, and a turn\'s whole allowance when its end was not seen (the outside review of EA9.5, its mid)', async () => {
+    const seenOne = [{ n: 1, purpose: 'first', charge: 'known', costMicroUsd: 46_000, generationId: 'gen-0' }];
+    // Made under another template than the hand-off's (agent.v5), so the bundle's list of templates must name it.
+    const followed = end => ({ turnId: 'turn-0', model: 'model-0', promptVersion: 'agent.v4', calls: seenOne, end });
+    // The ledger's own seed: settled and unknown apart, both whole numbers.
+    assert.deepEqual(new Ledger(Q_C, 3, TURN_ALLOWANCE).state.calls, { settled: 3, reserved: 0, unknown: TURN_ALLOWANCE });
+    for (const bad of [-1, 1.5, Number.NaN]) assert.throws(() => new Ledger(Q_C, 3, bad), /the unknown calls are a whole number/);
+    // What Q_C counts for it: its calls when its end was seen; never fewer than were seen; anything but seen is unseen.
+    assert.deepEqual(followedCalls(followed('seen')), { settled: 1, unknown: 0 });
+    assert.deepEqual(followedCalls(followed('unseen')), { settled: 0, unknown: TURN_ALLOWANCE });
+    assert.deepEqual(followedCalls({ turnId: 'turn-0', calls: seenOne }), { settled: 0, unknown: TURN_ALLOWANCE }, 'an end not said is not seen');
+    const many = Array.from({ length: TURN_ALLOWANCE + 1 }, (_, i) => ({ ...seenOne[0], n: i + 1 }));
+    assert.deepEqual(followedCalls({ turnId: 'turn-0', calls: many, end: 'unseen' }), { settled: 0, unknown: TURN_ALLOWANCE + 1 });
+    assert.deepEqual(followedCalls(null), { settled: 0, unknown: 0 });
+    // Through the machine: the hand-off's three calls, the followed turn's as counted, then the one module's author.
+    const seen = session();
+    await seen.s.start(handOff(one(), { followed: followed('seen') }));
+    assert.deepEqual([seen.s.state.phase, seen.s.state.budget.calls], ['static-verified', { settled: 3 + 1 + 1, reserved: 0, unknown: 0 }]);
+    const unseen = session();
+    await unseen.s.start(handOff(one(), { followed: followed('unseen') }));
+    assert.deepEqual([unseen.s.state.phase, unseen.s.state.budget.calls], ['static-verified', { settled: 3 + 1, reserved: 0, unknown: TURN_ALLOWANCE }]);
+    assert.deepEqual(unseen.s.state.followed, followed('unseen'), 'the state lists it as it came');
+    // The bound holds whatever the followed turn made: with Q_C at the turns' calls as counted, the module call refuses.
+    const at = { ...Q_C, calls: 3 + TURN_ALLOWANCE };
+    const tight = session({ limits: at });
+    await tight.s.start(handOff(one(), { followed: followed('unseen') }));
+    assert.deepEqual([tight.s.state.phase, tight.s.state.stop?.diagnostic, tight.modules.calls.length],
+        ['exhausted', `EA_TURN_BUDGET calls: ${3 + TURN_ALLOWANCE} of ${3 + TURN_ALLOWANCE}`, 0], 'no call Q_C cannot hold');
+    const roomy = session({ limits: at });
+    await roomy.s.start(handOff(one(), { followed: followed('seen') }));
+    assert.equal(roomy.s.state.phase, 'static-verified', 'the same limit, the end seen: its one call counted');
+    // The bundle names the end, what Q_C counted for it, and what made its calls, its template among the bundle's.
+    const unseenBundle = candidateBundle(unseen.s.state);
+    assert.deepEqual(unseenBundle.calls.followed,
+        { turnId: 'turn-0', model: 'model-0', promptVersion: 'agent.v4', end: 'unseen', counted: TURN_ALLOWANCE, calls: seenOne });
+    assert.deepEqual(candidateBundle(seen.s.state).calls.followed,
+        { turnId: 'turn-0', model: 'model-0', promptVersion: 'agent.v4', end: 'seen', counted: 1, calls: seenOne });
+    assert.ok(unseenBundle.versions.templates.includes('agent.v4') && unseenBundle.versions.templates.includes('agent.v5'), unseenBundle.versions.templates.join(', '));
 });
 
 test('EA-K6 a cancel or a newer candidate in each phase: shown at once, no call after, nothing applied, nothing to admit', async () => {

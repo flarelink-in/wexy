@@ -23,6 +23,8 @@ public final class InMemoryGrantStore implements GrantStore {
     private final Clock clock;
     private int grants;
     private int releases;
+    private int follows;
+    private int unfollows;
 
     public InMemoryGrantStore(Clock clock) {
         this.clock = clock;
@@ -175,9 +177,119 @@ public final class InMemoryGrantStore implements GrantStore {
         return true;
     }
 
+    @Override
+    public synchronized Follow probeFollow(String grantKey, String owner, long limit, String prompt) {
+        check();
+        Follow why = followable(grantKey, owner, limit);
+        if (why != null) {
+            return why;
+        }
+        return prompt.equals(live(grantKey).hash().get("prompt")) ? Follow.SAME : Follow.CHANGED;
+    }
+
+    @Override
+    public synchronized Follow follow(String grantKey, String owner, long limit, String prompt, String newIndexKey, String grantId, String turnId) {
+        check();
+        Follow why = followable(grantKey, owner, limit);
+        if (why != null) {
+            return why;
+        }
+        Entry e = live(grantKey);
+        Map<String, String> h = e.hash();
+        if (h.get("prompt") == null) {
+            return Follow.NONE;
+        }
+        h.put("followups", Long.toString(Long.parseLong(h.getOrDefault("followups", "0")) + 1));
+        h.put("following", turnId);
+        h.put("followDispatched", "0");
+        h.put("prevPrompt", h.get("prompt"));
+        h.put("prevEnd", h.get("end"));
+        h.put("prompt", prompt);
+        h.remove("end");
+        data.put(newIndexKey, new Entry(grantId, null, e.expires()));
+        follows++;
+        return Follow.JOINED;
+    }
+
+    /** The probe's and the join's checks, in the scripts' order: null when a follow-up may run. */
+    private Follow followable(String grantKey, String owner, long limit) {
+        Entry e = live(grantKey);
+        if (e == null || !owner.equals(e.hash().get("owner"))) {
+            return Follow.NONE;
+        }
+        if (Long.parseLong(e.hash().getOrDefault("followups", "0")) >= limit) {
+            return Follow.FULL;
+        }
+        String end = e.hash().get("end");
+        if (end == null) {
+            return Follow.OPEN;
+        }
+        return FOLLOWABLE.contains(end) ? null : Follow.WORLD;
+    }
+
+    @Override
+    public synchronized void followDispatched(String grantKey, String turnId) {
+        check();
+        Entry e = live(grantKey);
+        if (e != null && turnId.equals(e.hash().get("following"))) {
+            e.hash().put("followDispatched", "1");
+        }
+    }
+
+    @Override
+    public synchronized boolean unfollow(String grantKey, String indexKey, String turnId) {
+        check();
+        Entry e = live(grantKey);
+        if (e == null || !turnId.equals(e.hash().get("following")) || "1".equals(e.hash().get("followDispatched"))) {
+            return false;
+        }
+        Map<String, String> h = e.hash();
+        if (h.get("prevPrompt") == null || h.get("prevEnd") == null) {
+            return false;
+        }
+        h.put("followups", Long.toString(Math.max(0, Long.parseLong(h.getOrDefault("followups", "0")) - 1)));
+        h.put("prompt", h.remove("prevPrompt"));
+        h.put("end", h.remove("prevEnd"));
+        h.remove("following");
+        h.remove("followDispatched");
+        data.remove(indexKey);
+        unfollows++;
+        return true;
+    }
+
+    @Override
+    public synchronized boolean ended(String grantKey, String turnId, String end) {
+        check();
+        Entry e = live(grantKey);
+        if (e == null) {
+            return false;
+        }
+        String following = e.hash().get("following");
+        if (following != null ? !following.equals(turnId) : !turnId.equals(e.hash().get("entry"))) {
+            return false;
+        }
+        e.hash().put("end", end);
+        return true;
+    }
+
+    /** How many follow-ups joined, and how many were given back (Q120 (b)). */
+    public synchronized int followed() {
+        return follows;
+    }
+
+    public synchronized int unfollowed() {
+        return unfollows;
+    }
+
     /** A grant's record as stored, for the tests that check what it holds. */
     public synchronized Map<String, String> record(String grantId) {
         Entry e = live("wexy:grant:" + grantId);
         return e == null ? null : Map.copyOf(e.hash());
+    }
+
+    /** The grant id an index names, for the tests (`lookup` without the store's own failure). */
+    public synchronized String grantOf(String turnId) {
+        Entry e = live("wexy:grant:of:" + turnId);
+        return e == null ? null : e.value();
     }
 }

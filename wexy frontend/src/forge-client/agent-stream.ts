@@ -488,12 +488,15 @@ function readCheck(res: Response, data: string): AgentCheck {
     return { n: count(res, c, 'n', 1), ok, findings };
 }
 
-/** The `error` event: the backend's code (an unknown one is internal) and its message, capped. */
+/**
+ * The `error` event: the backend's code (an unknown one is internal) and its message, capped. The turn's own last event,
+ * so `terminal` (Q120 (b)): the service says the turn is over on its side.
+ */
 function turnError(res: Response, data: string): ForgeError {
     const e = json(res, data);
     const code = isErrorCode(e.code) ? e.code : 'internal';
     const message = typeof e.message === 'string' && e.message ? e.message.slice(0, 300) : `The turn failed (${String(e.code).slice(0, 40)}).`;
-    return new ForgeError(code, res.ok ? res.status : ERROR_STATUS[code], message);
+    return new ForgeError(code, res.ok ? res.status : ERROR_STATUS[code], message, null, false, true);
 }
 
 function json(res: Response, data: string): Record<string, unknown> {

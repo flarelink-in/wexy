@@ -23,7 +23,9 @@ import java.util.Map;
  * prompt, ever, and its network one anonymous prompt a day (Q98); a signed-in caller one a day (early access); an
  * admin its own number. A prompt is one entry request, a plan or a turn without a base, and the follow-ups that name
  * it: a revision of its turn, a Director turn on its plan's world, each within its budget and the prompt's life. One
- * naming none the caller has is a new prompt. Checking and counting are one atomic step ({@link GrantStore}).
+ * naming none the caller has is a new prompt. The one exception is a turn that follows one of its turns that ended with
+ * no world (Q120 (b), {@link #follow}): inside it, once, or refused, never a new prompt. Checking and counting are one
+ * atomic step ({@link GrantStore}).
  *
  * <p>The refusals: a spent anonymous allowance is {@code 403 account-required} (signing in is the way on, not
  * waiting); a spent day is {@code 429 quota} with {@code Retry-After} to the day's reset; a store that cannot answer is
@@ -135,6 +137,8 @@ public class PromptGrants {
         record.put("prompt", promptHash);
         record.put("counters", String.join(" ", c.keys()));
         record.put("dispatched", "0");
+        // The entry's own id (Q120 (b)): only its turn, or a follow-up once one joined, writes the prompt's end.
+        record.put("entry", entryId);
         int denied;
         try {
             denied = store.grant(c.keys(), c.limits(), c.lifetimes(), GRANT + id, id, INDEX + entryId, record,
@@ -148,7 +152,51 @@ public class PromptGrants {
             throw refusal(c.role(), by);
         }
         log.info("allowance.granted grant={} role={}", id, c.role().lane());
-        return new Grant(id, c.role(), GRANT + id, INDEX + entryId, c.keys(), store);
+        return new Grant(id, c.role(), GRANT + id, INDEX + entryId, c.keys(), store, entryId);
+    }
+
+    /**
+     * Whether a turn following `namedTurnId` may run inside its prompt now (Q120 (b); the creations platform design §10,
+     * "Q120's follow-up"), writing nothing: SAME or CHANGED (its idea's hash `promptHash` the prompt's, or another, which
+     * is then screened before {@link #follow}); why not otherwise. {@code 503 unavailable} when the store cannot answer.
+     */
+    public GrantStore.Follow canFollow(Caller caller, String namedTurnId, String promptHash) {
+        String owner = uidKey.of(caller.uid());
+        if (owner == null || namedTurnId == null) {
+            return GrantStore.Follow.NONE;
+        }
+        try {
+            String grantId = store.lookup(INDEX + namedTurnId);
+            return grantId == null ? GrantStore.Follow.NONE
+                    : store.probeFollow(GRANT + grantId, owner, properties.followUps(), promptHash);
+        } catch (RuntimeException e) {
+            throw unavailable(e);
+        }
+    }
+
+    /**
+     * The turn `turnId` follows `namedTurnId` inside its prompt (Q120 (b)), in one atomic step: its grant, to spend, give
+     * back and end, or null when it may not (written nothing; the checks of {@link #canFollow} again, so a race's loser,
+     * or a turn that ended meanwhile, is refused here). {@code 503 unavailable} when the store cannot answer.
+     */
+    public Grant follow(Caller caller, String namedTurnId, String turnId, String promptHash) {
+        String owner = uidKey.of(caller.uid());
+        if (owner == null || namedTurnId == null) {
+            return null;
+        }
+        try {
+            String grantId = store.lookup(INDEX + namedTurnId);
+            if (grantId == null) {
+                log.info("allowance.follow-up grant=none none");
+                return null;
+            }
+            GrantStore.Follow joined = store.follow(GRANT + grantId, owner, properties.followUps(), promptHash, INDEX + turnId, grantId, turnId);
+            log.info("allowance.follow-up grant={} {}", grantId, joined.name().toLowerCase());
+            return joined == GrantStore.Follow.JOINED
+                    ? Grant.followUp(grantId, Role.of(caller), GRANT + grantId, INDEX + turnId, turnId, store) : null;
+        } catch (RuntimeException e) {
+            throw unavailable(e);
+        }
     }
 
     /**

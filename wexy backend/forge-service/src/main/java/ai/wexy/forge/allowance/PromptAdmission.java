@@ -95,6 +95,59 @@ public class PromptAdmission {
         return entry(caller, turnId, prompt, "turn");
     }
 
+    /** A follow-up refused (Q120 (b)): never an entry, so the creator's next Create is one, and is told so first. */
+    static final String CANNOT_FOLLOW = "This try can't be continued, so a new Create makes a new world.";
+    /**
+     * How long a follow-up waits for the end of the turn it follows when none is written yet, and how often it reads
+     * again (the independent review of EA9.5, its mid): a creator's Stop, or a dropped connection, ends that turn only once
+     * this service sees its client leave and the loop unwinds, so a second try pressed at once would find no end and be
+     * refused for good. A turn still running past the wait is refused.
+     */
+    static final long UNWIND_WAIT_MILLIS = 3_000;
+    static final long UNWIND_POLL_MILLIS = 100;
+
+    /**
+     * A turn that follows `namedTurnId`, a turn of the caller's that ended with no world (Q120 (b), the user, 2026-11-05:
+     * "Build the follow-up"; EA9.5; the creations platform design §10, "Q120's follow-up"): inside that turn's prompt,
+     * once, as its grant. In this order, before any record or charge:
+     * <ol>
+     *   <li>who may follow, read and writing nothing: the turn is the caller's (by uid, so a link keeps it), its prompt
+     *       alive, its end written and without a world, its follow-up unspent. Otherwise {@code 409 conflict}, with no
+     *       safety call spent on it, and never an entry: a refused follow-up never falls through to a fresh grant;</li>
+     *   <li>its idea, when it differs from the prompt's (an answer to a question, a simpler idea): content safety, as an
+     *       entry's ({@code 422 content-refused}, which spends nothing, the follow-up included). The same idea was checked
+     *       when the prompt was granted;</li>
+     *   <li>the join, atomic: the checks again, so a race's loser is {@code 409} too.</li>
+     * </ol>
+     * The grant is spent at the turn's first dispatched call and given back when it dispatched none, as an entry's. A turn
+     * whose end is not written yet is waited for, up to {@link #UNWIND_WAIT_MILLIS}: it may be unwinding from a Stop.
+     */
+    public Grant followUp(Caller caller, String namedTurnId, String turnId, String prompt) {
+        String hash = sha256(prompt);
+        GrantStore.Follow may = grants.canFollow(caller, namedTurnId, hash);
+        for (long waited = 0; may == GrantStore.Follow.OPEN && waited < UNWIND_WAIT_MILLIS; waited += UNWIND_POLL_MILLIS) {
+            try {
+                Thread.sleep(UNWIND_POLL_MILLIS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            may = grants.canFollow(caller, namedTurnId, hash);
+        }
+        if (may != GrantStore.Follow.SAME && may != GrantStore.Follow.CHANGED) {
+            log.info("allowance.follow-up refused={}", may.name().toLowerCase());
+            throw new ForgeException(ErrorCode.CONFLICT, CANNOT_FOLLOW);
+        }
+        if (may == GrantStore.Follow.CHANGED) {
+            checkSafety(prompt, "follow-up");
+        }
+        Grant joined = grants.follow(caller, namedTurnId, turnId, hash);
+        if (joined == null) {
+            throw new ForgeException(ErrorCode.CONFLICT, CANNOT_FOLLOW);
+        }
+        return joined;
+    }
+
     /**
      * A Director turn: its instruction is the creator's own words each time, so it is always checked; then inside its
      * plan's prompt (null) when it names one of the caller's with a turn left, an entry of its own otherwise.

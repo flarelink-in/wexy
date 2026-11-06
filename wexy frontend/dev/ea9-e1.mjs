@@ -148,7 +148,8 @@ const gateway = createServer((req, res) => {
         }
         if (req.method === 'POST' && req.url === '/v1/agent/turn') {
             const plan = turnPlan.shift() ?? 'handoff';
-            calls.push({ route: 'turn', base: !!JSON.parse(body).base, plan });
+            // EA9.5 (Q120 (b)): the turn a second try follows, as the studio named it; null for a turn that follows none.
+            calls.push({ route: 'turn', base: !!JSON.parse(body).base, plan, retryOf: JSON.parse(body).retryOf ?? null });
             if (plan in TURN_ENDS) sse(TURN_ENDS[plan]);
             else if (plan in ENTRY_REFUSALS) json(...ENTRY_REFUSALS[plan]);
             // Held until the drive lets it go; the studio's Stop has cancelled it by then, so its answer finds no reader.
@@ -463,10 +464,14 @@ try {
     const turnCount = () => calls.filter(c => c.route === 'turn').length;
     const settled = label => `(() => { const f = document.querySelector('.btn-forge'); return f?.querySelector('span')?.textContent === ${JSON.stringify(label)} && !f.disabled; })()`;
     const developerWords = [/\b[0-9a-f]{12}…/, /id\(C\)/, /\bEA_[A-Z]/, /\bL3\b/, /\bprobe\b/i, /\bms\b/, /JSON|WGSL|schema/];
+    // EA9.5 (Q120 (b)): an end after the turn was admitted says what the next Create is. The declined end is the asked
+    // one's second try (so the next is a new world), and the failure the exhausted one's (so it is not retried by itself).
+    const SECOND = 'Your next Create is a second try, and doesn\'t use a new world.';
+    const NEW_WORLD = 'Your next Create uses a new world.';
     const E2 = [
-        ['asked', { turn: 'asked' }, 'One more detail would help: Blocks of stone, or of wood — and does the river run? Add it to your idea, then press Create.'],
-        ['declined', { turn: 'declined' }, 'That idea can\'t be made here. Try describing a place, the things in it, and how they move.'],
-        ['exhausted', { turn: 'exhausted' }, 'This idea needed more steps than one try allows. Try a simpler version of it.'],
+        ['asked', { turn: 'asked' }, `One more detail would help: Blocks of stone, or of wood — and does the river run? Add it to your idea, then press Create. ${SECOND}`],
+        ['declined', { turn: 'declined' }, `That idea can't be made here. Try describing a place, the things in it, and how they move. ${NEW_WORLD}`],
+        ['exhausted', { turn: 'exhausted' }, `This idea needed more steps than one try allows. Try a simpler version of it. ${SECOND}`],
         ['failed (the model\'s service)', { turn: 'failed' }, null],
         ['quota at entry', { turn: 'quota', dialog: true }, 'You\'ve made today\'s world. Early access gives one a day. You can still open, film and export your worlds.'],
         ['an idea content safety refused', { turn: 'refused' }, 'This idea can\'t be made here. Try a different one.'],
@@ -474,8 +479,9 @@ try {
         ['a candidate\'s stop (the gateway\'s limit on a module)', { modules: 'budget' }, null],
         ['a refused Run (its first frame not finite)', { modules: 'nan', show: true }, 'This world didn\'t draw correctly on your device; your current world is unchanged. Try a different idea.'],
         // The refused world waits for Show it; a new idea from the quiet Create world supersedes it once its turn is admitted.
-        ['supersession (a new idea, admitted, over a world waiting for Show it)', { turn: 'asked', again: true }, 'One more detail would help: Blocks of stone, or of wood — and does the river run? Add it to your idea, then press Create.'],
+        ['supersession (a new idea, admitted, over a world waiting for Show it)', { turn: 'asked', again: true }, `One more detail would help: Blocks of stone, or of wood — and does the river run? Add it to your idea, then press Create. ${SECOND}`],
     ];
+    const e2From = calls.filter(c => c.route === 'turn').length;
     const e2 = [];
     for (const [name, how, sentence] of E2) {
         const shownBefore = onStage();
@@ -517,6 +523,10 @@ try {
     await shot('e2-after');
     step('EA9-E2 every end that does not install (P2), forced through the stand-in: the world on the stage and its title unchanged after each, one sentence each',
         e2.every(e => e.ok) && e2.length === E2.length, e2);
+    // EA9.5 (Q120 (b)): a second try names the turn it follows; one a world, so the end after it and every entry name none.
+    const followed = calls.filter(c => c.route === 'turn').slice(e2From).map(c => c.retryOf !== null);
+    step('EA9.5 (Q120 (b)): the declined end was the asked one\'s second try and the failure the exhausted one\'s (retryOf sent), no other E2 turn named one, and no failure was retried by itself',
+        JSON.stringify(followed) === JSON.stringify([false, true, false, true, false, false, false, false, false, false]), { followed });
 
     // ---- EA9.4 (agent-first-studio-design.md §9; Q121, and the user's Q118 answer; Q119 (a); Q122 (a)) ----------------
     // "Shape it" for the castle at dusk, the creation's world on the stage: its review in the creator's words.

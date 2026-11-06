@@ -380,9 +380,9 @@ mutate "quota without its reset" "$A/PromptGrants.java" forge-service PromptGran
 mutate "a follow-up past its budget" "$A/PromptGrants.java" forge-service PromptGrantsTest \
     's/case REVISION -> properties\.revisions\(\);/case REVISION -> Long.MAX_VALUE;/'
 mutate "a revision of another prompt joined" "$A/PromptGrants.java" forge-service PromptGrantsTest \
-    's/store\.join\(GRANT \+ grantId, owner, kind\.field, limit, promptHash,/store.join(GRANT + grantId, owner, kind.field, limit, null,/'
+    's/store\.join\(GRANT \+ grantId, owner, kind\.field, limit\(kind\), promptHash,/store.join(GRANT + grantId, owner, kind.field, limit(kind), null,/'
 mutate "a prompt never given back" "$A/Grant.java" forge-service PromptGrantsTest \
-    's/if \(!store\.release\(recordKey, indexKey, counters\)\) \{/if (true) {/'
+    's/: store\.release\(recordKey, indexKey, counters\);/: false;/'
 mutate "an unsafe idea let through" "$A/PromptAdmission.java" forge-service AllowanceRoutesTest \
     's/        grants\.check\(caller\);\n        checkSafety\(text, route\);/        grants.check(caller);/'
 mutate "the safety check before the allowance" "$A/PromptAdmission.java" forge-service AllowanceRoutesTest \
@@ -426,7 +426,48 @@ mutate "a retryOf that is no plan's id" "$S/loop/PlanRequest.java" forge-service
 mutate "a plan not admitted" "$S/loop/LoopHandler.java" forge-service AllowanceRoutesTest \
     's/return admit\(\(\) -> admission\.replan\(caller, plan\.retryOf\(\), id, plan\.prompt\(\)\)\)\.flatMap/return admit(() -> null).flatMap/'
 mutate "a turn not admitted" "$S/agent/AgentHandler.java" forge-service AgentRoutesTest \
-    's/\? admission\.entry\(caller, turnId, turn\.prompt\(\), "turn"\)/? null/'
+    's/: admission\.entry\(caller, turnId, turn\.prompt\(\), "turn"\)\)/: null)/'
+
+# Q120 (b) (EA9.5, 2026-11-05; the creations platform design §10, "Q120's follow-up"): a turn that ended with no world is
+# followed once inside its prompt, its changed idea screened; any other follow-up is 409, never an entry; one that
+# dispatched nothing is given back; only an entry turn and a follow-up write their end. The real scripts are
+# RedisGrantStoreTest's (Docker); the route's are TurnAllowanceRoutesTest's, hermetic.
+mutate "Q120 a follow-up taken as an entry" "$S/agent/AgentHandler.java" forge-service TurnAllowanceRoutesTest \
+    's/\? admission\.followUp\(caller, retryOf, turnId, turn\.prompt\(\)\)/? admission.entry(caller, turnId, turn.prompt(), "turn")/'
+mutate "Q120 no end written" "$S/agent/AgentHandler.java" forge-service TurnAllowanceRoutesTest \
+    's/\n\s*grant\.ended\(endOf\(outcome\)\);//'
+mutate "Q120 a retryOf beside a base" "$S/agent/AgentHandler.java" forge-service TurnAllowanceRoutesTest \
+    's/if \(body\.has\("base"\)\) \{\n(\s*)throw new ForgeException\(ErrorCode\.BAD_REQUEST, "retryOf is for/if (false) {\n${1}throw new ForgeException(ErrorCode.BAD_REQUEST, "retryOf is for/'
+mutate "Q120 a retryOf that is no turn's id" "$S/agent/AgentHandler.java" forge-service TurnAllowanceRoutesTest \
+    's/if \(!value\.isTextual\(\) \|\| !ModuleRequest\.ULID\.matcher\(value\.asText\(\)\)\.matches\(\)\) \{/if (!value.isTextual()) {/'
+mutate "Q120 a changed idea unscreened" "$A/PromptAdmission.java" forge-service TurnAllowanceRoutesTest \
+    's/\n\s*checkSafety\(prompt, "follow-up"\);//'
+mutate "Q120 the same idea screened again" "$A/PromptAdmission.java" forge-service TurnAllowanceRoutesTest \
+    's/if \(may == GrantStore\.Follow\.CHANGED\) \{/if (true) {/'
+mutate "Q120 a refused follow-up made an entry" "$A/PromptAdmission.java" forge-service TurnAllowanceRoutesTest \
+    's/log\.info\("allowance\.follow-up refused=\{\}", may\.name\(\)\.toLowerCase\(\)\);\n\s*throw new ForgeException\(ErrorCode\.CONFLICT, CANNOT_FOLLOW\);/return entry(caller, turnId, prompt, "turn");/'
+mutate "Q120 a lost join made an entry" "$A/PromptAdmission.java" forge-service TurnAllowanceRoutesTest \
+    's/if \(joined == null\) \{\n(\s*)throw new ForgeException\(ErrorCode\.CONFLICT, CANNOT_FOLLOW\);/if (joined == null) {\n${1}return entry(caller, turnId, prompt, "turn");/'
+mutate "Q120 follow-ups past their one" "$A/PromptGrants.java" forge-service TurnAllowanceRoutesTest \
+    's/properties\.followUps\(\)/1000/g'
+mutate "Q120 a follow-up never given back" "$A/Grant.java" forge-service TurnAllowanceRoutesTest \
+    's/followUp \? store\.unfollow\(recordKey, indexKey, turnId\)/followUp ? false/'
+mutate "Q120 an unwinding turn not waited for" "$A/PromptAdmission.java" forge-service TurnAllowanceRoutesTest \
+    's/may == GrantStore\.Follow\.OPEN && waited < UNWIND_WAIT_MILLIS;/may == GrantStore.Follow.OPEN \&\& waited < 0;/'
+mutate "Q120 the real join follows another owner's turn" "$A/RedisGrantStore.java" forge-service RedisGrantStoreTest \
+    's/\+ "if redis\.call\(\x27HGET\x27, record, \x27owner\x27\) ~= ARGV\[1\] then return \x27NONE\x27 end\\n"(\n\s*\+ "local used = tonumber\(redis\.call\(\x27HGET\x27, record, \x27followups\x27\))/+ ""$1/'
+mutate "Q120 the real join follows past its one" "$A/RedisGrantStore.java" forge-service RedisGrantStoreTest \
+    's/\+ "if used >= tonumber\(ARGV\[2\]\) then return \x27FULL\x27 end\\n"/+ ""/'
+mutate "Q120 the real join follows a world" "$A/RedisGrantStore.java" forge-service RedisGrantStoreTest \
+    's/\+ "if not followable\[ended\] then return \x27WORLD\x27 end\\n"(\n\s*\+ "local prompt = redis\.call)/+ ""$1/'
+mutate "Q120 the real probe says a world may be followed" "$A/RedisGrantStore.java" forge-service RedisGrantStoreTest \
+    's/\+ "if not followable\[ended\] then return \x27WORLD\x27 end\\n"(\n\s*\+ "if redis\.call\(\x27HGET\x27, record, \x27prompt\x27\) == ARGV\[3\])/+ ""$1/'
+mutate "Q120 the real end written by another turn before a follow-up" "$A/RedisGrantStore.java" forge-service RedisGrantStoreTest \
+    's/\+ "elseif redis\.call\(\x27HGET\x27, record, \x27entry\x27\) ~= ARGV\[1\] then return \x27OTHER\x27 end\\n"/+ "end\\n"/'
+mutate "Q120 the real end written by the entry after a follow-up" "$A/RedisGrantStore.java" forge-service RedisGrantStoreTest \
+    's/\+ "  if following ~= ARGV\[1\] then return \x27OTHER\x27 end\\n"/+ ""/'
+mutate "Q120 the real give-back of a spent follow-up" "$A/RedisGrantStore.java" forge-service RedisGrantStoreTest \
+    's/\+ "if redis\.call\(\x27HGET\x27, record, \x27followDispatched\x27\) == \x271\x27 then return \x27SPENT\x27 end\\n"/+ ""/'
 
 # W1.5 (2026-11-02; the creations platform design §11, I12, Q99): Azure AI Content Safety fails closed. No verdict is
 # no call; each category refuses at its threshold; the recorded verdicts never run outside the local and test profiles.

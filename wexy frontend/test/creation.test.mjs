@@ -14,7 +14,7 @@ import { createAgentClient } from '../src/forge-client/agent-client.ts';
 import { createApi } from '../src/forge-client/http.ts';
 import { createModuleClient } from '../src/forge-client/module-client.ts';
 import { createAgentSession } from '../src/loop/agent-turn.ts';
-import { createCandidateSession } from '../src/loop/candidate.ts';
+import { candidateBundle, createCandidateSession, turnCallsOf } from '../src/loop/candidate.ts';
 import { COPY } from '../src/loop/copy.ts';
 import { createCreationController, handOffFrom, runSentence, TITLE_CHARS, titleOf } from '../src/loop/creation.ts';
 import { elapsed, roundCameBack, spoken, timed } from '../src/shell/studio/creation-view.ts';
@@ -84,7 +84,7 @@ function held(text) {
  * The backend as the agent path meets it: the turn and module routes from the recordings unless a test says otherwise;
  * each request's caller (its Authorization) recorded, `identity` the transport's (a fixed token unless a test says).
  */
-function backend(routes = {}, identity = IDENTITY) {
+function backend(routes = {}, identity = IDENTITY, agentOptions = {}) {
     const requests = [];
     const fetchImpl = async (url, init) => {
         const path = new URL(url).pathname;
@@ -95,7 +95,7 @@ function backend(routes = {}, identity = IDENTITY) {
         return refusal(404, 'not-found', `no route ${path}`);
     };
     const api = createApi(CONFIG, identity, fetchImpl);
-    return { requests, paths: () => requests.map(r => r.path), agent: createAgentClient(api), modules: createModuleClient(api) };
+    return { requests, paths: () => requests.map(r => r.path), agent: createAgentClient(api, agentOptions), modules: createModuleClient(api) };
 }
 
 /**
@@ -157,8 +157,8 @@ function stagePort(ref, answer) {
  * A controller over the recordings, the fake compiler, the stage and the account; each candidate session's cancels
  * counted. `identity` is the transport's, `acct` an account port of the test's own (the studio's, EA9-U17).
  */
-function rig({ routes = {}, answer = () => INSTALLED, modules, withAccount = true, compiler = COMPILER, identity, acct: given, now } = {}) {
-    const net = backend(routes, identity);
+function rig({ routes = {}, answer = () => INSTALLED, modules, withAccount = true, compiler = COMPILER, identity, acct: given, now, agent } = {}) {
+    const net = backend(routes, identity, agent);
     const acct = given ?? (withAccount ? account() : undefined);
     const ref = {};
     const stage = stagePort(ref, answer);
@@ -219,12 +219,15 @@ test('EA9-U1 Create runs the turn and writes its module, then waits; Show it is 
 
 test('EA9-U2 every end that does not install leaves the stage as it was, and says one sentence', async () => {
     const quotaHeaders = { 'Retry-After': '3600' };
+    // Q120 (b), EA9.5: an end after the turn was admitted says what the next Create is. A failure on the model's side is
+    // first tried once more by the studio, inside the same world, so after its second failure the next is a new world.
+    const second = s => `${s} ${COPY.creation.secondTry}`;
     const ends = [
-        ['asked', { routes: { turn: () => sse(wire('agent-wire', 'asked.sse')) } }, s => s.startsWith('One more detail would help: ') && s.endsWith(' Add it to your idea, then press Create.')],
-        ['declined', { routes: { turn: () => sse(wire('agent-wire', 'declined.sse')) } }, s => s === COPY.creation.declined],
-        ['exhausted', { routes: { turn: () => sse(wire('agent-wire', 'exhausted-revisions.sse')) } }, s => s === COPY.creation.exhausted],
-        ['failed (upstream)', { routes: { turn: () => sse(wire('agent-wire', 'error-upstream.sse')) } }, s => s === COPY.failures.plan],
-        ['failed (budget)', { routes: { turn: () => sse(wire('agent-wire', 'error-budget.sse')) } }, s => s === COPY.failures.budget],
+        ['asked', { routes: { turn: () => sse(wire('agent-wire', 'asked.sse')) } }, s => s.startsWith('One more detail would help: ') && s.endsWith(` Add it to your idea, then press Create. ${COPY.creation.secondTry}`)],
+        ['declined', { routes: { turn: () => sse(wire('agent-wire', 'declined.sse')) } }, s => s === second(COPY.creation.declined)],
+        ['exhausted', { routes: { turn: () => sse(wire('agent-wire', 'exhausted-revisions.sse')) } }, s => s === second(COPY.creation.exhausted)],
+        ['failed (upstream)', { routes: { turn: () => sse(wire('agent-wire', 'error-upstream.sse')) } }, s => s === `${COPY.failures.plan} ${COPY.creation.newWorld}`],
+        ['failed (budget)', { routes: { turn: () => sse(wire('agent-wire', 'error-budget.sse')) } }, s => s === second(COPY.failures.budget)],
         ['a candidate\'s stop', { routes: { module: () => new Response(wire('module-wire', 'denied.json'), { status: 503, headers: { 'Content-Type': 'application/json' } }) } }, s => s === COPY.failures.budget],
         ['quota', { routes: { turn: () => refusal(429, 'quota', 'Today\'s world is made.', quotaHeaders) } }, s => s.startsWith('You\'ve made today\'s world. Early access gives one a day; the next opens at ')],
         ['an idea content safety refused', { routes: { turn: () => refusal(422, 'content-refused', 'This idea was refused.') } }, s => s === COPY.failures.refused],
@@ -270,7 +273,8 @@ test('EA9-U2 every end that does not install leaves the stage as it was, and say
         const end = await creating;
         h.release();
         await settle();
-        assert.deepEqual([end.phase, end.sentence], ['cancelled', COPY.creation.cancelled], where);
+        // Stopped after its turn was admitted (its meta came): the next Create is its second try (Q120 (b)).
+        assert.deepEqual([end.phase, end.sentence], ['cancelled', where === 'turn' ? second(COPY.creation.cancelled) : COPY.creation.cancelled], where);
         assert.deepEqual([r.controller.state.phase, r.stage.gos.length, r.stage.installs], ['cancelled', 0, 0], where);
         assert.equal(r.net.paths().length, where === 'turn' ? 1 : 2, `${where}: no request after the cancel`);
     }
@@ -331,19 +335,38 @@ test('EA9-U4 a quota or a spent allowance, at the turn or at a module call: the 
     }
 });
 
-test('EA9-U5 an asked turn: its question shown, the idea kept; the next Create is a new turn', async () => {
+test('EA9-U5 an asked turn: its question shown, the idea kept; the next Create follows it inside its world (Q120 (b))', async () => {
     let turns = 0;
     const r = rig({ routes: { turn: () => sse(wire('agent-wire', ++turns === 1 ? 'asked.sse' : 'handed-off.sse')) } });
     const asked = await r.controller.create(IDEA);
     assert.equal(asked.phase, 'stopped');
     assert.ok(asked.question && asked.question === asked.turn.question, 'the model\'s question, as it asked it');
-    assert.equal(asked.sentence, COPY.creation.asked(asked.question));
+    assert.equal(asked.sentence, `${COPY.creation.asked(asked.question)} ${COPY.creation.secondTry}`);
     assert.deepEqual(asked.idea, IDEA, 'the idea kept');
     assert.equal(asked.steps.plan.state, 'failed');
-    const again = await r.controller.create({ ...IDEA, prompt: `${IDEA.prompt}, stone blocks and a running river` });
+    const answered = `${IDEA.prompt}, stone blocks and a running river`;
+    const again = await r.controller.create({ ...IDEA, prompt: answered });
     assert.equal(again.phase, 'ready');
     assert.equal(again.question, null);
-    assert.deepEqual(r.net.paths(), ['/v1/agent/turn', '/v1/agent/turn', '/v1/agent/module'], 'a new turn (Q120 (a): no follow-up joins today)');
+    assert.deepEqual(r.net.paths(), ['/v1/agent/turn', '/v1/agent/turn', '/v1/agent/module']);
+    // The answer goes as a follow-up of the asked turn, with the idea as the creator changed it, and nothing else.
+    assert.deepEqual(r.net.requests[1].body, { prompt: answered, style: IDEA.style, seconds: IDEA.seconds, retryOf: asked.turn.meta.turnId });
+    assert.equal(again.follows, asked.turn.meta.turnId);
+    // Its attempt counts the asked turn's calls too (Q_C never resets on a second try), and lists them: every call Q_C
+    // counts has its record, in the state and the bundle (the independent review of EA9.5).
+    // Its end was the service's own done, so its calls are all it made (the outside review of EA9.5: an end not seen
+    // counts a turn's whole allowance; EA9-U30).
+    assert.deepEqual(again.handOff.followed, {
+        turnId: asked.turn.meta.turnId, model: asked.turn.meta.model, promptVersion: asked.turn.meta.promptVersion, calls: turnCallsOf(asked.turn.calls), end: 'seen',
+    });
+    assert.equal(r.controller.session.state.budget.calls.unknown, 0, 'nothing unknown: every call of both turns was seen');
+    const st = r.controller.session.state;
+    const spent = st.budget.calls;
+    assert.equal(spent.settled + spent.unknown, asked.turn.calls.length + again.turn.calls.length + 1, 'both turns\' calls, and the module call');
+    assert.deepEqual(st.followed, again.handOff.followed);
+    const bundle = candidateBundle(st);
+    assert.equal(bundle.calls.followed.calls.length + bundle.calls.turns.flatMap(t => t.calls).length + bundle.calls.jobs.length, spent.settled + spent.unknown,
+        'every call Q_C counts has its record in the bundle');
 });
 
 test('EA9-U6 a device loss during the writing, and during the Run: the creation stopped, its go void, nothing installed', async () => {
@@ -904,7 +927,11 @@ test('EA9-U20 a world written for Show it outlives a new idea that never starts:
     const refusedLater = await late.controller.create({ ...IDEA, prompt: 'a forest of paper lanterns' });
     turned.release();
     await admitted;
-    assert.deepEqual([refusedLater.phase, refusedLater.idea.prompt, refusedLater.sentence], ['stopped', 'a forest of paper lanterns', COPY.failures.allowance]);
+    // Since EA9.5 (Q120 (b)) the newer idea goes as B's second try (B was admitted, then stopped by it), which this
+    // stand-in refuses as an entry's allowance, a word a real forge never says of a follow-up: said, and the next Create
+    // is a new world.
+    assert.equal(turnBodies(late).at(-1).retryOf, 'turn-1');
+    assert.deepEqual([refusedLater.phase, refusedLater.idea.prompt, refusedLater.sentence], ['stopped', 'a forest of paper lanterns', `${COPY.failures.allowance} ${COPY.creation.newWorld}`]);
 
     // A device loss under a new idea's turn: the world kept was checked on the lost device too, so it goes.
     const lossy = rig({ routes: { turn: (body, n, init) => (n === 1 ? sse(HANDED_OFF) : unanswered(init)) } });
@@ -1074,7 +1101,7 @@ test('EA9-U22 each step counts its elapsed time on the controller\'s clock, neve
     for (const s of [ready, shown]) for (const step of Object.values(s.steps)) assert.ok(!/%|left|remaining|about/.test(timed(step, t)), 'no percentage or estimate');
     // An end says its sentence; a stopped one too.
     const stopped = rig({ routes: { turn: () => sse(wire('agent-wire', 'declined.sse')) } });
-    assert.equal(spoken(await stopped.controller.create(IDEA)), COPY.creation.declined);
+    assert.equal(spoken(await stopped.controller.create(IDEA)), `${COPY.creation.declined} ${COPY.creation.secondTry}`);
     // A world on the stage paused past its envelope says so, and what to press (the EA9.2 review).
     assert.deepEqual([spoken(shown, true), spoken(shown, false), spoken(ready, true)], [COPY.creation.resized, COPY.creation.onStage, COPY.creation.readyToShow]);
     // The keyboard (E6): a held Ctrl+Enter presses once; its repeats are only kept from the page (the EA9.2 review).
@@ -1398,7 +1425,7 @@ test('EA9.4 review: an improvement written for its go comes back when a newer id
         assert.deepEqual([r.controller.state.phase, r.controller.state.improves], ['ready', true]);
         await r.controller.create({ ...IDEA, prompt: 'a reef of glowing coral' });
         const st = r.controller.state;
-        const why = end === 'declined' ? COPY.creation.declined : COPY.failures.quota;
+        const why = end === 'declined' ? `${COPY.creation.declined} ${COPY.creation.secondTry}` : COPY.failures.quota;
         assert.deepEqual([st.phase, st.improves, st.sentence], ['ready', true, COPY.creation.keptImproved(why)], end);
         assert.equal(r.controller.showBlocked(), null, `${end}: its Show it offered again`);
         const showing = r.controller.show();
@@ -1453,4 +1480,270 @@ test('EA9.4 review: a round that brought no new world comes back to the world on
     assert.equal(r.controller.state.phase, 'installed');
     assert.ok(seen.length > 0 && seen.every(b => b === false), 'every step said, its install too');
     off();
+});
+
+// ---- Q120 (b), EA9.5: the follow-up (the user, 2026-11-05: "Build the follow-up"; the creations platform designs §10) ----
+
+/** A recorded stream, its turn renamed: each turn of a test its own id, as the backend mints one a turn. */
+const as = (text, turnId) => text.replaceAll('"turnId":"turn-1"', `"turnId":"${turnId}"`);
+/** A turn route answering each request with the next of `answers` (a fixture's name or a Response maker), turn-1, turn-2, ... */
+function turnsOf(...answers) {
+    let n = 0;
+    return (body, _count, init) => {
+        const a = answers[Math.min(n, answers.length - 1)];
+        n++;
+        return typeof a === 'function' ? a(body, init) : sse(as(wire('agent-wire', a), `turn-${n}`));
+    };
+}
+const turnBodies = r => r.net.requests.filter(q => q.path === '/v1/agent/turn').map(q => q.body);
+
+test('EA9-U25 a failure on the model\'s side is tried once more by itself, inside the same world, with the same idea; its attempt counts both turns', async () => {
+    const r = rig({ routes: { turn: turnsOf('error-upstream.sse', 'handed-off.sse') } });
+    const details = [];
+    r.controller.subscribe(s => { if (s.phase === 'turn') details.push(s.steps.plan.detail); });
+    const ready = await r.controller.create(IDEA);
+    assert.equal(ready.phase, 'ready', ready.sentence ?? '');
+    assert.deepEqual(turnBodies(r), [IDEA, { ...IDEA, retryOf: 'turn-1' }], 'the retry names the failed turn, the idea unchanged');
+    assert.deepEqual(r.net.paths(), ['/v1/agent/turn', '/v1/agent/turn', '/v1/agent/module']);
+    assert.ok(details.includes(COPY.creation.retrying), 'the plan row says it tries once more');
+    assert.equal(ready.follows, 'turn-1');
+    assert.equal(ready.handOff.followed.calls.length, 3, 'the failed turn\'s three calls');
+    const spent = r.controller.session.state.budget.calls;
+    assert.equal(spent.settled + spent.unknown, 3 + ready.turn.calls.length + 1);
+    await settle();
+    assert.equal(r.acct.entries, 2, 'the allowance read after each turn');
+    // Once only: a second failure says so, and the next Create is a new world, sent as an entry.
+    const twice = rig({ routes: { turn: turnsOf('error-upstream.sse') } });
+    const failed = await twice.controller.create(IDEA);
+    assert.deepEqual([failed.phase, failed.sentence], ['stopped', `${COPY.failures.plan} ${COPY.creation.newWorld}`]);
+    assert.equal(turnBodies(twice).length, 2);
+    await twice.controller.create({ ...IDEA, prompt: 'a simpler world' });
+    assert.equal(turnBodies(twice)[2].retryOf, undefined, 'a new world: no follow-up after a follow-up');
+});
+
+test('EA9-U26 nothing else is tried again by itself: a spent budget, a dropped stream, a refusal before any stream, a follow-up\'s own failure', async () => {
+    const meta = HANDED_OFF.split(/(?<=\n\n)/)[0];
+    const cases = [
+        ['a budget in the stream', 'error-budget.sse', `${COPY.failures.budget} ${COPY.creation.secondTry}`],
+        ['a stream that ended before its last event', () => sse(meta), null],
+        // The client's own cap says `upstream` too, but the service never ended the turn: its end there is unknown.
+        ['a stream past the client\'s cap', () => sse(`${meta}event:call\ndata:${'x'.repeat(270_000)}\n\n`), null],
+        ['upstream before any stream (nothing spent)', () => refusal(502, 'upstream', 'The model failed.'), COPY.failures.plan],
+    ];
+    for (const [label, answer, said] of cases) {
+        const r = rig({ routes: { turn: turnsOf(answer) } });
+        const end = await r.controller.create(IDEA);
+        assert.equal(end.phase, 'stopped', label);
+        assert.equal(turnBodies(r).length, 1, `${label}: one turn, none sent by itself`);
+        if (said) assert.equal(end.sentence, said, label);
+        else assert.ok(end.sentence.endsWith(COPY.creation.secondTry), `${label}: admitted, so its next Create is a second try: ${end.sentence}`);
+    }
+    // A follow-up that fails on the model's side is not retried: one second try a world.
+    const r = rig({ routes: { turn: turnsOf('asked.sse', 'error-upstream.sse') } });
+    await r.controller.create(IDEA);
+    const end = await r.controller.create({ ...IDEA, prompt: `${IDEA.prompt}, stone` });
+    assert.equal(turnBodies(r).length, 2);
+    assert.equal(end.sentence, `${COPY.failures.plan} ${COPY.creation.newWorld}`);
+});
+
+test('EA9-U27 the creator\'s second try after each end with no world; one a world; a refused one (409) said, and the next Create is a new world', async () => {
+    for (const [label, first] of [['declined', 'declined.sse'], ['exhausted', 'exhausted-revisions.sse'], ['a budget', 'error-budget.sse']]) {
+        const r = rig({ routes: { turn: turnsOf(first, 'asked.sse', 'handed-off.sse') } });
+        await r.controller.create(IDEA);
+        const second = await r.controller.create({ ...IDEA, prompt: 'a calmer idea' });
+        assert.equal(turnBodies(r)[1].retryOf, 'turn-1', `${label}: the second try names the first`);
+        assert.ok(second.sentence.endsWith(COPY.creation.newWorld), `${label}: a follow-up spent, so a new world next: ${second.sentence}`);
+        await r.controller.create({ ...IDEA, prompt: 'another idea' });
+        assert.equal(turnBodies(r)[2].retryOf, undefined, `${label}: the third Create is an entry`);
+    }
+    // Stopped after its turn was admitted: its next Create is its second try.
+    const h = held(HANDED_OFF);
+    const stopped = rig({ routes: { turn: turnsOf(() => h.response, 'handed-off.sse') } });
+    const creating = stopped.controller.create(IDEA);
+    await waitFor(() => stopped.controller.state.turn?.meta, 'the turn admitted');
+    stopped.controller.cancel();
+    assert.equal((await creating).sentence, `${COPY.creation.cancelled} ${COPY.creation.secondTry}`);
+    h.release();
+    assert.equal((await stopped.controller.create(IDEA)).phase, 'ready');
+    assert.equal(turnBodies(stopped)[1].retryOf, 'turn-1');
+    // The service refuses a follow-up (expired, its end not written, a race): said; the next Create is an entry.
+    const refused = rig({ routes: { turn: turnsOf('asked.sse', () => refusal(409, 'conflict', 'This try can\'t be continued, so a new Create makes a new world.'), 'handed-off.sse') } });
+    await refused.controller.create(IDEA);
+    const conflict = await refused.controller.create({ ...IDEA, prompt: 'with stone' });
+    assert.deepEqual([conflict.phase, conflict.sentence, conflict.limit], ['stopped', COPY.creation.followRefused, null]);
+    assert.deepEqual(refused.acct.limits, [], 'no dialog: nothing was refused for the allowance');
+    await refused.controller.create({ ...IDEA, prompt: 'with stone' });
+    assert.equal(turnBodies(refused)[2].retryOf, undefined, 'the next Create is a new world, sent as one');
+});
+
+test('EA9-U28 a second try never admitted is still the creator\'s: a refusal before any stream, its idea refused, a Stop first', async () => {
+    const answers = [
+        ['the service unavailable', () => refusal(503, 'unavailable', 'Live creation is unavailable right now.')],
+        ['its changed idea refused', () => refusal(422, 'content-refused', 'This idea can\'t be made here.')],
+        ['a Stop before its stream', (_b, init) => unanswered(init)],
+    ];
+    for (const [label, second] of answers) {
+        const r = rig({ routes: { turn: turnsOf('asked.sse', second, 'handed-off.sse') } });
+        await r.controller.create(IDEA);
+        const trying = r.controller.create({ ...IDEA, prompt: 'with stone' });
+        if (label.startsWith('a Stop')) {
+            await waitFor(() => turnBodies(r).length === 2, `${label}: sent`);
+            r.controller.cancel();
+        }
+        const end = await trying;
+        assert.equal(end.phase, label.startsWith('a Stop') ? 'cancelled' : 'stopped', label);
+        assert.ok(end.sentence.endsWith(COPY.creation.secondTry), `${label}: ${end.sentence}`);
+        await r.controller.create({ ...IDEA, prompt: 'with stone' });
+        assert.deepEqual(turnBodies(r).map(b => b.retryOf), [undefined, 'turn-1', 'turn-1'], `${label}: the same second try, sent again`);
+    }
+    // A Stop during the studio's own retry, before its stream: the creator's next Create is still that second try.
+    const r = rig({ routes: { turn: turnsOf('error-upstream.sse', (_b, init) => unanswered(init), 'handed-off.sse') } });
+    const retrying = r.controller.create(IDEA);
+    await waitFor(() => turnBodies(r).length === 2, 'the retry sent');
+    r.controller.cancel();
+    assert.equal((await retrying).sentence, `${COPY.creation.cancelled} ${COPY.creation.secondTry}`);
+    assert.equal((await r.controller.create(IDEA)).phase, 'ready');
+    assert.deepEqual(turnBodies(r).map(b => b.retryOf), [undefined, 'turn-1', 'turn-1']);
+});
+
+test('EA9-U28b a second try the service refuses as a request (a forge before EA9.5 answers retryOf with 400; a 404, a 500) is not sent again', async () => {
+    const answers = [
+        ['400, a forge before EA9.5', () => refusal(400, 'bad-request', 'A turn takes only prompt, style, seconds and base, not retryOf.')],
+        ['404', () => refusal(404, 'not-found', 'No such route.')],
+        ['500', () => refusal(500, 'internal', 'Something went wrong on our side.')],
+    ];
+    for (const [label, second] of answers) {
+        const r = rig({ routes: { turn: turnsOf('asked.sse', second, 'handed-off.sse') } });
+        await r.controller.create(IDEA);
+        const end = await r.controller.create({ ...IDEA, prompt: 'with stone' });
+        assert.equal(end.phase, 'stopped', label);
+        assert.ok(end.sentence.endsWith(COPY.creation.newWorld), `${label}: said, and the next Create is a new world: ${end.sentence}`);
+        assert.equal((await r.controller.create({ ...IDEA, prompt: 'with stone' })).phase, 'ready', label);
+        assert.deepEqual(turnBodies(r).map(b => b.retryOf), [undefined, 'turn-1', undefined], `${label}: the third Create an entry, which a forge before EA9.5 takes`);
+    }
+});
+
+test('EA9-U28c a Create that supersedes a second try under way, or lands before a stopped turn settles, follows what it should (the independent review of EA9.5)', async () => {
+    // Developer view's Run agent turn, pressed again while a second try's request has no answer: that try goes back.
+    const r = rig({ routes: { turn: turnsOf('asked.sse', (_b, init) => unanswered(init), 'handed-off.sse') } });
+    await r.controller.create(IDEA);
+    const first = r.controller.create({ ...IDEA, prompt: 'with stone' }, { write: false });
+    await waitFor(() => turnBodies(r).length === 2, 'the second try sent');
+    const again = await r.controller.create({ ...IDEA, prompt: 'with stone' });
+    await first;
+    assert.equal(again.phase, 'ready');
+    assert.deepEqual(turnBodies(r).map(b => b.retryOf), [undefined, 'turn-1', 'turn-1'], 'the second try not admitted went back, and was sent again');
+    // A Create pressed in the same breath as Stop, before the stopped turn's request settles: it follows the stopped turn.
+    const h = held(HANDED_OFF);
+    const s = rig({ routes: { turn: turnsOf(() => h.response, 'handed-off.sse') } });
+    const creating = s.controller.create(IDEA);
+    await waitFor(() => s.controller.state.turn?.meta, 'the turn admitted');
+    s.controller.cancel();
+    const next = s.controller.create({ ...IDEA, prompt: 'a calmer idea' });
+    await creating;
+    h.release();
+    assert.equal((await next).phase, 'ready');
+    assert.deepEqual(turnBodies(s).map(b => b.retryOf), [undefined, 'turn-1'], 'the stopped turn, admitted, followed');
+    // Its stream had said only its meta, and its end was not seen: Q_C counts its whole allowance (the outside review).
+    const st = s.controller.session.state;
+    assert.deepEqual([st.followed.end, st.followed.calls.length, st.budget.calls.unknown], ['unseen', 0, 6]);
+});
+
+test('EA9-U29 a second try is its uid\'s: another account\'s Create starts its own world; a link (the same uid) keeps it', async () => {
+    const moved = rig({ routes: { turn: turnsOf('asked.sse', 'handed-off.sse') } });
+    await moved.controller.create(IDEA);
+    moved.acct.move();
+    await moved.controller.create(IDEA);
+    assert.equal(turnBodies(moved)[1].retryOf, undefined, 'another uid: an entry of its own');
+    const linked = rig({ routes: { turn: turnsOf('asked.sse', 'handed-off.sse') } });
+    await linked.controller.create(IDEA);
+    linked.acct.link();
+    assert.equal((await linked.controller.create(IDEA)).phase, 'ready');
+    assert.equal(turnBodies(linked)[1].retryOf, 'turn-1', 'a link keeps the uid, and the second try');
+    // A follow-up's request never carries a base, and a revision never carries a retryOf (the wire's own rule).
+    assert.ok(linked.net.requests.every(q => q.path !== '/v1/agent/turn' || !(q.body.base && q.body.retryOf)));
+});
+
+test('EA9-U30 a second try after a turn whose end was not seen counts that turn\'s whole allowance into Q_C, unknown (the outside review of EA9.5, its mid)', async () => {
+    // The first turn as the browser saw it: its meta, its first call and that call's usage. The service, not yet aware
+    // the client had gone, made five calls more (a turn makes at most six, AgentTurn.MAX_CALLS), which no event told.
+    const BACKEND_CALLS = 6;
+    const opening = HANDED_OFF.split(/(?<=\n\n)/).slice(0, 3).join('');
+    /** A stream that sends `text`, then waits for its reader's abort: the turn still running when it is stopped. */
+    const open = (text, init) => sse(new ReadableStream({
+        start(controller) {
+            controller.enqueue(new TextEncoder().encode(text));
+            init.signal.addEventListener('abort', () => { try { controller.error(new DOMException('aborted', 'AbortError')); } catch { /* closed */ } }, { once: true });
+        },
+    }));
+    const META = JSON.parse(opening.match(/^event:meta\ndata:(.*)$/m)[1]);
+    const seenCalls = turnCallsOf([{ n: 1, purpose: 'first', usage: JSON.parse(opening.match(/^event:usage\ndata:(.*)$/m)[1]) }]);
+    const UNSEEN = { turnId: 'turn-1', model: META.model, promptVersion: META.promptVersion, calls: seenCalls, end: 'unseen' };
+    /** The second try's attempt, as Q_C and its bundle count it: the first turn's whole allowance, unknown. */
+    const counts = (r, again, label) => {
+        assert.equal(again.phase, 'ready', `${label}: ${again.sentence ?? ''}`);
+        assert.deepEqual(again.handOff.followed, UNSEEN, label);
+        const st = r.controller.session.state;
+        // Q_C: the follow-up's three calls and its module call settled; the first turn's whole allowance unknown, never
+        // its one call seen (the review's probe seeded what the browser saw, five calls short here).
+        assert.deepEqual(st.budget.calls, { settled: again.turn.calls.length + 1, reserved: 0, unknown: BACKEND_CALLS }, label);
+        const counted = st.budget.calls.settled + st.budget.calls.unknown;
+        assert.ok(counted >= BACKEND_CALLS + again.turn.calls.length + 1, `${label}: Q_C counts at least what the service made: ${counted}`);
+        // The bundle says so: the calls seen, the end unseen, what Q_C counts for it and what made it; with it, every call
+        // Q_C counts.
+        const bundle = candidateBundle(st);
+        const { followed } = bundle.calls;
+        assert.deepEqual([followed.end, followed.counted, followed.calls.length, followed.model, followed.promptVersion],
+            ['unseen', BACKEND_CALLS, 1, META.model, META.promptVersion], label);
+        assert.equal(followed.counted + bundle.calls.turns.flatMap(t => t.calls).length + bundle.calls.jobs.length, counted, label);
+    };
+    const cases = [
+        ['a dropped connection', () => sse(opening), null],
+        ['a stream past the client\'s cap', () => sse(`${opening}event:call\ndata:${'x'.repeat(270_000)}\n\n`), null],
+        ['a stream that broke its contract', () => sse(`${opening}event:meta\ndata:{}\n\n`), null],
+        // The agent client's own deadline (agent-client.ts), the stream still open: the independent review's gap.
+        ['the client\'s deadline', (_b, init) => open(opening, init), null, { deadlineMs: 80 }],
+        ['the creator\'s Stop', (_b, init) => open(opening, init), r => r.controller.cancel()],
+        // Developer view's Run agent turn pressed again: the turn under way superseded by the next Create, its second try.
+        ['a newer Create', (_b, init) => open(opening, init), 'supersede'],
+        // A link (the same uid) keeps the second try, and its end as it was (EA9-U29's is a seen one).
+        ['a dropped connection, then a link', () => sse(opening), 'link'],
+    ];
+    for (const [label, first, interrupt, agent] of cases) {
+        const r = rig({ routes: { turn: turnsOf(first, 'handed-off.sse') }, agent });
+        let again;
+        if (interrupt === 'supersede') {
+            const firstTry = r.controller.create(IDEA, { write: false });
+            await waitFor(() => r.controller.state.turn?.calls.length === 1, `${label}: the first call seen`);
+            again = await r.controller.create({ ...IDEA, prompt: 'a calmer idea' });
+            await firstTry;
+        } else {
+            const creating = r.controller.create(IDEA);
+            if (typeof interrupt === 'function') {
+                await waitFor(() => r.controller.state.turn?.calls.length === 1, `${label}: the first call seen`);
+                interrupt(r);
+            }
+            const end = await creating;
+            assert.ok(end.sentence.endsWith(COPY.creation.secondTry), `${label}: admitted, so a second try: ${end.sentence}`);
+            if (interrupt === 'link') r.acct.link();
+            again = await r.controller.create({ ...IDEA, prompt: 'a calmer idea' });
+        }
+        assert.deepEqual(turnBodies(r).map(b => b.retryOf), [undefined, 'turn-1'], `${label}: the second try follows the first`);
+        counts(r, again, label);
+    }
+
+    // A second try refused before its admission (the service unavailable) is kept for the next Create as it was, its end
+    // still unseen (EA9-U28's is a seen one: the independent review's gap). Then another attempt from the same hand-off
+    // (Developer view's Write the modules) counts the followed turn again: each attempt is its own Q_C.
+    const kept = rig({ routes: { turn: turnsOf(() => sse(opening), () => refusal(503, 'unavailable', 'Live creation is unavailable right now.'), 'handed-off.sse') } });
+    await kept.controller.create(IDEA);
+    const refused = await kept.controller.create({ ...IDEA, prompt: 'a calmer idea' });
+    assert.ok(refused.sentence.endsWith(COPY.creation.secondTry), `kept: still a second try: ${refused.sentence}`);
+    const third = await kept.controller.create({ ...IDEA, prompt: 'a calmer idea' });
+    assert.deepEqual(turnBodies(kept).map(b => b.retryOf), [undefined, 'turn-1', 'turn-1'], 'kept: the same second try, sent again');
+    counts(kept, third, 'kept');
+    const first = kept.controller.session;
+    await kept.controller.write();
+    assert.notEqual(kept.controller.session, first, 'a new attempt');
+    counts(kept, kept.controller.state, 'written again');
 });

@@ -142,6 +142,11 @@ wexy:
     # A model's reviews of the world on the stage one prompt covers (EA6.4): two attempts of the candidate's Q_C, three each
     # (one before each of its two visual rounds and one after the last). Each must carry the prompt its turn was granted for.
     review-calls: 6
+    # One follow-up turn (Q120 (b), the user, 2026-11-05: "Build the follow-up"): after a turn that ended with no world (a
+    # question, a decline, a spent budget, a failure, a Stop after its first call), the turn that names it runs inside its
+    # prompt, its idea screened again when changed; any other is 409, never an entry (the creations platform design §10,
+    # "Q120's follow-up"). A follow-up that dispatched nothing is given back.
+    follow-ups: 1
     account-mark: 400d
     # 32 random bytes as 64 hex characters, from Infisical; the prod profile refuses to start without it. Never rotated
     # on deploy: a new key makes every caller new.

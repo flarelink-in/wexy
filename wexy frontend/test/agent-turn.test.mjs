@@ -9,10 +9,11 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { ENGINE_BUNDLE_HASH } from '../src/forge-client/agent-client.ts';
+import { createAgentClient, ENGINE_BUNDLE_HASH } from '../src/forge-client/agent-client.ts';
+import { createApi } from '../src/forge-client/http.ts';
 import { AgentVersionError, readAgentStream } from '../src/forge-client/agent-stream.ts';
 import { ForgeError } from '../src/forge-client/errors.ts';
-import { createAgentSession, elapsedMs, TURN_PHASES } from '../src/loop/agent-turn.ts';
+import { createAgentSession, elapsedMs, endSeen, TURN_PHASES } from '../src/loop/agent-turn.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const wire = (name) => readFileSync(join(ROOT, 'test/fixtures/agent-wire', name), 'utf8').replace(/\r\n/g, '\n');
@@ -68,7 +69,8 @@ test('EA-T1 each recorded ending has its phase, and only a hand-off is a success
     assert.deepEqual([hand.calls.length, hand.costMicroUsd, hand.unreported, hand.findings], [3, 138_000, 0, []]);
     const asked = await createAgentSession(replaying('asked'), () => {}, clock().now).start(REQUEST);
     assert.deepEqual([asked.question, asked.design, asked.program], ['Blocks of stone, or of wood — and does the river run?', null, null]);
-    assert.match(TURN_PHASES.asked.note, /no way to answer it yet/);
+    // Q120 (b), EA9.5: a question's answer follows its turn inside the same world, once.
+    assert.match(TURN_PHASES.asked.note, /follows this one inside the same world/);
     const revisions = await createAgentSession(replaying('exhausted-revisions'), () => {}, clock().now).start(REQUEST);
     assert.deepEqual([revisions.code, revisions.reason, revisions.findings[0].code], ['EA_TURN_BUDGET', 'EA_TURN_BUDGET: the check still fails after 2 revisions', 'buffer-producer']);
     const deadline = await createAgentSession(replaying('exhausted-deadline'), () => {}, clock().now).start(REQUEST);
@@ -178,6 +180,48 @@ test('EA-T5 a failure says what failed and where: an envelope\'s status, the str
         else assert.equal(end.reason, reason);
         assert.equal(TURN_PHASES[end.phase].success, false);
     }
+});
+
+test('EA-T5b an end seen is the service\'s own last word, a done or its error event; a cancel, a drop, a deadline, a cap or a broken contract is none (the outside review of EA9.5)', async () => {
+    // Every recorded end is the service's last word: its done, or its error event (the stream reader's `terminal`).
+    for (const name of ['handed-off', 'asked', 'declined', 'exhausted-revisions', 'exhausted-deadline', 'error-budget', 'error-upstream']) {
+        const end = await createAgentSession(replaying(name), () => {}, clock().now).start(REQUEST);
+        assert.equal(endSeen(end), true, name);
+    }
+    // After its meta and first call, the stream cut by the client or the network: the service may have gone on calling.
+    const opening = wire('handed-off.sse').split(/(?<=\n\n)/).slice(0, 3).join('');
+    const through = (text, options = {}) => ({
+        turn: (req, onEvent, signal) => readAgentStream(new Response(text), onEvent, { bundleHash: ENGINE_BUNDLE_HASH, signal, ...options }),
+    });
+    const unseen = [
+        ['a stream that ended before its last event', through(opening)],
+        ['a stream past the client\'s cap', through(`${opening}event:call\ndata:${'x'.repeat(270_000)}\n\n`)],
+        ['a stream that broke its contract', through(`${opening}event:meta\ndata:{}\n\n`)],
+    ];
+    for (const [label, client] of unseen) {
+        const end = await createAgentSession(client, () => {}, clock().now).start(REQUEST);
+        assert.deepEqual([end.phase, end.calls.length, endSeen(end)], ['failed', 1, false], label);
+    }
+    // The client's own deadline, through the real client and transport: its first call seen, then nothing more.
+    const hanging = async (_url, init) => new Response(new ReadableStream({
+        start(controller) {
+            controller.enqueue(new TextEncoder().encode(opening));
+            init.signal?.addEventListener('abort', () => { try { controller.error(init.signal.reason); } catch { /* closed */ } }, { once: true });
+        },
+    }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    const identity = { async authorization() { return 'Bearer id-test'; }, async appCheck() { return 'ac-test'; } };
+    const api = createApi({ apiOrigin: 'http://localhost:8400', firebase: null, appCheckSiteKey: null, dev: true }, identity, hanging);
+    const late = await createAgentSession(createAgentClient(api, { deadlineMs: 60 }), () => {}, clock().now).start(REQUEST);
+    assert.deepEqual([late.phase, late.code, late.calls.length, late.terminal, endSeen(late)], ['failed', 'timeout', 1, false, false], 'the client\'s deadline');
+    // A cancel, and a turn still running.
+    const stopping = scripted();
+    const session = createAgentSession(stopping, () => {}, clock().now);
+    const stopped = session.start(REQUEST);
+    assert.equal(endSeen(session.state), false, 'a turn still running');
+    session.cancel();
+    // The scripted client settles only when told: its abort, as the real reader's would.
+    stopping.turns[0].fail(new DOMException('The operation was aborted.', 'AbortError'));
+    assert.equal(endSeen(await stopped), false, 'a cancel');
 });
 
 /**

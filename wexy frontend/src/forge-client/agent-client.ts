@@ -3,7 +3,8 @@
 // other field (EA-U9); then the stream, read to its terminal under one absolute deadline. The route spends its App Check
 // token, so each turn gets a fresh limited-use one (http.ts, SINGLE_USE_ROUTES), the transport's one retry after a 401
 // included. A turn is never retried or replayed once it may have started: that 401 comes from the gateway before it
-// forwards anything, and every other refusal or failure is the caller's to show.
+// forwards anything, and every other refusal or failure is the caller's to show. A follow-up (Q120 (b), EA9.5) is a new
+// turn naming the one it follows (`retryOf`): the creation controller decides when one is sent, never this client.
 //
 // A program revision (candidate-loop-design.md §8; Q82 (a), decided 2026-11-01; EA4.4) is a turn with a base beside the
 // three fields: this build's pins, the design and program a turn handed off, and the browser's findings, cut to the
@@ -86,6 +87,12 @@ export interface AgentTurnRequest {
     style: Style | 'auto';
     seconds: number;
     base?: AgentTurnBase;
+    /**
+     * The turn this one follows (Q120 (b), EA9.5; the creations platform designs §10, "Q120's follow-up"), as its meta
+     * named it: a turn of the same caller's that ended with no world. The backend runs this one inside that turn's prompt,
+     * once, or refuses it with `409 conflict`, never as a new prompt. A turn with a base sends none.
+     */
+    retryOf?: string;
 }
 
 /**
@@ -128,10 +135,9 @@ export function createAgentClient(api: Api, options: { deadlineMs?: number; bund
             const within = AbortSignal.any([signal, AbortSignal.timeout(deadlineMs)]);
             try {
                 const fields = { prompt: req.prompt, style: req.style, seconds: req.seconds };
-                const res = await api.send({
-                    method: 'POST', path: '/v1/agent/turn', body: req.base ? { ...fields, base: wireBase(req.base) } : fields,
-                    auth: true, accept: 'text/event-stream', signal: within,
-                });
+                // A revision names its turn in its base; a follow-up names the turn it follows (Q120 (b)); never both.
+                const body = req.base ? { ...fields, base: wireBase(req.base) } : req.retryOf ? { ...fields, retryOf: req.retryOf } : fields;
+                const res = await api.send({ method: 'POST', path: '/v1/agent/turn', body, auth: true, accept: 'text/event-stream', signal: within });
                 // A revision's hand-off carries its notes to modules after its program (EA6.3); a first turn's never does.
                 return await readAgentStream(res, onEvent, { bundleHash, manifestHash, signal: within, revision: req.base !== undefined });
             } catch (error) {

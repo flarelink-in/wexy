@@ -58,14 +58,22 @@ import java.util.concurrent.atomic.AtomicReference;
  * the same, and is an entry otherwise. The grant is spent at the turn's first word, its first allowed charge, and given
  * back when the turn never spoke. A revision's base words (its findings, whatever they are called, its design and its
  * program) pass content safety first, before it is joined or granted (EA9.4: a creator's "Improve it" rides there).
+ *
+ * <p>Q120 (b) (EA9.5; the creations platform design §10, "Q120's follow-up"): a turn without a base may name, as
+ * {@code retryOf}, a turn of the caller's that ended with no world, and then runs inside that turn's prompt, once, or is
+ * refused with {@code 409 conflict}, never as an entry. So each entry turn and follow-up writes its end into its prompt
+ * before its last event.
  */
 @Component
 public class AgentHandler {
 
     /** R's three fields: a turn's own request, as a module call quotes it (ModuleRequest) too. */
     static final Set<String> FIELDS = Set.of("prompt", "style", "seconds");
-    /** A turn's fields: R's three, and a program revision's base (Q82 (a); EA4.4, {@link AgentBase}), which a first turn leaves out. */
-    static final Set<String> TURN_FIELDS = Set.of("prompt", "style", "seconds", "base");
+    /**
+     * A turn's fields: R's three; a program revision's base (Q82 (a); EA4.4, {@link AgentBase}), which a first turn leaves
+     * out; and a follow-up's `retryOf` (Q120 (b), EA9.5), the turn it follows, which a revision leaves out.
+     */
+    static final Set<String> TURN_FIELDS = Set.of("prompt", "style", "seconds", "base", "retryOf");
     private static final Logger log = LoggerFactory.getLogger(AgentHandler.class);
     private static final ObjectMapper JSON = new ObjectMapper();
     private final AgentLoop loop;
@@ -94,16 +102,52 @@ public class AgentHandler {
                 .switchIfEmpty(Mono.error(() -> new ForgeException(ErrorCode.BAD_REQUEST, "The request needs a body.")))
                 .flatMap(body -> {
                     AgentRequest turn = validated(body, loopProperties.caps(), TURN_FIELDS);
+                    String retryOf = retryOf(body);
                     // A revision's base is checked whole before anything is recorded or charged (AgentBase).
                     AgentBase base = body.has("base") ? loop.base(body.path("base"), bundle.bundleHash()) : null;
                     String turnId = Ulid.next(Instant.now());
                     // W1: admitted before any record or charge, off the event loop (Redis, content safety); a client gone
-                    // meanwhile gets nothing, and its grant goes back (PromptAdmission.offLoop).
-                    return PromptAdmission.offLoop(() -> base == null
-                                    ? admission.entry(caller, turnId, turn.prompt(), "turn")
-                                    : admission.revision(caller, base.turnId(), turnId, turn.prompt(), base.creatorWords(), base.worldWords()))
+                    // meanwhile gets nothing, and its grant goes back (PromptAdmission.offLoop). A follow-up (Q120 (b))
+                    // runs inside the prompt of the turn it follows, or is refused: never an entry.
+                    return PromptAdmission.offLoop(() -> base != null
+                                    ? admission.revision(caller, base.turnId(), turnId, turn.prompt(), base.creatorWords(), base.worldWords())
+                                    : retryOf != null
+                                    ? admission.followUp(caller, retryOf, turnId, turn.prompt())
+                                    : admission.entry(caller, turnId, turn.prompt(), "turn"))
                             .flatMap(grant -> start(caller, body, turn, base, turnId, grant.orElse(null)));
                 });
+    }
+
+    /**
+     * A follow-up's `retryOf` (Q120 (b); the creations platform design §10, "Q120's follow-up"): the turn it follows, a
+     * ULID as that turn's meta named it, or null for a turn that follows none. A revision takes none: it names the turn it
+     * revises in its base. Anything else is 400 before anything is admitted.
+     */
+    static String retryOf(JsonNode body) {
+        if (!body.has("retryOf")) {
+            return null;
+        }
+        if (body.has("base")) {
+            throw new ForgeException(ErrorCode.BAD_REQUEST, "retryOf is for a turn without a base: a revision names the turn it revises in base.turnId.");
+        }
+        JsonNode value = body.path("retryOf");
+        if (!value.isTextual() || !ModuleRequest.ULID.matcher(value.asText()).matches()) {
+            throw new ForgeException(ErrorCode.BAD_REQUEST, "retryOf is the turn this one follows, a ULID as its meta named it; leave it out "
+                    + "for a turn that follows none.");
+        }
+        return value.asText();
+    }
+
+    /** How a turn ended, as its prompt keeps it for a follow-up (Q120 (b)): the terminal's status, or {@code cancelled}. */
+    static String endOf(AgentOutcome outcome) {
+        return switch (outcome.status()) {
+            case HANDED_OFF -> "handed-off";
+            case ASKED -> "asked";
+            case EXHAUSTED -> "exhausted";
+            case FAILED -> "finished".equals(outcome.code()) ? "declined" : "failed";
+            case CANCELLED -> "cancelled";
+            case DENIED -> "failed";
+        };
     }
 
     /** The admitted turn: its loop on its own thread, and the response once it has said its first word, or why not. */
@@ -158,11 +202,16 @@ public class AgentHandler {
         // Kept before the signal: the response is chosen on the signal's own thread, and reads it at once.
         silent.set(outcome);
         if (opened.tryEmitValue(Boolean.FALSE).isSuccess()) {
-            // The turn never spoke: no model call was dispatched, so its prompt goes back (W1).
+            // The turn never spoke: no model call was dispatched, so its prompt goes back (W1), a follow-up's too.
             if (grant != null) {
                 grant.release();
             }
             return;
+        }
+        // Its end, written into its prompt before its last event (Q120 (b)): a follow-up sent the moment the client reads
+        // that event finds it. An entry's own turn and a follow-up write it; a revision joins without a grant, so never.
+        if (grant != null) {
+            grant.ended(endOf(outcome));
         }
         ServerSentEvent<String> terminal = terminal(outcome);
         if (terminal != null) {
@@ -188,7 +237,7 @@ public class AgentHandler {
             }
         });
         if (!extra.isEmpty()) {
-            throw new ForgeException(ErrorCode.BAD_REQUEST, (fields.contains("base") ? "A turn takes only prompt, style, seconds and base"
+            throw new ForgeException(ErrorCode.BAD_REQUEST, (fields.contains("base") ? "A turn takes only prompt, style, seconds, base and retryOf"
                     : "A turn takes only prompt, style and seconds") + ", not " + String.join(", ", extra) + ".");
         }
         JsonNode seconds = body.path("seconds");

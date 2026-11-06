@@ -56,6 +56,13 @@ export const Q_C: CandidateLimits = Object.freeze({
     calls: 34, modules: 12, authors: 12, concurrent: 4, repairs: 10, repairsPerModule: 2, revisions: 3, revisionCalls: 6, visualRounds: 2, reviews: 3,
 });
 
+/**
+ * The most model calls one agent turn makes: the backend's `AgentTurn.MAX_CALLS`, what the gateway charges a turn (EA-K5b
+ * pins the two equal). A turn a second try followed whose end was not seen counts this many, unknown (Q120 (b), the
+ * outside review of EA9.5): the calls the browser saw may not be all it made.
+ */
+export const TURN_CALLS = 6;
+
 /** A budget a refusal names. `concurrent` is the scheduler's bound: wait for a call to end, never an exhaustion. */
 export type Budget = 'calls' | 'modules' | 'authors' | 'repairs' | 'repairs-per-module' | 'revisions' | 'concurrent' | 'visual-rounds' | 'reviews';
 
@@ -116,11 +123,17 @@ export class Ledger {
     private readonly open = new Map<number, Open>();
     private next = 1;
 
-    /** Seeded from the turn's actual calls (the design §8), which count against the attempt's calls. */
-    constructor(limits: CandidateLimits, turnCalls: number) {
+    /**
+     * Seeded from the turn's actual calls (the design §8), which count against the attempt's calls, and from
+     * `unknownCalls`, calls counted before the attempt whose end was not seen: the whole allowance of a turn a second try
+     * followed when that turn's end was not seen (Q120 (b), the outside review of EA9.5).
+     */
+    constructor(limits: CandidateLimits, turnCalls: number, unknownCalls = 0) {
         if (!Number.isSafeInteger(turnCalls) || turnCalls < 0) throw new Error(`ledger: the turn's calls are a whole number, not ${turnCalls}`);
+        if (!Number.isSafeInteger(unknownCalls) || unknownCalls < 0) throw new Error(`ledger: the unknown calls are a whole number, not ${unknownCalls}`);
         this.limits = limits;
         this.settled = turnCalls;
+        this.unknown = unknownCalls;
     }
 
     /** Calls spent or held: what the next reservation is measured against. */

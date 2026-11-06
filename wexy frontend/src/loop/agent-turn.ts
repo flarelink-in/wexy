@@ -24,7 +24,7 @@ export const TURN_PHASES: Readonly<Record<TurnPhase, { label: string; tone: 'qui
     },
     'asked': {
         label: 'Asked a question: no world', tone: 'warn', success: false,
-        note: 'EA2 ends a turn at its question, and there is no way to answer it yet. Change the idea and run a new turn.',
+        note: 'A turn ends at its question. Add the answer to the idea and run the turn again: it follows this one inside the same world (Q120 (b)), once.',
     },
     'exhausted': { label: 'Stopped by a budget: no world', tone: 'warn', success: false, note: 'A turn budget refused the next call, or the turn\'s time ran out.' },
     'declined': { label: 'Declined by the model: no world', tone: 'warn', success: false, note: 'The model gave up on this request, with its reason.' },
@@ -75,6 +75,11 @@ export interface AgentTurnState {
      * 403 there is no word on the account (the independent review of account-guards). False otherwise.
      */
     bare: boolean;
+    /**
+     * Its failure was the stream's own last event (ForgeError.terminal): the service ended the turn there. False for an
+     * end the client decided or could not see (a cap, a dropped connection, a deadline). Q120 (b) retries only the first.
+     */
+    terminal: boolean;
     /** What the calls reported so far, in micro-USD: their costs, or their reservations when no usage came. */
     costMicroUsd: number;
     /** Calls that ended the turn without any usage: their cost is unknown, never zero. */
@@ -89,10 +94,29 @@ export function elapsedMs(state: AgentTurnState, now: number): number {
     return (state.endedMs ?? now) - state.startedMs;
 }
 
+/**
+ * The turn ended on the service's own last word: a `done` (handed off, asked, declined, exhausted), or its `error`
+ * event (`terminal`). The loop sends each call's `call` before it dispatches the call, and makes none after its last
+ * word, so the calls seen are every call the turn made. Not so for a cancel (a Stop, a newer turn), a dropped connection,
+ * a deadline, or a cap or a contract of the client's: the service goes on until it sees the client go, and may make calls
+ * this browser never hears of (the outside review of EA9.5, its mid).
+ */
+export function endSeen(state: AgentTurnState): boolean {
+    switch (state.phase) {
+        case 'handed-off':
+        case 'asked':
+        case 'declined':
+        case 'exhausted': return true;
+        case 'failed': return state.terminal;
+        default: return false;
+    }
+}
+
 function initial(seq: number, request: AgentTurnRequest, now: number): AgentTurnState {
     return {
         seq, request, phase: 'running', meta: null, calls: [], findings: [], design: null, program: null, question: null,
-        reason: null, code: null, httpStatus: null, retryAfterSeconds: null, bare: false, costMicroUsd: 0, unreported: 0, startedMs: now, endedMs: null,
+        reason: null, code: null, httpStatus: null, retryAfterSeconds: null, bare: false, terminal: false, costMicroUsd: 0, unreported: 0,
+        startedMs: now, endedMs: null,
     };
 }
 
@@ -131,7 +155,10 @@ function failed(state: AgentTurnState, error: unknown, now: number): AgentTurnSt
     if (error instanceof ForgeError) {
         // Where it came from: an envelope before any stream (its status), the stream itself (200), or no answer at all.
         const where = error.status === 0 ? 'no answer' : error.status === 200 ? 'in the stream' : `HTTP ${error.status}`;
-        return { ...end, phase: 'failed', code: error.code, reason: `${where}: ${error.message}`, httpStatus: error.status, retryAfterSeconds: error.retryAfterSeconds, bare: error.bare };
+        return {
+            ...end, phase: 'failed', code: error.code, reason: `${where}: ${error.message}`, httpStatus: error.status, retryAfterSeconds: error.retryAfterSeconds,
+            bare: error.bare, terminal: error.terminal === true,
+        };
     }
     return { ...end, phase: 'failed', code: 'internal', reason: (error as Error)?.message ?? String(error) };
 }

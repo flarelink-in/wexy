@@ -96,9 +96,12 @@ if (allowedOrigin !== 'http://localhost:5173' && allowedOrigin !== '*') {
 console.log(`drive-loop: ${gateway} ready (${readiness}; CORS allows http://localhost:5173)`);
 
 // Vite for the studio on the gateway's CORS origin (its local profile allows localhost:5173), told the gateway
-// through the environment: no file is written, and a .env.local is not needed for this run.
+// through the environment: no file is written, and a .env.local is not needed for this run. The main checkout's
+// git-ignored .env.local holds the dev project's Firebase and App Check keys, which Vite would read: each is blanked,
+// so the studio signs in with the loopback dev identity the gateway's local profile takes (EA9.5; gotchas).
+const NO_FIREBASE = { VITE_FIREBASE_API_KEY: '', VITE_FIREBASE_AUTH_DOMAIN: '', VITE_FIREBASE_PROJECT_ID: '', VITE_FIREBASE_APP_ID: '', VITE_APPCHECK_SITE_KEY: '' };
 const vite = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--port', '5173', '--strictPort', '--host', 'localhost'],
-    { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, VITE_API_ORIGIN: gateway } });
+    { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, VITE_API_ORIGIN: gateway, ...NO_FIREBASE } });
 let viteOut = '';
 vite.stdout.on('data', d => { viteOut += d; });
 vite.stderr.on('data', d => { viteOut += d; });

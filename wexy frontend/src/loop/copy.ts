@@ -218,6 +218,17 @@ export const COPY = {
         declined: 'That idea can\'t be made here. Try describing a place, the things in it, and how they move.',
         exhausted: 'This idea needed more steps than one try allows. Try a simpler version of it.',
         cancelled: 'Stopped. Your current world is unchanged.',
+        /**
+         * Q120 (b), EA9.5: what the next Create costs, after a turn that ended with no world. Its follow-up runs inside the
+         * same world (the backend joins it to that turn's grant), once; after that, a Create is a new world, as the chip
+         * counts them.
+         */
+        secondTry: 'Your next Create is a second try, and doesn\'t use a new world.',
+        newWorld: 'Your next Create uses a new world.',
+        /** The first try failed on the model's side, and the studio tries once more by itself, inside the same world. */
+        retrying: 'The first try didn\'t work, so it\'s trying once more…',
+        /** A second try the service refused (`409 conflict`): it could not be continued, and nothing became a new world. */
+        followRefused: 'This try can\'t be continued, so your next Create uses a new world.',
         accountChanged: 'You signed in or out, so this world was stopped. Your current world is unchanged.',
         accountChangedDiscarded: 'You signed in or out, so this world was stopped, and your new world waiting for Show it was discarded. Your current world is unchanged.',
         /** Q127 (a) reversed (the user, 2026-11-04): a world written and not yet shown belongs to the account that made it. */

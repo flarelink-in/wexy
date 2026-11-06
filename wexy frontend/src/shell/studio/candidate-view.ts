@@ -20,7 +20,10 @@
 import type { ModuleCompiler } from '../../contract/adapters/bodies';
 import type { DeepReadonly } from '../../contract/engine/frozen';
 import type { ModuleClient } from '../../forge-client/module-client';
-import { candidateBundle, type BundleReviewsSection, type CandidatePhase, type CandidateSession, type CandidateState, type ModuleState, type Reviser, type TurnRecord } from '../../loop/candidate';
+import {
+    candidateBundle, followedCalls, type BundleReviewsSection, type CandidatePhase, type CandidateSession, type CandidateState, type FollowedTurn, type ModuleState,
+    type Reviser, type TurnRecord,
+} from '../../loop/candidate';
 import type { CandidateEvidence, EvidenceSubject } from '../../loop/candidate-evidence';
 import type { CreationController, CreationStage, RunSummary } from '../../loop/creation';
 import { download, h } from '../../shared/dom';
@@ -223,8 +226,9 @@ export class CandidatePanel {
         this.budget.hidden = !s;
         this.budget.textContent = s ? budgetLine(s) : '';
         this.modules.replaceChildren(...(s?.modules ?? []).map(m => moduleRow(m, s!)));
-        // Every call Q_C counts: the turns' (the hand-off's, a revision's), then the module jobs.
-        this.turnList.replaceChildren(...(s?.turns ?? []).map(turnRow));
+        // Every call Q_C counts: the turn the hand-off's followed (Q120 (b)), the turns' (the hand-off's, a revision's), then
+        // the module jobs.
+        this.turnList.replaceChildren(...(s?.followed ? [followedRow(s.followed)] : []), ...(s?.turns ?? []).map(turnRow));
         this.jobs.replaceChildren(...(s?.jobs ?? []).map(j => h('li', { class: `cand-job is-${j.status}`, dataset: { job: j.jobId } },
             h('code', null, j.jobId), ` ${j.module} ${j.purpose}: ${j.status} · `,
             j.charge === 'known' && j.costMicroUsd !== null ? usd(j.costMicroUsd) : 'charge unknown',
@@ -298,6 +302,25 @@ function turnRow(t: DeepReadonly<TurnRecord>): HTMLElement {
             ` ${t.role === 'hand-off' ? 'hand-off' : 'program revision'}: ${t.status} · ${plural(t.calls.length, 'call')} · ${cost}`,
             t.model ? ` · ${t.model}` : '', t.promptVersion ? ` · ${t.promptVersion}` : '', t.error ? ` · ${t.error}` : ''),
         t.calls.length ? h('ol', { class: 'cand-turn-calls' }, t.calls.map(c => h('li', { class: `cand-turn-call is-${c.charge}` },
+            `${c.n} ${c.purpose}: `, c.charge === 'known' && c.costMicroUsd !== null ? usd(c.costMicroUsd) : 'charge unknown',
+            c.generationId ? ` · ${c.generationId}` : ''))) : null);
+}
+
+/**
+ * The turn the hand-off's turn followed (Q120 (b)): it ended with no world, and its calls are among Q_C's. Its end not
+ * seen, Q_C counts a turn's whole allowance, unknown: the row says so beside the calls seen (the outside review of EA9.5).
+ */
+function followedRow(f: DeepReadonly<FollowedTurn>): HTMLElement {
+    const known = f.calls.reduce((sum, c) => sum + (c.charge === 'known' && c.costMicroUsd !== null ? c.costMicroUsd : 0), 0);
+    const seen = f.end === 'seen';
+    const unknown = !seen || f.calls.some(c => c.charge !== 'known');
+    const { unknown: counted } = followedCalls(f);
+    const calls = seen ? plural(f.calls.length, 'call') : `${plural(f.calls.length, 'call')} seen, its end unseen: Q_C counts ${counted}`;
+    return h('li', { class: `cand-turn is-followed${seen ? '' : ' is-unseen'}`, dataset: { role: 'followed', end: f.end } },
+        h('div', { class: 'cand-turn-head' }, h('code', null, f.turnId), ` followed: no world · ${calls} · `,
+            unknown ? (known ? `${usd(known)} reported, charge unknown` : 'charge unknown') : usd(known),
+            f.model ? ` · ${f.model}` : '', f.promptVersion ? ` · ${f.promptVersion}` : ''),
+        f.calls.length ? h('ol', { class: 'cand-turn-calls' }, f.calls.map(c => h('li', { class: `cand-turn-call is-${c.charge}` },
             `${c.n} ${c.purpose}: `, c.charge === 'known' && c.costMicroUsd !== null ? usd(c.costMicroUsd) : 'charge unknown',
             c.generationId ? ` · ${c.generationId}` : ''))) : null);
 }

@@ -518,7 +518,7 @@ class ReviewRoutesTest {
     @Test
     void aPromptsReviewsAreBounded() throws Exception {
         admit = TestAdmissions.admit(new ai.wexy.forge.allowance.AllowanceProperties(1000, 1000, 1000, 1000, 1000, 0, Duration.ofHours(2), 1000, 1000,
-                1000, 1000, 1000, 1000, Duration.ofDays(400), TestAdmissions.UID_KEY, false, 1), Clock.systemUTC());
+                1000, 1000, 1000, 1000, Duration.ofDays(400), TestAdmissions.UID_KEY, false, 1, 1), Clock.systemUTC());
         start(OPEN);
         answers(FAIL);
         assertThat(post(review()).status()).isEqualTo(200);

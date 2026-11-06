@@ -32,13 +32,15 @@ import java.time.Duration;
  * @param uidKeyRequired      true in prod: startup stops without the uid key
  * @param reviewCalls         a model's reviews of the world on the stage one prompt covers, each carrying the prompt its
  *                            turn was granted for (6: two attempts of the candidate's Q_C, 3 reviews each; EA6.4)
+ * @param followUps           turns one prompt covers after a turn of it that ended with no world, each naming that turn
+ *                            (1: Q120 (b), the user, 2026-11-05; the creations platform design §10, "Q120's follow-up")
  */
 @ConfigurationProperties(prefix = "wexy.allowance")
 public record AllowanceProperties(Integer anonymousPerAccount, Integer anonymousPerIpv4, Integer anonymousPerIpv6, Integer earlyAccessPerDay,
                                   Integer adminPerDay, Integer dayStartsAtHourUtc, Duration promptLife, Integer directorTurns,
                                   Integer revisions, Integer moduleCalls, Integer authorCalls, Integer repairCalls,
                                   Integer replans, Duration accountMark, String uidHmacHex, Boolean uidKeyRequired,
-                                  Integer reviewCalls) {
+                                  Integer reviewCalls, Integer followUps) {
 
     /** The same values, checked: every one set and in range, or startup stops. */
     public AllowanceProperties validated() {
@@ -54,6 +56,7 @@ public record AllowanceProperties(Integer anonymousPerAccount, Integer anonymous
         count("repair-calls", repairCalls);
         count("replans", replans);
         count("review-calls", reviewCalls);
+        count("follow-ups", followUps);
         if (dayStartsAtHourUtc == null || dayStartsAtHourUtc < 0 || dayStartsAtHourUtc > 23) {
             throw new IllegalStateException("wexy.allowance.day-starts-at-hour-utc must be set, 0 to 23.");
         }
