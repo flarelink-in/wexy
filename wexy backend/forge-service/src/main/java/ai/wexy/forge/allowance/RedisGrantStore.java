@@ -120,7 +120,8 @@ class RedisGrantStore implements GrantStore {
 
     /**
      * Q120 (b): the follow-up joined, all or nothing. KEYS: the grant's record, the follow-up's index. ARGV: owner, the
-     * follow-ups' limit, the follow-up's prompt hash, the grant's id, the follow-up's turn id.
+     * follow-ups' limit, the follow-up's prompt hash, the grant's id, the follow-up's turn id. Joined, it answers
+     * {@code JOINED|end|calls}: the end it cleared and that end's calls, empty when the end was written without them.
      */
     static final RedisScript<String> FOLLOW = new DefaultRedisScript<>(
             FOLLOWABLE_LUA
@@ -134,12 +135,14 @@ class RedisGrantStore implements GrantStore {
             + "if not followable[ended] then return 'WORLD' end\n"
             + "local prompt = redis.call('HGET', record, 'prompt')\n"
             + "if not prompt then return 'NONE' end\n"
+            + "local calls = redis.call('HGET', record, 'endCalls')\n"
             + "redis.call('HSET', record, 'followups', tostring(used + 1), 'following', ARGV[5], 'followDispatched', '0',\n"
             + "  'prevPrompt', prompt, 'prevEnd', ended, 'prompt', ARGV[3])\n"
-            + "redis.call('HDEL', record, 'end')\n"
+            + "if calls then redis.call('HSET', record, 'prevEndCalls', calls) end\n"
+            + "redis.call('HDEL', record, 'end', 'endCalls')\n"
             + "local ttl = redis.call('TTL', record)\n"
             + "if ttl > 0 then redis.call('SET', KEYS[2], ARGV[4], 'EX', ttl) end\n"
-            + "return 'JOINED'\n",
+            + "return 'JOINED|' .. ended .. '|' .. (calls or '')\n",
             String.class);
 
     /** Q120 (b): the follow-up's first call went out. KEYS: the grant's record. ARGV: the follow-up's turn id. */
@@ -162,16 +165,18 @@ class RedisGrantStore implements GrantStore {
             + "local prompt = redis.call('HGET', record, 'prevPrompt')\n"
             + "local ended = redis.call('HGET', record, 'prevEnd')\n"
             + "if not prompt or not ended then return 'OTHER' end\n"
+            + "local calls = redis.call('HGET', record, 'prevEndCalls')\n"
             + "local used = tonumber(redis.call('HGET', record, 'followups') or '0')\n"
             + "redis.call('HSET', record, 'followups', tostring(math.max(0, used - 1)), 'prompt', prompt, 'end', ended)\n"
-            + "redis.call('HDEL', record, 'following', 'followDispatched', 'prevPrompt', 'prevEnd')\n"
+            + "if calls then redis.call('HSET', record, 'endCalls', calls) else redis.call('HDEL', record, 'endCalls') end\n"
+            + "redis.call('HDEL', record, 'following', 'followDispatched', 'prevPrompt', 'prevEnd', 'prevEndCalls')\n"
             + "redis.call('DEL', KEYS[2])\n"
             + "return 'RELEASED'\n",
             String.class);
 
     /**
-     * Q120 (b): a turn's end, written by the grant's own turn only (its entry, or once one joined, its follow-up). KEYS: the
-     * grant's record. ARGV: the turn's id, its end.
+     * Q120 (b): a turn's end and the model calls it dispatched, written by the grant's own turn only (its entry, or once
+     * one joined, its follow-up). KEYS: the grant's record. ARGV: the turn's id, its end, its calls.
      */
     static final RedisScript<String> ENDED = new DefaultRedisScript<>(
             "local record = KEYS[1]\n"
@@ -180,7 +185,7 @@ class RedisGrantStore implements GrantStore {
             + "if following then\n"
             + "  if following ~= ARGV[1] then return 'OTHER' end\n"
             + "elseif redis.call('HGET', record, 'entry') ~= ARGV[1] then return 'OTHER' end\n"
-            + "redis.call('HSET', record, 'end', ARGV[2])\n"
+            + "redis.call('HSET', record, 'end', ARGV[2], 'endCalls', ARGV[3])\n"
             + "return 'OK'\n",
             String.class);
 
@@ -280,8 +285,33 @@ class RedisGrantStore implements GrantStore {
     }
 
     @Override
-    public Follow follow(String grantKey, String owner, long limit, String prompt, String newIndexKey, String grantId, String turnId) {
-        return follow(redis().execute(FOLLOW, List.of(grantKey, newIndexKey), owner, Long.toString(limit), prompt, grantId, turnId), "join");
+    public Joined follow(String grantKey, String owner, long limit, String prompt, String newIndexKey, String grantId, String turnId) {
+        String reply = redis().execute(FOLLOW, List.of(grantKey, newIndexKey), owner, Long.toString(limit), prompt, grantId, turnId);
+        if (reply != null && reply.startsWith("JOINED|")) {
+            String[] parts = reply.split("\\|", -1);
+            return new Joined(Follow.JOINED, parts[1], parts.length > 2 ? calls(parts[2]) : null);
+        }
+        Follow why = follow(reply, "join");
+        if (why == Follow.JOINED) {
+            throw new IllegalStateException("The follow-up's join script answered JOINED without the end it joined.");
+        }
+        return Joined.not(why);
+    }
+
+    /**
+     * An end's calls as the record holds them; null when written without them (a forge before the follow-up's count) or
+     * not a count, which only lets the follow-up's meta say less: the join has already happened, and must not fail now.
+     */
+    static Integer calls(String stored) {
+        if (stored == null || stored.isEmpty()) {
+            return null;
+        }
+        try {
+            int n = Integer.parseInt(stored);
+            return n >= 0 ? n : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static Follow follow(String reply, String script) {
@@ -302,7 +332,7 @@ class RedisGrantStore implements GrantStore {
     }
 
     @Override
-    public boolean ended(String grantKey, String turnId, String end) {
-        return "OK".equals(redis().execute(ENDED, List.of(grantKey), turnId, end));
+    public boolean ended(String grantKey, String turnId, String end, int calls) {
+        return "OK".equals(redis().execute(ENDED, List.of(grantKey), turnId, end, Integer.toString(Math.max(0, calls))));
     }
 }

@@ -39,6 +39,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -181,6 +182,10 @@ public class AgentHandler {
     private void run(String turnId, AgentRequest turn, AgentBase base, MeteredModelCaller calls, Sinks.Many<ServerSentEvent<String>> events,
                      Sinks.One<Boolean> opened, AtomicReference<AgentOutcome> silent, AtomicBoolean cancelled, Grant grant) {
         AgentOutcome outcome;
+        // The model calls this turn dispatched: its `call` events, as a client counts them (the studio's Q_C), whether its
+        // client saw them or not. Its end keeps them for a follow-up's meta (Q120 (b)). The outcome's own count is not
+        // this: it also holds a call refused or cancelled before it was dispatched, and a fault's outcome holds none.
+        AtomicInteger dispatched = new AtomicInteger();
         try {
             outcome = loop.run(turn, base, calls, event -> {
                 if (opened.tryEmitValue(Boolean.TRUE).isSuccess()) {
@@ -188,7 +193,10 @@ public class AgentHandler {
                     if (grant != null) {
                         grant.spent();
                     }
-                    events.tryEmitNext(encode("meta", meta(turnId)));
+                    events.tryEmitNext(encode("meta", meta(turnId, grant)));
+                }
+                if ("call".equals(event.name())) {
+                    dispatched.incrementAndGet();
                 }
                 events.tryEmitNext(encode(event.name(), event.data()));
             }, cancelled::get);
@@ -197,8 +205,8 @@ public class AgentHandler {
             outcome = new AgentOutcome(AgentOutcome.Status.FAILED, ErrorCode.INTERNAL.code(), "Something went wrong on our side.",
                     null, null, null, null, 0, 0);
         }
-        log.info("AGENT TURN {} {} calls={} cost={} code={}", turnId, outcome.status(), outcome.calls(), outcome.costMicroUsd(),
-                outcome.code());
+        log.info("AGENT TURN {} {} calls={} dispatched={} cost={} code={}", turnId, outcome.status(), outcome.calls(), dispatched.get(),
+                outcome.costMicroUsd(), outcome.code());
         // Kept before the signal: the response is chosen on the signal's own thread, and reads it at once.
         silent.set(outcome);
         if (opened.tryEmitValue(Boolean.FALSE).isSuccess()) {
@@ -211,7 +219,7 @@ public class AgentHandler {
         // Its end, written into its prompt before its last event (Q120 (b)): a follow-up sent the moment the client reads
         // that event finds it. An entry's own turn and a follow-up write it; a revision joins without a grant, so never.
         if (grant != null) {
-            grant.ended(endOf(outcome));
+            grant.ended(endOf(outcome), dispatched.get());
         }
         ServerSentEvent<String> terminal = terminal(outcome);
         if (terminal != null) {
@@ -248,7 +256,7 @@ public class AgentHandler {
         return new AgentRequest(checked.prompt(), checked.style(), checked.seconds());
     }
 
-    private Map<String, Object> meta(String turnId) {
+    private Map<String, Object> meta(String turnId, Grant grant) {
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("turnId", turnId);
         meta.put("model", catalog.role(MeteredModelCaller.ROLE).model());
@@ -259,6 +267,17 @@ public class AgentHandler {
         // another refuses the turn before it reads a design or a program, as it refuses another bundle.
         meta.put("actionSchema", JsonSchemas.AGENT_ACTION);
         meta.put("manifestHash", AdapterManifest.HASH);
+        // A follow-up's (Q120 (b); the creations platform design §10, "Q120's follow-up"): the turn it follows, as that turn
+        // wrote its end, with the model calls it dispatched (null when written without them). A client that never saw that
+        // turn's end (a drop, its own deadline, a Stop) then counts its calls exactly, not as a whole turn's.
+        Grant.Followed followed = grant == null ? null : grant.followed();
+        if (followed != null) {
+            Map<String, Object> f = new LinkedHashMap<>();
+            f.put("turnId", followed.turnId());
+            f.put("end", followed.end());
+            f.put("calls", followed.calls());
+            meta.put("followed", f);
+        }
         return meta;
     }
 

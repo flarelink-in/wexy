@@ -435,7 +435,7 @@ mutate "a turn not admitted" "$S/agent/AgentHandler.java" forge-service AgentRou
 mutate "Q120 a follow-up taken as an entry" "$S/agent/AgentHandler.java" forge-service TurnAllowanceRoutesTest \
     's/\? admission\.followUp\(caller, retryOf, turnId, turn\.prompt\(\)\)/? admission.entry(caller, turnId, turn.prompt(), "turn")/'
 mutate "Q120 no end written" "$S/agent/AgentHandler.java" forge-service TurnAllowanceRoutesTest \
-    's/\n\s*grant\.ended\(endOf\(outcome\)\);//'
+    's/\n\s*grant\.ended\(endOf\(outcome\), dispatched\.get\(\)\);//'
 mutate "Q120 a retryOf beside a base" "$S/agent/AgentHandler.java" forge-service TurnAllowanceRoutesTest \
     's/if \(body\.has\("base"\)\) \{\n(\s*)throw new ForgeException\(ErrorCode\.BAD_REQUEST, "retryOf is for/if (false) {\n${1}throw new ForgeException(ErrorCode.BAD_REQUEST, "retryOf is for/'
 mutate "Q120 a retryOf that is no turn's id" "$S/agent/AgentHandler.java" forge-service TurnAllowanceRoutesTest \
@@ -451,7 +451,7 @@ mutate "Q120 a lost join made an entry" "$A/PromptAdmission.java" forge-service 
 mutate "Q120 follow-ups past their one" "$A/PromptGrants.java" forge-service TurnAllowanceRoutesTest \
     's/properties\.followUps\(\)/1000/g'
 mutate "Q120 a follow-up never given back" "$A/Grant.java" forge-service TurnAllowanceRoutesTest \
-    's/followUp \? store\.unfollow\(recordKey, indexKey, turnId\)/followUp ? false/'
+    's/followUp\(\) \? store\.unfollow\(recordKey, indexKey, turnId\)/followUp() ? false/'
 mutate "Q120 an unwinding turn not waited for" "$A/PromptAdmission.java" forge-service TurnAllowanceRoutesTest \
     's/may == GrantStore\.Follow\.OPEN && waited < UNWIND_WAIT_MILLIS;/may == GrantStore.Follow.OPEN \&\& waited < 0;/'
 mutate "Q120 the real join follows another owner's turn" "$A/RedisGrantStore.java" forge-service RedisGrantStoreTest \
@@ -468,6 +468,31 @@ mutate "Q120 the real end written by the entry after a follow-up" "$A/RedisGrant
     's/\+ "  if following ~= ARGV\[1\] then return \x27OTHER\x27 end\\n"/+ ""/'
 mutate "Q120 the real give-back of a spent follow-up" "$A/RedisGrantStore.java" forge-service RedisGrantStoreTest \
     's/\+ "if redis\.call\(\x27HGET\x27, record, \x27followDispatched\x27\) == \x271\x27 then return \x27SPENT\x27 end\\n"/+ ""/'
+# Q120 (b)'s count (2026-11-06, the user: "yes u can go ahead with api change"; the creations platform design §10): a
+# turn's end keeps the calls it dispatched (its `call` events, not the loop's count), the join answers them, a give-back
+# restores them, and a follow-up's meta says them, null when unknown.
+mutate "Q120 count: the loop's count kept, not the calls dispatched" "$S/agent/AgentHandler.java" forge-service TurnAllowanceRoutesTest \
+    's/grant\.ended\(endOf\(outcome\), dispatched\.get\(\)\)/grant.ended(endOf(outcome), outcome.calls())/'
+mutate "Q120 count: every event counted as a call" "$S/agent/AgentHandler.java" forge-service TurnAllowanceRoutesTest \
+    's/if \("call"\.equals\(event\.name\(\)\)\) \{/if (true) {/'
+mutate "Q120 count: a follow-up's meta names no turn" "$S/agent/AgentHandler.java" forge-service TurnAllowanceRoutesTest \
+    's/\n\s*meta\.put\("followed", f\);//'
+mutate "Q120 count: a follow-up's meta says no calls" "$S/agent/AgentHandler.java" forge-service TurnAllowanceRoutesTest \
+    's/f\.put\("calls", followed\.calls\(\)\);/f.put("calls", null);/'
+mutate "Q120 count: the follow-up's grant forgets the calls" "$A/PromptGrants.java" forge-service PromptGrantsTest \
+    's/new Grant\.Followed\(namedTurnId, joined\.end\(\), joined\.calls\(\)\)/new Grant.Followed(namedTurnId, joined.end(), null)/'
+mutate "Q120 count: an end written with no calls" "$A/Grant.java" forge-service TurnAllowanceRoutesTest \
+    's/store\.ended\(recordKey, turnId, end, calls\)/store.ended(recordKey, turnId, end, 0)/'
+mutate "Q120 count: a stored count below zero read as one" "$A/RedisGrantStore.java" forge-service PromptGrantsTest \
+    's/return n >= 0 \? n : null;/return n;/'
+mutate "Q120 count: the real join answers no calls" "$A/RedisGrantStore.java" forge-service RedisGrantStoreTest \
+    's/return \x27JOINED\|\x27 \.\. ended \.\. \x27\|\x27 \.\. \(calls or \x27\x27\)/return \x27JOINED|\x27 .. ended .. \x27|\x27/'
+mutate "Q120 count: the real join keeps no calls to give back" "$A/RedisGrantStore.java" forge-service RedisGrantStoreTest \
+    's/\+ "if calls then redis\.call\(\x27HSET\x27, record, \x27prevEndCalls\x27, calls\) end\\n"/+ ""/'
+mutate "Q120 count: the real give-back restores no calls" "$A/RedisGrantStore.java" forge-service RedisGrantStoreTest \
+    's/\+ "if calls then redis\.call\(\x27HSET\x27, record, \x27endCalls\x27, calls\) else redis\.call\(\x27HDEL\x27, record, \x27endCalls\x27\) end\\n"/+ ""/'
+mutate "Q120 count: the real end writes no calls" "$A/RedisGrantStore.java" forge-service RedisGrantStoreTest \
+    's/\x27end\x27, ARGV\[2\], \x27endCalls\x27, ARGV\[3\]/\x27end\x27, ARGV[2]/'
 
 # W1.5 (2026-11-02; the creations platform design §11, I12, Q99): Azure AI Content Safety fails closed. No verdict is
 # no call; each category refuses at its threshold; the recorded verdicts never run outside the local and test profiles.

@@ -138,8 +138,11 @@ export function createAgentClient(api: Api, options: { deadlineMs?: number; bund
                 // A revision names its turn in its base; a follow-up names the turn it follows (Q120 (b)); never both.
                 const body = req.base ? { ...fields, base: wireBase(req.base) } : req.retryOf ? { ...fields, retryOf: req.retryOf } : fields;
                 const res = await api.send({ method: 'POST', path: '/v1/agent/turn', body, auth: true, accept: 'text/event-stream', signal: within });
-                // A revision's hand-off carries its notes to modules after its program (EA6.3); a first turn's never does.
-                return await readAgentStream(res, onEvent, { bundleHash, manifestHash, signal: within, revision: req.base !== undefined });
+                // A revision's hand-off carries its notes to modules after its program (EA6.3); a first turn's never does. A
+                // follow-up's meta names the turn it follows, with that turn's calls (Q120 (b)); no other turn's names one.
+                return await readAgentStream(res, onEvent, {
+                    bundleHash, manifestHash, signal: within, revision: req.base !== undefined, follows: req.base ? null : req.retryOf ?? null,
+                });
             } catch (error) {
                 if ((error as Error)?.name === 'TimeoutError') {
                     throw new ForgeError('timeout', 0, `The agent turn had no last event within ${Math.round(deadlineMs / 1000)} s; the connection was dropped.`);

@@ -118,18 +118,33 @@ export interface FollowedTurn {
     /**
      * `seen`: it ended on the service's own last word (agent-turn.ts's `endSeen`), so its calls are every call it made.
      * `unseen`: a Stop, a dropped connection, a deadline, a cap of the client's; the service may have made more before it
-     * saw the client go, so Q_C counts the turn's whole allowance (the outside review of EA9.5, its mid).
+     * saw the client go, so Q_C counts the turn's whole allowance (the outside review of EA9.5, its mid), unless the
+     * service said how many (`service`).
      */
     end: 'seen' | 'unseen';
+    /**
+     * What the service said of it on the follow-up's meta (`meta.followed`; the user, 2026-11-06: "go ahead with api
+     * change"): its end as it wrote it, and the model calls it dispatched, its `call` events whether or not the browser saw
+     * them (null when its end was written without them). Absent or null: the service said nothing (a forge before the count).
+     */
+    service?: FollowedService | null;
+}
+
+export interface FollowedService {
+    end: string;
+    calls: number | null;
 }
 
 /**
- * What Q_C counts for the turn a hand-off's followed (Q120 (b)): its calls, settled, when its end was seen; otherwise a
- * turn's whole allowance ({@link TURN_CALLS}, or the calls seen if more), unknown, as a program revision whose end was
- * not seen keeps its whole reservation (the design §8). Never fewer than were seen; anything but `seen` counts as unseen.
+ * What Q_C counts for the turn a hand-off's followed (Q120 (b)): the service's count of its calls when it gave one (never
+ * fewer than were seen), settled; else its calls, settled, when its end was seen; otherwise a turn's whole allowance
+ * ({@link TURN_CALLS}, or the calls seen if more), unknown, as a program revision whose end was not seen keeps its whole
+ * reservation (the design §8). Anything but `seen` counts as unseen, and anything but a whole count as no count.
  */
 export function followedCalls(f: DeepReadonly<FollowedTurn> | null): { settled: number; unknown: number } {
     if (!f) return { settled: 0, unknown: 0 };
+    const told = f.service?.calls;
+    if (typeof told === 'number' && Number.isSafeInteger(told) && told >= 0) return { settled: Math.max(told, f.calls.length), unknown: 0 };
     return f.end === 'seen' ? { settled: f.calls.length, unknown: 0 } : { settled: 0, unknown: Math.max(TURN_CALLS, f.calls.length) };
 }
 
@@ -749,7 +764,9 @@ class Attempt {
             evidence: this.store.list(), omitted: this.store.omissions,
             budget: this.ledger.state, limits: this.ledger.limits,
             turns: this.turns.map(t => ({ ...t, calls: t.calls.map(c => ({ ...c })) })),
-            followed: this.followed ? { ...this.followed, calls: this.followed.calls.map(c => ({ ...c })) } : null,
+            followed: this.followed
+                ? { ...this.followed, calls: this.followed.calls.map(c => ({ ...c })), service: this.followed.service ? { ...this.followed.service } : null }
+                : null,
             jobs: this.jobs.map(j => ({ ...j })),
             reviews: this.reviews.map(r => ({ ...r })),
             l3: this.compiler ? { producedBy: this.compiler.producedBy, gpu: this.compiler.gpu ?? null } : null,
@@ -1764,12 +1781,14 @@ export function candidateBundle(state: DeepReadonly<CandidateState>, reviews: Bu
                 calls: t.calls.map(c => ({ n: c.n, purpose: c.purpose, charge: c.charge, costMicroUsd: c.costMicroUsd, generationId: c.generationId })), error: t.error,
             })),
             // The turn the hand-off's turn followed (Q120 (b)): its calls are among Q_C's, so they have their records too, and
-            // what Q_C counts for it, more than its records when its end was not seen (the outside review of EA9.5).
+            // what Q_C counts for it: the service's count when it said one (`service`), more than its records when its end
+            // was not seen and it said none (the outside review of EA9.5).
             followed: state.followed ? {
                 turnId: state.followed.turnId,
                 model: state.followed.model,
                 promptVersion: state.followed.promptVersion,
                 end: state.followed.end,
+                service: state.followed.service ? { end: state.followed.service.end, calls: state.followed.service.calls } : null,
                 counted: followedCount,
                 calls: state.followed.calls.map(c => ({ n: c.n, purpose: c.purpose, charge: c.charge, costMicroUsd: c.costMicroUsd, generationId: c.generationId })),
             } : null,

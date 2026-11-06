@@ -176,8 +176,9 @@ public class PromptGrants {
 
     /**
      * The turn `turnId` follows `namedTurnId` inside its prompt (Q120 (b)), in one atomic step: its grant, to spend, give
-     * back and end, or null when it may not (written nothing; the checks of {@link #canFollow} again, so a race's loser,
-     * or a turn that ended meanwhile, is refused here). {@code 503 unavailable} when the store cannot answer.
+     * back and end, holding what it followed (that turn's end and the model calls it dispatched, as the join cleared them,
+     * for the follow-up's meta), or null when it may not (written nothing; the checks of {@link #canFollow} again, so a
+     * race's loser, or a turn that ended meanwhile, is refused here). {@code 503 unavailable} when the store cannot answer.
      */
     public Grant follow(Caller caller, String namedTurnId, String turnId, String promptHash) {
         String owner = uidKey.of(caller.uid());
@@ -190,10 +191,13 @@ public class PromptGrants {
                 log.info("allowance.follow-up grant=none none");
                 return null;
             }
-            GrantStore.Follow joined = store.follow(GRANT + grantId, owner, properties.followUps(), promptHash, INDEX + turnId, grantId, turnId);
-            log.info("allowance.follow-up grant={} {}", grantId, joined.name().toLowerCase());
-            return joined == GrantStore.Follow.JOINED
-                    ? Grant.followUp(grantId, Role.of(caller), GRANT + grantId, INDEX + turnId, turnId, store) : null;
+            GrantStore.Joined joined = store.follow(GRANT + grantId, owner, properties.followUps(), promptHash, INDEX + turnId, grantId, turnId);
+            log.info("allowance.follow-up grant={} {}{}", grantId, joined.result().name().toLowerCase(),
+                    joined.result() == GrantStore.Follow.JOINED ? " end=" + joined.end() + " calls=" + joined.calls() : "");
+            return joined.result() == GrantStore.Follow.JOINED
+                    ? Grant.followUp(grantId, Role.of(caller), GRANT + grantId, INDEX + turnId, turnId, store,
+                            new Grant.Followed(namedTurnId, joined.end(), joined.calls()))
+                    : null;
         } catch (RuntimeException e) {
             throw unavailable(e);
         }

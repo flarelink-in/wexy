@@ -820,11 +820,19 @@ export function createCreationController(deps: CreationDeps): CreationController
         switch (end.phase) {
             case 'handed-off':
                 c.handOff = handOffFrom(end);
-                // A second try's attempt counts the turn it followed into Q_C (Q120 (b)): one world's calls, never reset; all
-                // that turn could have made when its end was not seen (the outside review of EA9.5).
+                // A second try's attempt counts the turn it followed into Q_C (Q120 (b)): one world's calls, never reset. The
+                // service's count of them, on this turn's meta, when it gave one (the user, 11-06: "go ahead with api change");
+                // otherwise all that turn could have made when its end was not seen (the outside review of EA9.5).
                 if (c.handOff && c.follows) {
                     const f = c.follows;
-                    c.handOff = { ...c.handOff, followed: { turnId: f.turnId, model: f.model, promptVersion: f.promptVersion, calls: [...f.calls], end: f.end } };
+                    const told = end.meta?.followed ?? null;
+                    c.handOff = {
+                        ...c.handOff,
+                        followed: {
+                            turnId: f.turnId, model: f.model, promptVersion: f.promptVersion, calls: [...f.calls], end: f.end,
+                            service: told && told.turnId === f.turnId ? { end: told.end, calls: told.calls } : null,
+                        },
+                    };
                 }
                 c.planMs = clock() - c.planSince;
                 if (!c.handOff) finish(c, 'stopped', COPY.failures.internal);

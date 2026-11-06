@@ -171,7 +171,7 @@ class OffLoopAdmissionTest {
         }
 
         @Override
-        public Follow follow(String grantKey, String owner, long limit, String prompt, String newIndexKey, String grantId, String turnId) {
+        public Joined follow(String grantKey, String owner, long limit, String prompt, String newIndexKey, String grantId, String turnId) {
             return inner.follow(grantKey, owner, limit, prompt, newIndexKey, grantId, turnId);
         }
 
@@ -186,8 +186,8 @@ class OffLoopAdmissionTest {
         }
 
         @Override
-        public boolean ended(String grantKey, String turnId, String end) {
-            return inner.ended(grantKey, turnId, end);
+        public boolean ended(String grantKey, String turnId, String end, int calls) {
+            return inner.ended(grantKey, turnId, end, calls);
         }
     }
 }

@@ -66,7 +66,7 @@ test('EA-S1 every recorded way a turn ends reads to its typed result, each event
     assert.equal(handedOff.result.calls[1].check.findings[0].code, 'buffer-producer');
     assert.equal(handedOff.result.costMicroUsd, 3 * 46_000);
     assert.deepEqual(handedOff.result.meta, { turnId: 'turn-1', model: 'muse-spark-1.3', source: 'live', promptVersion: 'agent.v7', bundleHash: ENGINE_BUNDLE_HASH,
-        actionSchema: 'agent-action.v3', manifestHash: ADAPTER_MANIFEST_HASH });
+        actionSchema: 'agent-action.v3', manifestHash: ADAPTER_MANIFEST_HASH, followed: null });
     const recorded = Object.fromEntries(events(wire('handed-off.sse')).filter(([e]) => e === 'design' || e === 'program').map(([e, d]) => [e, JSON.parse(d)[e]]));
     assert.deepEqual(handedOff.result.design, recorded.design);
     assert.deepEqual(handedOff.result.program, recorded.program);
@@ -493,4 +493,49 @@ test('EA-S20 a revision hands off its notes to modules after its program, the wh
     await refuses(early, 'internal', /repairs came after the turn was designed/, { revision: true });
     const twice = sse([...revised.slice(0, at + 1), revised[at], ...revised.slice(at + 1)]);
     await refuses(twice, 'internal', /repairs came after the turn was repaired/, { revision: true });
+});
+
+// Q120 (b)'s count (the user, 2026-11-06: "yes u can go ahead with api change"): a follow-up's meta says the turn it
+// follows, as that turn wrote its end, with the model calls it dispatched; the reader holds it to the turn it followed.
+
+test('EA-S21 a follow-up\'s meta says the turn it follows, its end and its calls; the wrong turn, or a wrong value, breaks the contract', async () => {
+    const hand = events(wire('handed-off.sse'));
+    const withFollowed = (followed) => sse(hand.map(([e, d], i) => [e, i === 0 ? { ...JSON.parse(d), followed } : d]));
+    const told = { turnId: 'turn-0', end: 'cancelled', calls: 2 };
+    const { result, seen } = await read(withFollowed(told), { follows: 'turn-0' });
+    assert.equal(result.status, 'handed-off');
+    assert.deepEqual(result.meta.followed, told);
+    assert.deepEqual(seen[0].meta.followed, told, 'handed on with its meta');
+    // An end written before the count: its calls null, as said, never a number.
+    assert.equal((await read(withFollowed({ ...told, calls: null }), { follows: 'turn-0' })).result.meta.followed.calls, null);
+    for (const end of ['asked', 'declined', 'exhausted', 'failed', 'cancelled']) {
+        assert.equal((await read(withFollowed({ ...told, end }), { follows: 'turn-0' })).result.meta.followed.end, end);
+    }
+    // A forge before the count says nothing: the follow-up reads as before, its followed null; a first turn's too.
+    assert.equal((await read(wire('handed-off.sse'), { follows: 'turn-0' })).result.meta.followed, null);
+    assert.equal((await read(wire('handed-off.sse'))).result.meta.followed, null);
+    // Another turn named, or one named on a turn that follows none: broken, before anything of the turn is handed on.
+    await refuses(withFollowed(told), 'internal', /meta\.followed names turn-0, not the turn this one follows/, { follows: 'turn-9' });
+    await refuses(withFollowed(told), 'internal', /meta\.followed came on a turn that follows none/);
+    await refuses(withFollowed(told), 'internal', /meta\.followed came on a turn that follows none/, { follows: null });
+    const { calls: _calls, ...noCalls } = told;
+    for (const [bad, pattern] of [
+        ['turn-0', /meta\.followed is not an object/],
+        [null, /meta\.followed is not an object/],
+        [[told], /meta\.followed is not an object/],
+        [{ ...told, end: 'handed-off' }, /meta\.followed\.end is "handed-off", not an end without a world/],
+        [{ turnId: 'turn-0', calls: 2 }, /"end" is missing/],
+        [{ end: 'asked', calls: 2 }, /"turnId" is missing/],
+        [{ ...told, turnId: 'a b' }, /"turnId" is not what it should be/],
+        [noCalls, /"calls" is missing/],
+        [{ ...told, calls: -1 }, /"calls" is not a whole number of at least 0/],
+        [{ ...told, calls: 1.5 }, /"calls" is not a whole number of at least 0/],
+        [{ ...told, calls: '2' }, /"calls" is not a whole number of at least 0/],
+    ]) {
+        const seenBroken = [];
+        const error = await readAgentStream(res(withFollowed(bad)), e => seenBroken.push(e), { bundleHash: ENGINE_BUNDLE_HASH, follows: 'turn-0' }).catch(e => e);
+        assert.ok(error instanceof ForgeError && error.code === 'internal', `${JSON.stringify(bad)}: ${error}`);
+        assert.match(error.message, pattern, JSON.stringify(bad));
+        assert.deepEqual(seenBroken, [], `${JSON.stringify(bad)}: nothing handed on`);
+    }
 });

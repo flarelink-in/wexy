@@ -4,8 +4,10 @@ Java 21 services for the browser studio. `forge-common` holds shared contracts;
 `forge-gateway` provides authentication, App Check, limits and routing on port 8400;
 `forge-service` provides metered model calls, generation streams, repair, direct and
 outcome reporting on port 8410; `platform-service` keeps accounts and their profiles
-(handles) in MariaDB on port 8430. Generation records currently live in memory. Saved
-worlds, the showcase and the archive remain under development.
+(handles) in MariaDB on port 8430. Private saved worlds and revisions use MariaDB metadata
+and a configured private B2 object store; forge's transient generation records remain in memory.
+Public publishing and the showcase remain under development. Try the hosted application
+directly at **https://wexy.ai**; local backend setup is only needed to run your own instance.
 
 ## Local development
 
@@ -36,6 +38,10 @@ project links and credentials are not tracked. Keep the forge service behind the
 gateway; local/mock profiles are development-only, not public deployment profiles.
 The local gateway accepts development tokens only without Firebase credentials.
 Use matching Firebase configuration on both sides for real sign-in.
+
+For saved-world routes, configure all five `B2_PRIVATE_*` values in `.env.example` for a
+private B2 bucket. Without that storage configuration, world routes return 503 while
+accounts keep working. Signed-in creators manage saved worlds through `/creations`.
 
 Removing `mock` enables live model calls and spends credit: supply the API key
 intentionally and review spend caps first. Redis persists counters on loopback 6390, and

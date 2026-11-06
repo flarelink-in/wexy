@@ -33,15 +33,26 @@ public final class Grant {
     private final GrantStore store;
     /** The turn (or plan) this grant runs: the entry it was granted for, or the follow-up that joined it. */
     private final String turnId;
-    private final boolean followUp;
+    /** What a follow-up's grant follows (Q120 (b)); null for an entry's own. */
+    private final Followed followed;
     private final AtomicInteger state = new AtomicInteger(OPEN);
 
+    /**
+     * The turn a follow-up follows, as that turn wrote its end into the prompt: its id, its end (one of
+     * {@link GrantStore#FOLLOWABLE}), and the model calls it dispatched, the `call` events its stream carried whether or
+     * not its client saw them; null when its end was written without them (a forge before the count). The follow-up's
+     * meta says so (the creations platform design §10, "Q120's follow-up"), and the studio's Q_C then counts that turn's
+     * calls exactly instead of a whole turn's.
+     */
+    public record Followed(String turnId, String end, Integer calls) {
+    }
+
     Grant(String id, Role role, String recordKey, String indexKey, List<String> counters, GrantStore store, String turnId) {
-        this(id, role, recordKey, indexKey, counters, store, turnId, false);
+        this(id, role, recordKey, indexKey, counters, store, turnId, null);
     }
 
     private Grant(String id, Role role, String recordKey, String indexKey, List<String> counters, GrantStore store, String turnId,
-                  boolean followUp) {
+                  Followed followed) {
         this.id = id;
         this.role = role;
         this.recordKey = recordKey;
@@ -49,12 +60,12 @@ public final class Grant {
         this.counters = List.copyOf(counters);
         this.store = store;
         this.turnId = turnId;
-        this.followUp = followUp;
+        this.followed = followed;
     }
 
-    /** The follow-up `turnId`, joined to the grant `id` and indexed at `indexKey` (Q120 (b)). */
-    static Grant followUp(String id, Role role, String recordKey, String indexKey, String turnId, GrantStore store) {
-        return new Grant(id, role, recordKey, indexKey, List.of(), store, turnId, true);
+    /** The follow-up `turnId`, joined to the grant `id` and indexed at `indexKey` (Q120 (b)), following `followed`. */
+    static Grant followUp(String id, Role role, String recordKey, String indexKey, String turnId, GrantStore store, Followed followed) {
+        return new Grant(id, role, recordKey, indexKey, List.of(), store, turnId, java.util.Objects.requireNonNull(followed));
     }
 
     public String id() {
@@ -67,7 +78,12 @@ public final class Grant {
 
     /** It is a follow-up's (Q120 (b)), not an entry's own grant. */
     public boolean followUp() {
-        return followUp;
+        return followed != null;
+    }
+
+    /** The turn a follow-up's grant follows (Q120 (b)); null for an entry's own grant. */
+    public Followed followed() {
+        return followed;
     }
 
     /** Its first model call was dispatched: the prompt is spent. Blocking (Redis): call off the event loop. */
@@ -76,7 +92,7 @@ public final class Grant {
             return;
         }
         try {
-            if (followUp) {
+            if (followUp()) {
                 store.followDispatched(recordKey, turnId);
             } else {
                 store.dispatched(recordKey);
@@ -92,11 +108,11 @@ public final class Grant {
             return;
         }
         try {
-            boolean given = followUp ? store.unfollow(recordKey, indexKey, turnId) : store.release(recordKey, indexKey, counters);
+            boolean given = followUp() ? store.unfollow(recordKey, indexKey, turnId) : store.release(recordKey, indexKey, counters);
             if (!given) {
                 log.warn("grant {} could not be given back (spent, gone or changed); it stays taken", id);
             } else {
-                log.info("allowance.released grant={} role={}{}", id, role.lane(), followUp ? " follow-up" : "");
+                log.info("allowance.released grant={} role={}{}", id, role.lane(), followUp() ? " follow-up" : "");
             }
         } catch (RuntimeException e) {
             log.warn("grant {} could not be given back: the store did not answer; it stays taken", id, e);
@@ -105,12 +121,13 @@ public final class Grant {
 
     /**
      * Writes how its turn ended into the prompt (Q120 (b)), before the turn's last event: one of {@code handed-off},
-     * {@code asked}, {@code declined}, {@code exhausted}, {@code failed}, {@code cancelled}. A failure is logged, never
-     * thrown: an end not written lets no follow-up run, the safe direction. Blocking (Redis): call off the event loop.
+     * {@code asked}, {@code declined}, {@code exhausted}, {@code failed}, {@code cancelled}, and the model calls the turn
+     * dispatched (its `call` events), which a follow-up's meta then says. A failure is logged, never thrown: an end not
+     * written lets no follow-up run, the safe direction. Blocking (Redis): call off the event loop.
      */
-    public void ended(String end) {
+    public void ended(String end, int calls) {
         try {
-            if (!store.ended(recordKey, turnId, end)) {
+            if (!store.ended(recordKey, turnId, end, calls)) {
                 log.info("grant {}: the end {} of {} was not written (the grant is gone, or another turn's)", id, end, turnId);
             }
         } catch (RuntimeException e) {

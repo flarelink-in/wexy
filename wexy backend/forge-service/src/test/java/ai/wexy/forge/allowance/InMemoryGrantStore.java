@@ -188,27 +188,33 @@ public final class InMemoryGrantStore implements GrantStore {
     }
 
     @Override
-    public synchronized Follow follow(String grantKey, String owner, long limit, String prompt, String newIndexKey, String grantId, String turnId) {
+    public synchronized Joined follow(String grantKey, String owner, long limit, String prompt, String newIndexKey, String grantId, String turnId) {
         check();
         Follow why = followable(grantKey, owner, limit);
         if (why != null) {
-            return why;
+            return Joined.not(why);
         }
         Entry e = live(grantKey);
         Map<String, String> h = e.hash();
         if (h.get("prompt") == null) {
-            return Follow.NONE;
+            return Joined.not(Follow.NONE);
         }
+        String ended = h.get("end");
+        String calls = h.get("endCalls");
         h.put("followups", Long.toString(Long.parseLong(h.getOrDefault("followups", "0")) + 1));
         h.put("following", turnId);
         h.put("followDispatched", "0");
         h.put("prevPrompt", h.get("prompt"));
-        h.put("prevEnd", h.get("end"));
+        h.put("prevEnd", ended);
+        if (calls != null) {
+            h.put("prevEndCalls", calls);
+        }
         h.put("prompt", prompt);
         h.remove("end");
+        h.remove("endCalls");
         data.put(newIndexKey, new Entry(grantId, null, e.expires()));
         follows++;
-        return Follow.JOINED;
+        return new Joined(Follow.JOINED, ended, RedisGrantStore.calls(calls));
     }
 
     /** The probe's and the join's checks, in the scripts' order: null when a follow-up may run. */
@@ -250,6 +256,12 @@ public final class InMemoryGrantStore implements GrantStore {
         h.put("followups", Long.toString(Math.max(0, Long.parseLong(h.getOrDefault("followups", "0")) - 1)));
         h.put("prompt", h.remove("prevPrompt"));
         h.put("end", h.remove("prevEnd"));
+        String calls = h.remove("prevEndCalls");
+        if (calls != null) {
+            h.put("endCalls", calls);
+        } else {
+            h.remove("endCalls");
+        }
         h.remove("following");
         h.remove("followDispatched");
         data.remove(indexKey);
@@ -258,7 +270,7 @@ public final class InMemoryGrantStore implements GrantStore {
     }
 
     @Override
-    public synchronized boolean ended(String grantKey, String turnId, String end) {
+    public synchronized boolean ended(String grantKey, String turnId, String end, int calls) {
         check();
         Entry e = live(grantKey);
         if (e == null) {
@@ -269,7 +281,20 @@ public final class InMemoryGrantStore implements GrantStore {
             return false;
         }
         e.hash().put("end", end);
+        e.hash().put("endCalls", Integer.toString(Math.max(0, calls)));
         return true;
+    }
+
+    /**
+     * Writes an end as a forge before the follow-up's count wrote it, without its calls (a grant alive across the deploy):
+     * what a follow-up's meta must then say it does not know.
+     */
+    public synchronized void endedWithoutCalls(String grantId, String end) {
+        Entry e = live("wexy:grant:" + grantId);
+        if (e != null) {
+            e.hash().put("end", end);
+            e.hash().remove("endCalls");
+        }
     }
 
     /** How many follow-ups joined, and how many were given back (Q120 (b)). */

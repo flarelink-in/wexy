@@ -22,8 +22,8 @@
 // the first compute stage's entry to `step`, which the server's check passes and the browser refuses (a WGSL built-in),
 // before the candidate starts; the report marks the program as altered by the harness, never as the model's.
 //
-// --probe spends nothing: it reads the mode and sends an empty turn and an empty plan, which the service refuses
-// before any charge. The empty turn still costs the gateway's buckets a whole turn (agent-turn-anonymous: two turns, a
+// --probe spends nothing: it reads the mode and sends an empty turn, an empty plan and a follow-up of no turn (EA9.5's
+// forge answers 409, an older one 400), which the service refuses before any charge. The empty turn still costs the gateway's buckets a whole turn (agent-turn-anonymous: two turns, a
 // turn and its revision, then one every 120 s, per user, since the EA4.4 review), so a turn run never sends it, and
 // waits out a turn's refill between its turns.
 // The requests are the paper test's three (the backend's paper/requests.v1.json), by id; gate F sends the first,
@@ -178,13 +178,21 @@ if (report.probe.mode.status !== 200) { console.error('agent-live: the gateway i
 if (probeOnly) {
     report.probe.emptyTurn = await answer('/v1/agent/turn', { method: 'POST', headers: { ...auth, ...(await attested()), 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: '{}' });
     report.probe.emptyPlan = await answer('/v1/forge/plan', { method: 'POST', headers: { ...auth, ...(await attested()), 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: '{}' });
-    for (const [name, r] of Object.entries({ 'empty turn': report.probe.emptyTurn, 'empty plan': report.probe.emptyPlan })) {
+    // EA9.5 (Q120 (b)): a turn naming a turn it cannot follow, a well-formed ULID no turn has. EA9.5's forge refuses it
+    // `409 conflict` before any safety call or charge, and never as an entry; an older forge refuses the field itself,
+    // 400. Nothing is spent either way, and the answer says which forge is deployed. It takes the turn bucket's second turn.
+    report.probe.followUp = await answer('/v1/agent/turn', { method: 'POST', headers: { ...auth, ...(await attested()), 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+        body: JSON.stringify({ prompt: 'A probe that follows no turn.', style: 'auto', seconds: 15, retryOf: `01JZ${'0'.repeat(22)}` }) });
+    for (const [name, r] of Object.entries({ 'empty turn': report.probe.emptyTurn, 'empty plan': report.probe.emptyPlan, 'a follow-up of no turn': report.probe.followUp })) {
         console.log(`  ${name}: HTTP ${r.status} in ${r.ms} ms ${r.body.replace(/\s+/g, ' ').slice(0, 160)}`);
     }
     save();
     const turnRoute = report.probe.emptyTurn.status === 400 ? 'served (the empty turn refused as bad-request, no charge)'
         : report.probe.emptyTurn.status === 404 ? 'not served by this deployment' : `unexpected (HTTP ${report.probe.emptyTurn.status})`;
-    console.log(`agent-live: /v1/agent/turn ${turnRoute}; probe only, nothing spent. ${join(OUT, 'report.json')}`);
+    const followUp = report.probe.followUp.status === 409 ? 'served (EA9.5\'s forge: refused as conflict, no charge)'
+        : report.probe.followUp.status === 400 && /takes only prompt, style, seconds and base\b(?! and retryOf)/.test(report.probe.followUp.body)
+            ? 'not served (an older forge refuses retryOf itself, no charge)' : `unexpected (HTTP ${report.probe.followUp.status})`;
+    console.log(`agent-live: /v1/agent/turn ${turnRoute}; Q120 (b)'s follow-up ${followUp}; probe only, nothing spent. ${join(OUT, 'report.json')}`);
     await quit(report.probe.emptyTurn.status === 400 ? 0 : 1);
 }
 save();

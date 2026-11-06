@@ -770,7 +770,7 @@ class TurnAllowanceRoutesTest {
             } catch (InterruptedException e) {
                 return;
             }
-            entry.ended("cancelled");
+            entry.ended("cancelled", 1);
         });
         late.start();
         long started = System.nanoTime();
@@ -779,6 +779,8 @@ class TurnAllowanceRoutesTest {
         late.join();
         assertThat(follow).isNotNull();
         assertThat(follow.followUp()).isTrue();
+        assertThat(follow.followed()).as("the end it waited for, and its calls")
+                .isEqualTo(new ai.wexy.forge.allowance.Grant.Followed(unwinding, "cancelled", 1));
         assertThat(took).isBetween(Duration.ofMillis(300), Duration.ofMillis(2_900));
         assertThat(admit.store().followed()).isEqualTo(1);
         assertThat(admit.store().granted()).as("inside the one prompt").isEqualTo(1);
@@ -822,7 +824,72 @@ class TurnAllowanceRoutesTest {
 
         assertThat(refused(following(ANSWERED, turnId), anonymous("u1"), 409).path("code").asText()).isEqualTo("conflict");
         String revisionId = AgentRoutesTest.data(failed, "meta").path("turnId").asText();
+        assertThat(AgentRoutesTest.data(failed, "meta").has("followed")).as("a revision follows no turn").isFalse();
         assertThat(refused(following(ANSWERED, revisionId), anonymous("u1"), 409).path("code").asText()).isEqualTo("conflict");
         assertThat(admit.store().followed()).isZero();
+    }
+
+    // ---- the follow-up's count (the user, 2026-11-06: "yes u can go ahead with api change") -----------------------------
+
+    /**
+     * A follow-up's meta says the turn it follows as that turn wrote its end: its id, its end, and the model calls it
+     * dispatched (its `call` events, seen by its client or not), so a client that never saw that end (a Stop, a drop, its
+     * own deadline) counts those calls in its Q_C, not a whole turn's. Here the client leaves while its turn's second call
+     * is still being charged: the loop counted that call, which never went out, so its end keeps one. A first turn's meta
+     * names none.
+     */
+    @Test
+    void aFollowUpsMetaSaysTheTurnItFollowsAndTheCallsItDispatched() throws Exception {
+        admit = TestAdmissions.admit(TestAdmissions.wide(), Clock.systemUTC());
+        meterDelay = 1_500;
+        start();
+        answers(AgentRoutesTest.READ, AgentRoutesTest.PROGRAM);
+        List<ServerSentEvent<String>> seen = Collections.synchronizedList(new ArrayList<>());
+        Disposable leaving = raw.post().uri("/v1/agent/turn").contentType(MediaType.APPLICATION_JSON)
+                .header(InternalToken.HEADER, anonymous("u1")).bodyValue(idea(IDEA))
+                .retrieve().bodyToFlux(AgentRoutesTest.EVENTS).subscribe(seen::add);
+        AgentRoutesTest.await(Duration.ofSeconds(20), () -> seen.stream().anyMatch(e -> "usage".equals(e.event())));
+        leaving.dispose();
+        JsonNode firstMeta = AgentRoutesTest.data(new ArrayList<>(seen), "meta");
+        String stopped = firstMeta.path("turnId").asText();
+        assertThat(firstMeta.has("followed")).as("a first turn follows none").isFalse();
+        AgentRoutesTest.await(Duration.ofSeconds(20), () -> grantOf(stopped) != null && "cancelled".equals(grantOf(stopped).get("end")));
+        assertThat(grantOf(stopped)).containsEntry("end", "cancelled").containsEntry("endCalls", "1");
+        assertThat(new ArrayList<>(seen).stream().filter(e -> "call".equals(e.event())).count()).as("the one call it sent").isEqualTo(1);
+
+        meterDelay = 0;
+        start();
+        answers(AgentRoutesTest.READ, AgentRoutesTest.PROGRAM);
+        List<ServerSentEvent<String>> second = streamed(following(IDEA, stopped), anonymous("u1"));
+        JsonNode followed = AgentRoutesTest.data(second, "meta").path("followed");
+        assertThat(followed.path("turnId").asText()).isEqualTo(stopped);
+        assertThat(followed.path("end").asText()).isEqualTo("cancelled");
+        assertThat(followed.path("calls").isInt()).isTrue();
+        assertThat(followed.path("calls").asInt()).isEqualTo(1);
+        assertThat(AgentRoutesTest.data(second, "done").path("status").asText()).isEqualTo("handed-off");
+        // Its own end keeps its own two calls (READ, then the program); the prompt's one follow-up is spent.
+        String secondId = AgentRoutesTest.data(second, "meta").path("turnId").asText();
+        assertThat(grantOf(secondId)).containsEntry("end", "handed-off").containsEntry("endCalls", "2");
+    }
+
+    /**
+     * An end a forge before the count wrote (a grant alive across the deploy, its calls not written): the follow-up's meta
+     * says its calls are unknown (null), never a number it does not have, and the studio then counts that turn whole.
+     */
+    @Test
+    void aFollowUpOfAnEndWrittenWithoutItsCallsSaysTheyAreUnknown() throws Exception {
+        start();
+        answers(ASK);
+        Ended asked = ended(idea(IDEA), anonymous("u1"));
+        assertThat(grantOf(asked.turnId())).containsEntry("end", "asked").containsEntry("endCalls", "1");
+        admit.store().endedWithoutCalls(admit.store().grantOf(asked.turnId()), "asked");
+
+        answers(AgentRoutesTest.READ, AgentRoutesTest.PROGRAM);
+        List<ServerSentEvent<String>> answer = streamed(following(ANSWERED, asked.turnId()), anonymous("u1"));
+        JsonNode followed = AgentRoutesTest.data(answer, "meta").path("followed");
+        assertThat(followed.path("turnId").asText()).isEqualTo(asked.turnId());
+        assertThat(followed.path("end").asText()).isEqualTo("asked");
+        assertThat(followed.has("calls")).isTrue();
+        assertThat(followed.path("calls").isNull()).as("unknown, never invented").isTrue();
     }
 }

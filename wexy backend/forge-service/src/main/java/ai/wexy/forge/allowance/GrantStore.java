@@ -22,6 +22,17 @@ interface GrantStore {
      */
     enum Follow { JOINED, SAME, CHANGED, FULL, OPEN, WORLD, NONE }
 
+    /**
+     * What a follow-up's join found: JOINED with the turn it follows as that turn wrote its end, its end and the model
+     * calls it dispatched (null when its end was written without them, by a forge before the follow-up's count), or why
+     * not, with neither.
+     */
+    record Joined(Follow result, String end, Integer calls) {
+        static Joined not(Follow why) {
+            return new Joined(why, null, null);
+        }
+    }
+
     /** The ends a turn writes into its grant from which a follow-up may run: every end without a world. */
     java.util.Set<String> FOLLOWABLE = java.util.Set.of("asked", "declined", "exhausted", "failed", "cancelled");
 
@@ -73,27 +84,30 @@ interface GrantStore {
 
     /**
      * The follow-up `turnId` joins the grant, in one atomic step: the probe's checks again; then its follow-up counted,
-     * the grant's prompt hash set to `prompt` and its end cleared (the two kept, to give back), `turnId` recorded as its
-     * follow-up, and the grant indexed under `newIndexKey` for its remaining life. JOINED, or why not with nothing written.
+     * the grant's prompt hash set to `prompt` and its end and that end's calls cleared (all kept, to give back), `turnId`
+     * recorded as its follow-up, and the grant indexed under `newIndexKey` for its remaining life. JOINED with the end and
+     * the calls it cleared, or why not with nothing written.
      */
-    Follow follow(String grantKey, String owner, long limit, String prompt, String newIndexKey, String grantId, String turnId);
+    Joined follow(String grantKey, String owner, long limit, String prompt, String newIndexKey, String grantId, String turnId);
 
     /** The follow-up `turnId` dispatched its first call: it is spent, and stays counted. */
     void followDispatched(String grantKey, String turnId);
 
     /**
-     * Gives back the follow-up `turnId` when it never dispatched a call: its count, and the grant's prompt hash and end as
-     * they were before it; its index gone.
+     * Gives back the follow-up `turnId` when it never dispatched a call: its count, and the grant's prompt hash, end and
+     * that end's calls as they were before it; its index gone.
      *
      * @return true when given back; false when it was spent, gone, or not this follow-up's
      */
     boolean unfollow(String grantKey, String indexKey, String turnId);
 
     /**
-     * Writes the end of the turn `turnId` into its grant (Q120 (b)): what a follow-up of it may be. Only the grant's own
-     * turn writes it, its entry or, once one joined, its follow-up; another's end, or a grant gone, writes nothing.
+     * Writes the end of the turn `turnId` into its grant (Q120 (b)), and the model calls it dispatched (the `call` events
+     * its stream carried, seen or not): what a follow-up of it may be, and what that follow-up's meta says it followed.
+     * Only the grant's own turn writes it, its entry or, once one joined, its follow-up; another's end, or a grant gone,
+     * writes nothing.
      *
      * @return true when written
      */
-    boolean ended(String grantKey, String turnId, String end);
+    boolean ended(String grantKey, String turnId, String end, int calls);
 }

@@ -576,7 +576,7 @@ test('EA-K5b Q84 in both repositories: the backend holds a turn to Q_C\'s module
     assert.equal(constant('MAX_CALLS'), TURN_ALLOWANCE, 'a turn\'s whole allowance is the calls the gateway charges a turn');
 });
 
-test('EA-K5c a hand-off that followed a turn (Q120 (b)): that turn\'s calls count into Q_C, and a turn\'s whole allowance when its end was not seen (the outside review of EA9.5, its mid)', async () => {
+test('EA-K5c a hand-off that followed a turn (Q120 (b)): that turn\'s calls count into Q_C, as the service counted them when it said, else a turn\'s whole allowance when its end was not seen (the outside review of EA9.5, its mid)', async () => {
     const seenOne = [{ n: 1, purpose: 'first', charge: 'known', costMicroUsd: 46_000, generationId: 'gen-0' }];
     // Made under another template than the hand-off's (agent.v5), so the bundle's list of templates must name it.
     const followed = end => ({ turnId: 'turn-0', model: 'model-0', promptVersion: 'agent.v4', calls: seenOne, end });
@@ -597,7 +597,7 @@ test('EA-K5c a hand-off that followed a turn (Q120 (b)): that turn\'s calls coun
     const unseen = session();
     await unseen.s.start(handOff(one(), { followed: followed('unseen') }));
     assert.deepEqual([unseen.s.state.phase, unseen.s.state.budget.calls], ['static-verified', { settled: 3 + 1, reserved: 0, unknown: TURN_ALLOWANCE }]);
-    assert.deepEqual(unseen.s.state.followed, followed('unseen'), 'the state lists it as it came');
+    assert.deepEqual(unseen.s.state.followed, { ...followed('unseen'), service: null }, 'the state lists it as it came, the service silent');
     // The bound holds whatever the followed turn made: with Q_C at the turns' calls as counted, the module call refuses.
     const at = { ...Q_C, calls: 3 + TURN_ALLOWANCE };
     const tight = session({ limits: at });
@@ -607,12 +607,31 @@ test('EA-K5c a hand-off that followed a turn (Q120 (b)): that turn\'s calls coun
     const roomy = session({ limits: at });
     await roomy.s.start(handOff(one(), { followed: followed('seen') }));
     assert.equal(roomy.s.state.phase, 'static-verified', 'the same limit, the end seen: its one call counted');
-    // The bundle names the end, what Q_C counted for it, and what made its calls, its template among the bundle's.
+    // The service's count, from the follow-up's meta (the user, 11-06: "yes u can go ahead with api change"): settled and
+    // exact whatever end the browser saw, never fewer than were seen; a count not said, or not a whole number, is none.
+    const toldTwo = { ...followed('unseen'), service: { end: 'cancelled', calls: 2 } };
+    assert.deepEqual(followedCalls(toldTwo), { settled: 2, unknown: 0 });
+    assert.deepEqual(followedCalls({ ...followed('seen'), service: { end: 'asked', calls: 1 } }), { settled: 1, unknown: 0 });
+    assert.deepEqual(followedCalls({ ...followed('unseen'), service: { end: 'cancelled', calls: 0 } }), { settled: 1, unknown: 0 }, 'never fewer than were seen');
+    for (const calls of [null, undefined, -1, 1.5, '2', Number.NaN, Number.POSITIVE_INFINITY]) {
+        assert.deepEqual(followedCalls({ ...followed('unseen'), service: { end: 'cancelled', calls } }), { settled: 0, unknown: TURN_ALLOWANCE }, String(calls));
+    }
+    assert.deepEqual(followedCalls({ ...followed('unseen'), service: null }), { settled: 0, unknown: TURN_ALLOWANCE });
+    const told = session();
+    await told.s.start(handOff(one(), { followed: toldTwo }));
+    assert.deepEqual([told.s.state.phase, told.s.state.budget.calls], ['static-verified', { settled: 3 + 2 + 1, reserved: 0, unknown: 0 }]);
+    const toldTight = session({ limits: at });
+    await toldTight.s.start(handOff(one(), { followed: toldTwo }));
+    assert.equal(toldTight.s.state.phase, 'static-verified', 'the same limit, told two: Q_C holds its module call');
+    // The bundle names the end, what the service said, what Q_C counted for it, and what made its calls, its template
+    // among the bundle's.
     const unseenBundle = candidateBundle(unseen.s.state);
     assert.deepEqual(unseenBundle.calls.followed,
-        { turnId: 'turn-0', model: 'model-0', promptVersion: 'agent.v4', end: 'unseen', counted: TURN_ALLOWANCE, calls: seenOne });
+        { turnId: 'turn-0', model: 'model-0', promptVersion: 'agent.v4', end: 'unseen', service: null, counted: TURN_ALLOWANCE, calls: seenOne });
     assert.deepEqual(candidateBundle(seen.s.state).calls.followed,
-        { turnId: 'turn-0', model: 'model-0', promptVersion: 'agent.v4', end: 'seen', counted: 1, calls: seenOne });
+        { turnId: 'turn-0', model: 'model-0', promptVersion: 'agent.v4', end: 'seen', service: null, counted: 1, calls: seenOne });
+    assert.deepEqual(candidateBundle(told.s.state).calls.followed,
+        { turnId: 'turn-0', model: 'model-0', promptVersion: 'agent.v4', end: 'unseen', service: { end: 'cancelled', calls: 2 }, counted: 2, calls: seenOne });
     assert.ok(unseenBundle.versions.templates.includes('agent.v4') && unseenBundle.versions.templates.includes('agent.v5'), unseenBundle.versions.templates.join(', '));
 });
 

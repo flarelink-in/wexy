@@ -15,6 +15,7 @@ import { createApi } from '../src/forge-client/http.ts';
 import { createModuleClient } from '../src/forge-client/module-client.ts';
 import { createAgentSession } from '../src/loop/agent-turn.ts';
 import { candidateBundle, createCandidateSession, turnCallsOf } from '../src/loop/candidate.ts';
+import { TURN_CALLS } from '../src/loop/candidate-ledger.ts';
 import { COPY } from '../src/loop/copy.ts';
 import { createCreationController, handOffFrom, runSentence, TITLE_CHARS, titleOf } from '../src/loop/creation.ts';
 import { elapsed, roundCameBack, spoken, timed } from '../src/shell/studio/creation-view.ts';
@@ -358,6 +359,8 @@ test('EA9-U5 an asked turn: its question shown, the idea kept; the next Create f
     // counts a turn's whole allowance; EA9-U30).
     assert.deepEqual(again.handOff.followed, {
         turnId: asked.turn.meta.turnId, model: asked.turn.meta.model, promptVersion: asked.turn.meta.promptVersion, calls: turnCallsOf(asked.turn.calls), end: 'seen',
+        // This recording's meta says nothing of the turn it follows, as a forge before the count (EA9-U31 has one that does).
+        service: null,
     });
     assert.equal(r.controller.session.state.budget.calls.unknown, 0, 'nothing unknown: every call of both turns was seen');
     const st = r.controller.session.state;
@@ -1678,7 +1681,8 @@ test('EA9-U30 a second try after a turn whose end was not seen counts that turn\
     }));
     const META = JSON.parse(opening.match(/^event:meta\ndata:(.*)$/m)[1]);
     const seenCalls = turnCallsOf([{ n: 1, purpose: 'first', usage: JSON.parse(opening.match(/^event:usage\ndata:(.*)$/m)[1]) }]);
-    const UNSEEN = { turnId: 'turn-1', model: META.model, promptVersion: META.promptVersion, calls: seenCalls, end: 'unseen' };
+    // The second try's recording says nothing of the turn it follows: a forge before the count (EA9-U31 counts as told).
+    const UNSEEN = { turnId: 'turn-1', model: META.model, promptVersion: META.promptVersion, calls: seenCalls, end: 'unseen', service: null };
     /** The second try's attempt, as Q_C and its bundle count it: the first turn's whole allowance, unknown. */
     const counts = (r, again, label) => {
         assert.equal(again.phase, 'ready', `${label}: ${again.sentence ?? ''}`);
@@ -1746,4 +1750,81 @@ test('EA9-U30 a second try after a turn whose end was not seen counts that turn\
     await kept.controller.write();
     assert.notEqual(kept.controller.session, first, 'a new attempt');
     counts(kept, kept.controller.state, 'written again');
+});
+
+test('EA9-U31 a second try counts the turn it followed as the service counted it, on its meta (the user, 11-06: "yes u can go ahead with api change"); a count not said keeps the whole allowance', async () => {
+    // As EA9-U30's: the browser saw the first turn's meta, its first call and that call's usage, and never its end. The
+    // service, which saw the client go, wrote that turn's end with the calls it dispatched (here two: the Stop came while
+    // its second was out), and says so on the second try's meta.
+    const SERVICE_CALLS = 2;
+    const opening = HANDED_OFF.split(/(?<=\n\n)/).slice(0, 3).join('');
+    const open = (text, init) => sse(new ReadableStream({
+        start(controller) {
+            controller.enqueue(new TextEncoder().encode(text));
+            init.signal.addEventListener('abort', () => { try { controller.error(new DOMException('aborted', 'AbortError')); } catch { /* closed */ } }, { once: true });
+        },
+    }));
+    const META = JSON.parse(opening.match(/^event:meta\ndata:(.*)$/m)[1]);
+    const seenCalls = turnCallsOf([{ n: 1, purpose: 'first', usage: JSON.parse(opening.match(/^event:usage\ndata:(.*)$/m)[1]) }]);
+    /** The second try's hand-off, its meta saying what the service wrote of the first turn. */
+    const told = (end, calls) => () => sse(as(HANDED_OFF, 'turn-2').replace(/^event:meta\ndata:(.*)$/m,
+        (_, d) => `event:meta\ndata:${JSON.stringify({ ...JSON.parse(d), followed: { turnId: 'turn-1', end, calls } })}`));
+    const counts = (r, again, label, service) => {
+        assert.equal(again.phase, 'ready', `${label}: ${again.sentence ?? ''}`);
+        assert.deepEqual(again.handOff.followed,
+            { turnId: 'turn-1', model: META.model, promptVersion: META.promptVersion, calls: seenCalls, end: 'unseen', service }, label);
+        const st = r.controller.session.state;
+        const own = again.turn.calls.length + 1;
+        // Q_C: the follow-up's calls and its module call, and the first turn's as the service counted them (never fewer
+        // than the browser saw), all settled; with no count said, its whole allowance, unknown (EA9-U30).
+        const exact = service.calls === null ? null : Math.max(service.calls, seenCalls.length);
+        assert.deepEqual(st.budget.calls, exact === null
+            ? { settled: own, reserved: 0, unknown: TURN_CALLS }
+            : { settled: own + exact, reserved: 0, unknown: 0 }, label);
+        const bundle = candidateBundle(st);
+        const { followed } = bundle.calls;
+        assert.deepEqual([followed.end, followed.service, followed.counted, followed.calls.length], ['unseen', service, exact ?? TURN_CALLS, 1], label);
+        assert.equal(followed.counted + bundle.calls.turns.flatMap(t => t.calls).length + bundle.calls.jobs.length,
+            st.budget.calls.settled + st.budget.calls.unknown, `${label}: every call Q_C counts`);
+    };
+    const cases = [
+        ['the creator\'s Stop', (_b, init) => open(opening, init), r => r.controller.cancel(), { end: 'cancelled', calls: SERVICE_CALLS }],
+        ['a dropped connection', () => sse(opening), null, { end: 'failed', calls: SERVICE_CALLS }],
+        ['the client\'s deadline', (_b, init) => open(opening, init), null, { end: 'cancelled', calls: SERVICE_CALLS }, { deadlineMs: 80 }],
+        ['a newer Create', (_b, init) => open(opening, init), 'supersede', { end: 'cancelled', calls: SERVICE_CALLS }],
+        // The service's count is never fewer than the calls the browser saw.
+        ['a count below what was seen', () => sse(opening), null, { end: 'failed', calls: 0 }],
+        // An end written by a forge before the count: its calls unknown, so the whole allowance (the deploy's window).
+        ['a count not said', (_b, init) => open(opening, init), r => r.controller.cancel(), { end: 'cancelled', calls: null }],
+    ];
+    for (const [label, first, interrupt, service, agent] of cases) {
+        const r = rig({ routes: { turn: turnsOf(first, told(service.end, service.calls)) }, agent });
+        let again;
+        if (interrupt === 'supersede') {
+            const firstTry = r.controller.create(IDEA, { write: false });
+            await waitFor(() => r.controller.state.turn?.calls.length === 1, `${label}: the first call seen`);
+            again = await r.controller.create({ ...IDEA, prompt: 'a calmer idea' });
+            await firstTry;
+        } else {
+            const creating = r.controller.create(IDEA);
+            if (typeof interrupt === 'function') {
+                await waitFor(() => r.controller.state.turn?.calls.length === 1, `${label}: the first call seen`);
+                interrupt(r);
+            }
+            const end = await creating;
+            assert.ok(end.sentence.endsWith(COPY.creation.secondTry), `${label}: admitted, so a second try: ${end.sentence}`);
+            again = await r.controller.create({ ...IDEA, prompt: 'a calmer idea' });
+        }
+        assert.deepEqual(turnBodies(r).map(b => b.retryOf), [undefined, 'turn-1'], `${label}: the second try follows the first`);
+        counts(r, again, label, service);
+    }
+
+    // A second try's meta naming another turn than the one it followed breaks the contract: no hand-off, nothing written.
+    const wrong = rig({ routes: { turn: turnsOf(() => sse(opening), () => sse(as(HANDED_OFF, 'turn-2').replace(/^event:meta\ndata:(.*)$/m,
+        (_, d) => `event:meta\ndata:${JSON.stringify({ ...JSON.parse(d), followed: { turnId: 'turn-9', end: 'failed', calls: 1 } })}`))) } });
+    await wrong.controller.create(IDEA);
+    const broken = await wrong.controller.create({ ...IDEA, prompt: 'a calmer idea' });
+    assert.notEqual(broken.phase, 'ready', `the wrong turn named: ${broken.sentence}`);
+    assert.equal(broken.handOff, null);
+    assert.deepEqual(wrong.net.paths().filter(p => p === '/v1/agent/module'), [], 'no module written for it');
 });

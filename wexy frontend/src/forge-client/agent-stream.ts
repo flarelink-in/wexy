@@ -33,6 +33,22 @@ export interface AgentMeta {
     actionSchema: string | null;
     /** The adapter manifest the server checked the program's nodes against; null when it names none. */
     manifestHash: string | null;
+    /**
+     * A follow-up's (Q120 (b)): the turn it follows, as that turn wrote its end into its prompt (the creations platform
+     * designs §10, "Q120's follow-up"; the user, 2026-11-06: "go ahead with api change"). `calls` is the model calls that
+     * turn dispatched, its `call` events whether or not this client saw them; null when its end was written without
+     * them. Null on a turn that follows none, and from a forge before the count.
+     */
+    followed: AgentFollowed | null;
+}
+
+/** The ends a turn writes into its prompt from which a follow-up may run: every end without a world. */
+export const FOLLOWED_ENDS = ['asked', 'declined', 'exhausted', 'failed', 'cancelled'] as const;
+
+export interface AgentFollowed {
+    turnId: string;
+    end: (typeof FOLLOWED_ENDS)[number];
+    calls: number | null;
 }
 
 export interface AgentCall {
@@ -201,6 +217,11 @@ export interface AgentStreamOptions {
     revision?: boolean;
     /** The adapter manifest this build embeds, ADAPTER_MANIFEST_HASH unless a test names another. */
     manifestHash?: string;
+    /**
+     * The turn this one follows (its request's `retryOf`, Q120 (b)): meta's `followed` must name it, or be absent (a forge
+     * before the count). A turn that follows none must be told of none.
+     */
+    follows?: string | null;
     /** Stops the read: the body is cancelled, and the read rejects with the signal's reason. */
     signal?: AbortSignal;
     limits?: AgentStreamLimits;
@@ -283,6 +304,11 @@ export async function readAgentStream(res: Response, onEvent: (event: AgentEvent
                 if (meta.actionSchema !== AGENT_ACTION_VERSION) throw new AgentVersionError('actionSchema', meta.actionSchema ?? 'none', AGENT_ACTION_VERSION, res.status);
                 const manifestHash = options.manifestHash ?? ADAPTER_MANIFEST_HASH;
                 if (meta.manifestHash !== manifestHash) throw new AgentVersionError('manifest', meta.manifestHash ?? 'none', manifestHash, res.status);
+                // A follow-up is told of the turn it named, or of none by a forge before the count; any other turn of none.
+                const follows = options.follows ?? null;
+                if (meta.followed && meta.followed.turnId !== follows) {
+                    throw broken(res, follows ? `meta.followed names ${meta.followed.turnId.slice(0, 26)}, not the turn this one follows` : 'meta.followed came on a turn that follows none');
+                }
                 phase = 'opened';
                 emit({ type: 'meta', meta });
                 continue;
@@ -431,7 +457,17 @@ function readMeta(res: Response, data: string): AgentMeta {
         // Absent is a server before EA3.6, which speaks v1: the caller refuses it as a version, not a broken contract.
         actionSchema: m.actionSchema === undefined ? null : matching(res, m, 'actionSchema', SCHEMA_NAME),
         manifestHash: m.manifestHash === undefined ? null : matching(res, m, 'manifestHash', HASH),
+        // Absent on a turn that follows none, and from a forge before the follow-up's count.
+        followed: m.followed === undefined ? null : readFollowed(res, m.followed),
     };
+}
+
+function readFollowed(res: Response, value: unknown): AgentFollowed {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw broken(res, 'meta.followed is not an object');
+    const f = value as Record<string, unknown>;
+    const end = field(res, f, 'end');
+    if (!FOLLOWED_ENDS.includes(end as AgentFollowed['end'])) throw broken(res, `meta.followed.end is ${JSON.stringify(end)?.slice(0, 20)}, not an end without a world`);
+    return { turnId: matching(res, f, 'turnId', ID), end: end as AgentFollowed['end'], calls: countOrNull(res, f, 'calls') };
 }
 
 function readCall(res: Response, data: string): AgentCall {

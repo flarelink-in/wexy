@@ -1630,15 +1630,20 @@ test('EA9.4 review: the panel drops a round\'s late answer once another world is
 test('EA9.5\'s outside review: a followed turn whose end was not seen counts in the improvements left, its whole allowance unknown (Q120 (b))', async () => {
     // The hand-off's three calls, the followed turn's as counted, then three authors; Q_C at 23 calls, so its count decides.
     const left = {};
-    for (const end of ['seen', 'unseen']) {
+    // `told`: its end unseen, and the service's count on the follow-up's meta, one call (the user, 11-06: "yes u can go
+    // ahead with api change").
+    const ways = { seen: { end: 'seen' }, unseen: { end: 'unseen' }, told: { end: 'unseen', service: { end: 'cancelled', calls: 1 } } };
+    for (const [way, how] of Object.entries(ways)) {
         const t = studio({ limits: { ...Q_C, calls: 23 } });
-        const st = await t.s.start(handOff(world(), { followed: { turnId: 'turn-0', model: 'model-0', promptVersion: 'agent.v5', calls: [TURN_CALLS[0]], end } }));
-        assert.equal(st.phase, 'static-verified', end);
-        left[end] = { rounds: t.reviews.roundsLeft(), budget: t.reviews.budget() };
+        const st = await t.s.start(handOff(world(), { followed: { turnId: 'turn-0', model: 'model-0', promptVersion: 'agent.v5', calls: [TURN_CALLS[0]], ...how } }));
+        assert.equal(st.phase, 'static-verified', way);
+        left[way] = { rounds: t.reviews.roundsLeft(), budget: t.reviews.budget() };
     }
     // Seen: 3 + 1 + 3 = 7 calls, so two rounds of six fit. Unseen: 3 + 6 + 3 = 12, so one: the cost of the safe count
-    // (the independent review's low), said in the creator's count and the developer's line alike.
-    assert.deepEqual([left.seen.rounds, left.unseen.rounds], [2, 1], JSON.stringify(left));
+    // (the independent review's low), said in the creator's count and the developer's line alike. Told: as seen, the
+    // creator's improvement given back by the exact count.
+    assert.deepEqual([left.seen.rounds, left.unseen.rounds, left.told.rounds], [2, 1, 2], JSON.stringify(left));
     assert.match(left.unseen.budget, /calls 12 of 23 \(6 unknown\)/);
     assert.match(left.seen.budget, /calls 7 of 23 · /);
+    assert.match(left.told.budget, /calls 7 of 23 · /);
 });

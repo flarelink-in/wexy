@@ -308,16 +308,18 @@ function turnRow(t: DeepReadonly<TurnRecord>): HTMLElement {
 
 /**
  * The turn the hand-off's turn followed (Q120 (b)): it ended with no world, and its calls are among Q_C's. Its end not
- * seen, Q_C counts a turn's whole allowance, unknown: the row says so beside the calls seen (the outside review of EA9.5).
+ * seen, Q_C counts what the service said it dispatched (the follow-up's meta), or a turn's whole allowance, unknown, when
+ * it said nothing: the row says which beside the calls seen (the outside review of EA9.5; the exact count, 11-06).
  */
 function followedRow(f: DeepReadonly<FollowedTurn>): HTMLElement {
     const known = f.calls.reduce((sum, c) => sum + (c.charge === 'known' && c.costMicroUsd !== null ? c.costMicroUsd : 0), 0);
     const seen = f.end === 'seen';
     const unknown = !seen || f.calls.some(c => c.charge !== 'known');
-    const { unknown: counted } = followedCalls(f);
-    const calls = seen ? plural(f.calls.length, 'call') : `${plural(f.calls.length, 'call')} seen, its end unseen: Q_C counts ${counted}`;
-    return h('li', { class: `cand-turn is-followed${seen ? '' : ' is-unseen'}`, dataset: { role: 'followed', end: f.end } },
-        h('div', { class: 'cand-turn-head' }, h('code', null, f.turnId), ` followed: no world · ${calls} · `,
+    const counted = followedCalls(f);
+    const calls = seen ? plural(f.calls.length, 'call') : `${plural(f.calls.length, 'call')} seen, its end unseen: Q_C counts ${counted.settled + counted.unknown}`;
+    const service = f.service ? ` · the service: ${f.service.end}, ${f.service.calls === null ? 'its calls unknown' : plural(f.service.calls, 'call')}` : '';
+    return h('li', { class: `cand-turn is-followed${seen ? '' : ' is-unseen'}`, dataset: { role: 'followed', end: f.end, service: f.service ? 'told' : 'none' } },
+        h('div', { class: 'cand-turn-head' }, h('code', null, f.turnId), ` followed: no world · ${calls}${service} · `,
             unknown ? (known ? `${usd(known)} reported, charge unknown` : 'charge unknown') : usd(known),
             f.model ? ` · ${f.model}` : '', f.promptVersion ? ` · ${f.promptVersion}` : ''),
         f.calls.length ? h('ol', { class: 'cand-turn-calls' }, f.calls.map(c => h('li', { class: `cand-turn-call is-${c.charge}` },

@@ -143,6 +143,31 @@ class PromptGrantsTest {
         refused(() -> grants.grant(anonymous("u1", "net-a"), "plan-3", "h"), ErrorCode.ACCOUNT_REQUIRED);
     }
 
+    /**
+     * Q120 (b)'s count (the user, 2026-11-06: "go ahead with api change"): a follow-up's grant holds what it follows, the
+     * end and the calls that turn wrote, for its meta; given back, the prompt keeps both for the next try. A stored count
+     * that is not one reads as unknown: the join has happened by then, and must not fail on it.
+     */
+    @Test
+    void aFollowUpsGrantHoldsTheEndAndTheCallsOfTheTurnItFollows() {
+        Caller u1 = anonymous("u1", "net-a");
+        Grant entry = grants.grant(u1, "turn-1", "h");
+        entry.spent();
+        entry.ended("cancelled", 2);
+        assertThat(entry.followed()).as("an entry's own grant follows none").isNull();
+        Grant follow = grants.follow(u1, "turn-1", "turn-2", "h");
+        assertThat(follow.followed()).isEqualTo(new Grant.Followed("turn-1", "cancelled", 2));
+        follow.release();
+        Grant again = grants.follow(u1, "turn-1", "turn-3", "h");
+        assertThat(again.followed()).as("given back with its count").isEqualTo(new Grant.Followed("turn-1", "cancelled", 2));
+
+        assertThat(RedisGrantStore.calls("3")).isEqualTo(3);
+        assertThat(RedisGrantStore.calls("0")).isZero();
+        for (String notACount : new String[] {null, "", "-1", "two", "99999999999"}) {
+            assertThat(RedisGrantStore.calls(notACount)).as(String.valueOf(notACount)).isNull();
+        }
+    }
+
     /** PL-T13: a revision naming its turn runs inside its prompt, twice; a third, another caller's, another prompt's or a forged id is an entry. */
     @Test
     void followUpsRunInsideTheirPromptWithinItsBudget() {

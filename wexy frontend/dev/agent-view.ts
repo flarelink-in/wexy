@@ -516,6 +516,23 @@ async function candidates(): Promise<void> {
         && v.turns[0].head === 'turn-1 followed: no world · 1 call seen, its end unseen: Q_C counts 6 · $0.0460 reported, charge unknown · muse-spark-1.3 · agent.v7'
         && v.turns[1].role === 'hand-off' && v.budget === 'Q_C: 10 of 34 calls, 6 unknown · authors 1/12 · repairs 0/10 · revisions 0/3', { first: first?.phase, v });
 
+    // The exact count (the user, 11-06: "yes u can go ahead with api change"): the second try's meta says what the service
+    // wrote of the first turn, its end and the calls it dispatched (two here, one seen), so Q_C counts those, settled, and
+    // the row says what the service said beside the call seen.
+    const toldTry = secondTry.replace(/^event:meta\ndata:(.*)$/m,
+        (_, d: string) => `event:meta\ndata:${JSON.stringify({ ...JSON.parse(d), followed: { turnId: 'turn-1', end: 'cancelled', calls: 2 } })}`);
+    const told = candidatePanel(liveClient(() => stream(cut).response, () => stream(toldTry).response),
+        moduleClient(r => stream(echoed(moduleAuthorWire, r)).response), 'candidate: a second try whose meta counts the turn it followed');
+    await told.run();
+    await told.run();
+    candidateButton(told, 'Write the modules').click();
+    await until(() => settled(told), 5_000);
+    v = lookCandidate(told);
+    check('the exact count: a second try whose meta counts the turn it followed lists what the service said, and Q_C counts those calls, settled',
+        v.phase === 'static-verified' && v.turns.length === 2 && v.turns[0].role === 'followed'
+        && v.turns[0].head === 'turn-1 followed: no world · 1 call seen, its end unseen: Q_C counts 2 · the service: cancelled, 2 calls · $0.0460 reported, charge unknown · muse-spark-1.3 · agent.v7'
+        && v.budget === 'Q_C: 6 of 34 calls · authors 1/12 · repairs 0/10 · revisions 0/3', v);
+
     // EA-V8: an answer the server judged unusable is called again within Q_C; a refusal before the stream ends it.
     let calls = 0;
     const retry = candidatePanel(liveClient(() => stream(handedOffWire).response),
