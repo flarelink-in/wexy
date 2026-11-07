@@ -3,11 +3,12 @@
 // independent nodes) by its adapter's trusted code, the host's own part is added, and every phase is scheduled: a
 // stable topological order in which explicit dependencies come first, then each resource's writers in turn before
 // its readers, and only then the kind of work and program order. A cycle refuses; nothing is reordered to make a
-// graph pass. X is frozen, hashed over its canonical JSON, and always static only (Q75 as decided).
+// graph pass. X is frozen, hashed over its canonical JSON, and always static only (Q75 as decided). Since KR0
+// (render-kernels-design.md §5.3) X's identity names ea.v1's own constants (identity.ts) for the engine bundle and
+// the manifest: nothing the model reads moves an X.
 
-import bundleText from '../engine/bundle.json?raw';
 import { deepFreeze, type DeepReadonly } from '../engine/frozen';
-import { canonicalHash, sha256Hex } from './canonical';
+import { canonicalHash } from './canonical';
 import {
     HOST, IMPLEMENTATIONS, NO_CONTENT, SizeOverflow, hostPart, xid, type ContentSource, type Contribution, type Frame, type Produced, type Refusal, type Wired,
 } from './contribute';
@@ -15,8 +16,9 @@ import {
     PHASES, POLICY_V1, type ExecutionGraph, type OperationKind, type Phase, type StaticPolicy, type XEstimate, type XModuleRequest, type XOperation,
     type XOutput, type XResource, type XSource,
 } from './graph';
+import { BUNDLE_HASH, MANIFEST_HASH } from './identity';
 import {
-    ADAPTER_MANIFEST_TEXT, ADAPTERS, SHIPPED_GATES, SHIPPED_SUPPORT, checkNodes, pointer, type CheckedNode, type ResolveCode, type ResolveDiagnostic, type VariantGate,
+    ADAPTERS, SHIPPED_GATES, SHIPPED_SUPPORT, checkNodes, pointer, type CheckedNode, type ResolveCode, type ResolveDiagnostic, type VariantGate,
 } from './index';
 
 /** X's own contract version. */
@@ -38,8 +40,6 @@ export interface Sources {
     content: ContentSource;
 }
 export const TIER_1: Sources = Object.freeze({ gates: SHIPPED_GATES, content: NO_CONTENT });
-
-const BUNDLE_HASH = (JSON.parse(bundleText) as { bundleHash: string }).bundleHash;
 
 export type Resolved = { ok: true; graph: DeepReadonly<ExecutionGraph> } | { ok: false; diagnostics: ResolveDiagnostic[] };
 
@@ -74,14 +74,15 @@ export async function resolveProgram(input: unknown, policy: StaticPolicy = POLI
     if (!checked.ok) return checked;
     const built = build(checked.nodes, policy, support, sources.content);
     if (!built.ok) return built;
-    const [manifestHash, programHash, policyHash, supportStatusHash, gatesHash] = await Promise.all([
-        sha256Hex(ADAPTER_MANIFEST_TEXT), canonicalHash(programOf(checked.nodes)), canonicalHash(policy), canonicalHash(Object.fromEntries(support)),
-        canonicalHash(sources.gates),
+    // H's statuses, P and the gates are hashed as resolved under (a test may inject others, and X says so); the bundle and
+    // the manifest are ea.v1's constants, whatever the shell's files now say (K7).
+    const [programHash, policyHash, supportStatusHash, gatesHash] = await Promise.all([
+        canonicalHash(programOf(checked.nodes)), canonicalHash(policy), canonicalHash(Object.fromEntries(support)), canonicalHash(sources.gates),
     ]);
     const body: Omit<ExecutionGraph, 'hash'> = {
         identity: {
             graph: GRAPH_VERSION, resolver: RESOLVER_VERSION, engine: ADAPTERS.engine, bundleHash: BUNDLE_HASH, supportStatusHash,
-            manifest: ADAPTERS.version, manifestHash, gatesHash, programHash, policyHash,
+            manifest: ADAPTERS.version, manifestHash: MANIFEST_HASH, gatesHash, programHash, policyHash,
         },
         executable: false,
         ...built.draft,

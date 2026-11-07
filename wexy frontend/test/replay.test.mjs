@@ -53,8 +53,9 @@ test('a replay trusts nothing in the file: each fault is refused in the develope
     await refused(with_(f => { f.format = 'wexy-candidate-bundle.v1'; }), /^the file is wexy-candidate-bundle\.v1, not wexy-candidate-bundle\.v3 or wexy-candidate-bundle\.v2$/, 'another format');
     await refused(with_(f => { delete f.program; }), /^the file holds no program \(program\.nodes\)$/, 'no program');
     await refused(with_(f => { delete f.modules[0].interfaceHash; }), /^the file's modules are not each \{module, interfaceHash, body\}$/, 'a module without its interface');
-    await refused(with_(f => { f.versions.manifest = '0'.repeat(64); }), /^it was written against another manifest \(000000000000…\); this build's is 8bdd11e8ef2f…$/, 'another manifest');
-    await refused(with_(f => { f.versions.abi = 'ea-abi.v1'; }), /^it was written against another abi \(ea-abi\.v1\); this build's is ea-abi\.v2$/, 'another ABI');
+    // Its versions name its kernel (KR0, render-kernels §9.3): a manifest no line accepts, or another ABI, routes nowhere.
+    await refused(with_(f => { f.versions.manifest = '0'.repeat(64); }), /^KR_LEGACY_ROUTE: 0 matches for 000000000000…\/ea-abi\.v2\/ea4-body\.v1; supply an explicit reviewed line$/, 'another manifest');
+    await refused(with_(f => { f.versions.abi = 'ea-abi.v1'; }), /^KR_LEGACY_ROUTE: 0 matches for 8bdd11e8ef2f…\/ea-abi\.v1\/ea4-body\.v1; supply an explicit reviewed line$/, 'another ABI');
     await refused(with_(f => { f.modules[0].body = f.modules[0].body.replace('6.0', '7.0'); }),
         /^the host does not seal it: module castlePlace's body is not the text its codeHash names$/, 'a body edited, its hash not');
     await refused(with_(f => { f.modules[3].interfaceHash = 'f'.repeat(64); }), /^the host does not seal it: module sky's body was written for another interface$/, 'another interface');

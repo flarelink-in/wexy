@@ -88,8 +88,10 @@ test('EA-X1 X is canonical and deterministic: the same program gives the same by
     assert.equal(await canonicalHash(body), hash, 'the hash is of X without it');
     assert.equal(a.executable, false);
     assert.ok(Object.isFrozen(a) && Object.isFrozen(a.resources[0]) && Object.isFrozen(a.schedule.frame) && Object.isFrozen(a.operations[0].args));
+    // The bundle, H's statuses and the manifest: ea.v1's own constants since KR0 (identity.ts), never the shell's files.
     assert.deepEqual(a.identity, {
-        graph: 'ea-x.v1', resolver: 'ea3.2-resolver.3', engine: 'null-graph@1.2.1', bundleHash: ENGINE.bundle.bundleHash, supportStatusHash: a.identity.supportStatusHash,
+        graph: 'ea-x.v1', resolver: 'ea3.2-resolver.3', engine: 'null-graph@1.2.1', bundleHash: 'aa60280bae32e3aa780d34352ac42ef9c323d39f201b72cd5dc6c07a562f6824',
+        supportStatusHash: '32307cbb13986bcde6afa91d2e5374e563e746831b45e7b2a06ded6c564e79bb',
         manifest: 'ea-adapters.v1', manifestHash: '8bdd11e8ef2f0ced4b0cabbbac19ca4b6ff0df03fca2d56082005b05b1497220',
         gatesHash: await canonicalHash([]), programHash: a.identity.programHash, policyHash: await canonicalHash(POLICY_V1),
     });

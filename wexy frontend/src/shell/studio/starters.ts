@@ -6,7 +6,8 @@
 //
 // A saved attempt must seal under the build that ships it: `dev/starters.mjs record` writes the files from their sources
 // and pins each one's id(C) and X hash (test/fixtures/starters.json), and EA9-U11 holds every file to them, as
-// test/replay.test.mjs holds the castle. A contract change that moves one is seen there, and re-recorded on purpose.
+// test/replay.test.mjs holds the castle. Since KR0 (render-kernels-design.md §9.3) a starter opens on the kernel of its
+// line for good: one that moves means that kernel changed, which a released line never does (Q141 (b)).
 
 export interface StarterWorld {
     /** Its file's name in public/worlds, and its id here. */

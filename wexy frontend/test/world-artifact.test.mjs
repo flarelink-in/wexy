@@ -129,8 +129,10 @@ test('PL-FE11 the corpus: every saved world opens under this build, to the X and
         assert.equal(parsed.ok, true, `${name}: ${parsed.reason}`);
         const opened = await openWorld(parsed.world, `corpus:${name}`);
         assert.equal(opened.ok, true, `${name}: ${opened.reason}`);
-        const moved = `${name} seals to another X or id(C) than recorded. A change moved it: if every corpus world still opens and runs as made, `
-            + 'record it (node --import ./test/register.mjs dev/world-corpus.mjs record); if not, start a new line (the companion §8)';
+        // Since KR0 nothing the model reads moves a world (render-kernels §5.3, KR-U3), so a move is ea.v1's own code.
+        const moved = `KR_CONFORMANCE ea.v1 ${name}: it seals to another X or id(C) than recorded, so a change reached ea.v1's kernel, which is `
+            + 'released and frozen (render-kernels Q141 (b), K3). Undo it, or build it as the next line once ea.v1 is sealed (§8.1). Record over a '
+            + 'released line (dev/world-corpus.mjs record) only as a patch the user decided (K8)';
         assert.equal(opened.snapshot.x.hash, EXPECTED.worlds[name].x, moved);
         assert.equal(opened.snapshot.id, EXPECTED.worlds[name].candidate, moved);
     }
@@ -140,8 +142,14 @@ test('PL-FE11 the tripwire: this build\'s pins are the pinned set, and the line 
     const parsed = await parseWorld(CASTLE, null);
     const opened = await openWorld(parsed.world, 'corpus:castle');
     assert.equal(opened.ok, true, opened.reason);
-    assert.deepEqual(pinsOf(opened.snapshot), EXPECTED.pins,
-        'A pin moved. Decide before you record it: does every saved world still open and run as made? Yes: record (dev/world-corpus.mjs record). No: start a new line (lines.ts) and say which older lines OPENS_LINES keeps');
+    // Since KR0 a world's pins are its kernel's identity constants (render-kernels §5.3, §5.5), but for the action schema,
+    // which is the model's: the message says which moved, and whose it is.
+    const pins = pinsOf(opened.snapshot);
+    const movedPins = Object.keys(EXPECTED.pins).filter(k => pins[k] !== EXPECTED.pins[k]);
+    const whose = movedPins.map(k => (k === 'actionSchema'
+        ? 'actionSchema is the model\'s action schema, provenance: record it (dev/world-corpus.mjs record) once a world written under it still fits wexy-world.v1'
+        : `${k} is ea.v1's kernel (identity.ts, the module ABI, the body checker, P), which is released and frozen (render-kernels Q141 (b)): undo the change, or build it as the next line once ea.v1 is sealed (§8.1); never record over a released line (§7)`));
+    assert.deepEqual(pins, EXPECTED.pins, `A pin moved. ${whose.join('. ')}`);
     assert.ok(OPENS_LINES.includes(WORLD_LINE));
 });
 

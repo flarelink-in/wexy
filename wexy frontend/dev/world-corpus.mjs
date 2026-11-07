@@ -6,8 +6,10 @@
 //       sealed by this build and written as a saved world, once. A corpus world is never written again: it stands for
 //       a world saved on its day.
 //   node --import ./test/register.mjs dev/world-corpus.mjs record
-//       After a deliberate decision only (the tripwire failed, and every corpus world still opens and runs as made):
-//       records this build's pins, and the X hash and id(C) each corpus world seals to, in expected.json.
+//       After a deliberate decision only: records this build's pins, and the X hash and id(C) each corpus world seals
+//       to, in expected.json. Since KR0 (render-kernels-design.md §5.3, §7) nothing the model reads moves them, so a
+//       failing tripwire means a change reached ea.v1's kernel, which is released and frozen (Q141 (b)): record over a
+//       released line only as a patch the user decided (K8), a new corpus world, or a new action schema's pin.
 //   node --import ./test/register.mjs dev/world-corpus.mjs numbers
 //       Writes numbers.json: doubles as Node writes them in JSON, for the backend's canonical check (W3.1).
 //

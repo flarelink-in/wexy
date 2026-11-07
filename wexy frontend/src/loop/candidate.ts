@@ -56,6 +56,7 @@ import type { AgentEvent, AgentTurnResult } from '../forge-client/agent-stream';
 import { ForgeError, type ErrorCode } from '../forge-client/errors';
 import { MODULE_VERSIONS, moduleNodes, wireInterface, type ModuleCallBody, type ModuleClient, type WireFinding } from '../forge-client/module-client';
 import { ModuleStreamError, type ModuleOutcome, type ModuleUsage } from '../forge-client/module-stream';
+import { WORLD_LINE } from '../platform/lines';
 import {
     EVIDENCE_LIMITS, EvidenceLimitError, EvidenceStore, route, verifyEnvelope, type CandidateEvidence, type EvidenceFinding, type EvidenceLimits,
     type EvidencePhase, type EvidenceSubject, type Envelope, type ProducedBy, type Scope, type Verdict,
@@ -1761,7 +1762,9 @@ export function candidateBundle(state: DeepReadonly<CandidateState>, reviews: Bu
         revision: state.revision,
         candidate: state.id,
         phase: state.phase,
-        versions: { ...MODULE_VERSIONS, templates: [...new Set(templates)] },
+        // The wire's versions, what the model was told, and since KR0 the line whose kernel made it: the head's, since
+        // only the head writes (render-kernels §2, K9); a replay routes by it (§9.3).
+        versions: { ...MODULE_VERSIONS, line: WORLD_LINE, templates: [...new Set(templates)] },
         request: state.request,
         design: state.design,
         program: state.program,

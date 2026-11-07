@@ -2,19 +2,20 @@
 // outputs"): the bundle Developer view downloads (`wexy-candidate-bundle.v2`, candidate.ts) or a live-candidate
 // fixture, its program and bodies sealed again by this host and each body compiled by L3 on this device. Nothing in
 // the file is trusted. The seal resolves, checks and derives from W itself and recomputes every hash; each body must be
-// the text its codeHash names, written for the interface this host derives; a bundle's versions must be this build's.
-// What follows is the studio's own Run: the developer's press, the gate, eligibility, the probe and the first frame,
-// as for any candidate. No model is called and nothing is spent.
+// the text its codeHash names, written for the interface this host derives. A bundle's versions name its kernel: its
+// line, or for one written before KR0 the manifests its line accepts (render-kernels-design.md §9.3); its engine
+// bundle is provenance, never compared (K7). What follows is the studio's own Run: the developer's press, the gate,
+// eligibility, the probe and the first frame, as for any candidate. No model is called and nothing is spent.
 //
 // Since Q113 (a) (2026-11-03, visual-review-design.md §9.1) a bundle may be `wexy-candidate-bundle.v3`, which also holds
 // the reviews of the stage: what was judged, by the host, the creator and a model, and the frames they looked at. Those
 // are read as strictly as the rest: at most BUNDLE_REVIEWS reviews and two frames each, at most 600,000 JPEG bytes in
 // all, and each JPEG shown only when its SHA-256 is the one its frame names; anything else is left out and said.
 
-import { BODY_CHECKER, checkBody, compileBody, type CompiledBody, type ModuleCompiler } from '../contract/adapters/bodies';
-import { ABI_VERSION } from '../contract/adapters/interfaces';
+import { checkBody, compileBody, type CompiledBody, type ModuleCompiler } from '../contract/adapters/bodies';
 import { resolveProgram } from '../contract/adapters/resolve';
 import type { DeepReadonly } from '../contract/engine/frozen';
+import { routeBundle } from '../platform/lines';
 import { BUNDLE_FRAMES, BUNDLE_JPEG_BYTES, BUNDLE_REVIEWS, CANDIDATE_BUNDLE, CANDIDATE_BUNDLE_V2 } from './candidate';
 import { sealCandidate, type SealedCandidate } from './snapshot';
 
@@ -61,7 +62,8 @@ export interface SavedReview {
 export type Replayed = { ok: true; replay: Replay } | { ok: false; reason: string };
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-const short = (v: unknown) => (typeof v === 'string' ? (v.length > 16 ? `${v.slice(0, 12)}…` : v) : String(v));
+/** What a value that should have been an object is, in a developer's words. */
+const kindOf = (v: unknown): string => (v === null ? 'null' : Array.isArray(v) ? 'a list' : `a ${typeof v}`);
 
 /** A saved attempt's text, sealed by this host: the sealed candidate, or why not, in a developer's words. */
 export async function sealSaved(text: string): Promise<Replayed> {
@@ -81,19 +83,25 @@ export async function sealSaved(text: string): Promise<Replayed> {
     if (!modules.every(m => isObject(m) && typeof m.module === 'string' && typeof m.body === 'string' && typeof m.interfaceHash === 'string')) {
         return { ok: false, reason: 'the file\'s modules are not each {module, interfaceHash, body}' };
     }
+    // A downloaded bundle or a starter names the kernel it was written under, and is opened by that kernel only, or not
+    // at all: decided before anything resolves (P4). One kernel ships so far, the head's (ea.v1); KR2's registry loads a
+    // sealed line's here. Only a fixture, a file with neither a format nor versions (the live candidates, the coverage
+    // worlds), is the head's without naming it: versions that are there but not an object, or a bundle's format with
+    // none, route nowhere (KR0's outside review).
+    if (file.versions !== undefined || file.format !== undefined) {
+        if (file.versions === undefined) return { ok: false, reason: `the file is ${String(file.format)} and names no versions: a bundle names the kernel it was written under` };
+        if (!isObject(file.versions)) {
+            return { ok: false, reason: `the file's versions are ${kindOf(file.versions)}, not an object naming its kernel (its line, or its manifest, abi and checker)` };
+        }
+        const routed = routeBundle(file.versions);
+        if (!routed.ok) return { ok: false, reason: routed.reason };
+    }
     const resolved = await resolveProgram(nodes);
     if (!resolved.ok) {
         const d = resolved.diagnostics[0];
         return { ok: false, reason: `its program does not resolve here${d ? `: ${d.code} ${d.path}: ${d.message}` : ''}` };
     }
     const x = resolved.graph;
-    // A downloaded bundle names what it was written against; a replay is of that attempt, so they must be this build's.
-    if (isObject(file.versions)) {
-        const here: Record<string, string> = { bundle: x.identity.bundleHash, manifest: x.identity.manifestHash, abi: ABI_VERSION, checker: BODY_CHECKER };
-        for (const [k, want] of Object.entries(here)) {
-            if (file.versions[k] !== want) return { ok: false, reason: `it was written against another ${k} (${short(file.versions[k])}); this build's is ${short(want)}` };
-        }
-    }
     const sealed = await sealCandidate({
         attempt: typeof file.attempt === 'string' ? file.attempt : 'replay',
         revision: Number.isSafeInteger(file.revision) ? file.revision as number : 0,

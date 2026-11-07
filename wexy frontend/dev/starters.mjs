@@ -4,16 +4,21 @@
 //   node --import ./test/register.mjs dev/starters.mjs record
 //       Seals each starter's source under this build (loop/replay.ts's sealSaved: its program resolved, its bodies held
 //       to the interfaces derived here, every hash recomputed), writes public/worlds/<id>.json with this build's versions,
-//       and pins each one's id(C), X hash and file hash in test/fixtures/starters.json, which EA9-U11 holds them to. Run
-//       it after a contract change moved one (EA9-U11 fails then), once every starter still opens and runs as it should.
+//       and pins each one's id(C), X hash and file hash in test/fixtures/starters.json, which EA9-U11 holds them to.
 //
 // A file holds only what the replay reads: the build's versions, the idea it was made for, the program and its bodies.
 // No call, charge, model name, evidence or review. No model call, no GPU.
+//
+// Since KR0 (render-kernels-design.md §9.3) a starter opens on the kernel of its line for good, and recording one again
+// is a choice, to show a new line off, never a necessity: a starter EA9-U11 finds moved means its kernel moved, and a
+// released line is frozen (Q141 (b)). The files of 11-05 name no line, and ea.v1's `accepts` routes them by their
+// manifest; a file recorded from now on names its line beside its versions.
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { BODY_CHECKER } from '../src/contract/adapters/bodies.ts';
 import { ABI_VERSION } from '../src/contract/adapters/interfaces.ts';
 import { sealSaved } from '../src/loop/replay.ts';
+import { WORLD_LINE } from '../src/platform/lines.ts';
 import { STARTER_WORLDS } from '../src/shell/studio/starters.ts';
 
 /** Where each starter was recorded from: the live attempts of 11-01 and 11-02, as the model wrote them. */
@@ -46,7 +51,7 @@ for (const starter of STARTER_WORLDS) {
     const file = {
         note: `A starter (EA9.4, Q122 (a)): a world Meta's models made earlier, replayed in the studio with no model call. Recorded by dev/starters.mjs from ${from}.`,
         attempt: `starter-${starter.id}`,
-        versions: { bundle: s.x.identity.bundleHash, manifest: s.x.identity.manifestHash, abi: ABI_VERSION, checker: BODY_CHECKER },
+        versions: { line: WORLD_LINE, bundle: s.x.identity.bundleHash, manifest: s.x.identity.manifestHash, abi: ABI_VERSION, checker: BODY_CHECKER },
         request: { prompt: String(request.prompt ?? ''), style: String(request.style ?? 'auto'), seconds: Number(request.seconds ?? 12) },
         program: { nodes: JSON.parse(JSON.stringify(s.program)) },
         modules: s.bodies.map(b => ({ module: b.module, interfaceHash: b.interfaceHash, codeHash: b.codeHash, body: b.body })),

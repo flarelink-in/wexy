@@ -4,12 +4,14 @@
 // against that adapter's closed schema, and wires typed ports to other nodes' outputs. Nothing here resolves, allocates
 // or touches a device: support is static only (Q75 as decided), so a family H marks `unsupported` refuses and every
 // other resolves to data, never to something that runs. A config value the manifest gates as unavailable refuses too,
-// from the same data (Q80: `upload`, until Tier 2 brings a content source).
+// from the same data (Q80: `upload`, until Tier 2 brings a content source). Since KR0 (render-kernels-design.md §6) H is
+// ea.v1's own (identity.ts), never the shell's support.json, which is the model's.
 
 import { checkStrictSubset, pointerToken, schemaIssues } from '../agent';
 import { deepFreeze, type DeepReadonly } from '../engine/frozen';
-import supportText from '../engine/support.json?raw';
+import { canonicalJson } from './canonical';
 import manifestText from './descriptors.json?raw';
+import { SUPPORT_STATUSES } from './identity';
 
 /** `stage` orders, and carries nothing: a compute stage's `done` into another's `after` (Q77). */
 export type PortKind = 'storage_buffer' | 'geometry' | 'material' | 'lights' | 'color' | 'stage';
@@ -160,18 +162,37 @@ export function checkManifest(m: DeepReadonly<AdapterManifest>): void {
 export const ADAPTER_MANIFEST_TEXT = manifestText.replace(/\r\n/g, '\n');
 /**
  * sha256 of ADAPTER_MANIFEST_TEXT, pinned as the backend's AdapterManifest.HASH pins it, so a turn's meta is held to it
- * with no hashing at run time (EA3.6). EA-A1 recomputes it: a manifest changed without its pin fails there.
+ * with no hashing at run time (EA3.6). EA-A1 recomputes it: a manifest changed without its pin fails there. The wire's
+ * pin, what the model was told: since KR0 X names ea.v1's own constant (identity.ts's MANIFEST_HASH), which a summary
+ * edit leaves as it is.
  */
 export const ADAPTER_MANIFEST_HASH = '8bdd11e8ef2f0ced4b0cabbbac19ca4b6ff0df03fca2d56082005b05b1497220';
+
+/**
+ * The manifest's executable half (render-kernels-design.md §9.2): its canonical JSON without its prose, each adapter's
+ * and each layout's `summary`, which only the model reads. What X and the checks read of the manifest is all in it; its
+ * SHA-256 is held to identity.ts's EXECUTABLE_HASH (until KR2 splits the file in two).
+ */
+export function executableManifest(text: string): string {
+    const m = JSON.parse(text) as AdapterManifest;
+    return canonicalJson({
+        ...m,
+        layouts: Object.fromEntries(Object.entries(m.layouts).map(([name, { summary: _prose, ...rest }]) => [name, rest])),
+        adapters: m.adapters.map(({ summary: _prose, ...rest }) => rest),
+    });
+}
 export const ADAPTERS = deepFreeze(JSON.parse(ADAPTER_MANIFEST_TEXT) as AdapterManifest);
 checkManifest(ADAPTERS);
 /** The manifest's own gates: what the node check holds a program to unless a test lifts one, as Tier 2 will (Q80). */
 export const SHIPPED_GATES: readonly DeepReadonly<VariantGate>[] = ADAPTERS.unavailable;
 
 const BY_ID = new Map(ADAPTERS.adapters.map(a => [a.id, a]));
-/** H's family statuses as shipped (src/contract/engine/support.json). */
-export const SHIPPED_SUPPORT: ReadonlyMap<string, string> = new Map(
-    (JSON.parse(supportText) as { entries: { family: string; status: string }[] }).entries.map(e => [e.family, e.status]));
+/**
+ * H's family statuses as this kernel resolves them: ea.v1's own (identity.ts), frozen when it was released. The shell's
+ * src/contract/engine/support.json is the model's H: a later head may mark a family otherwise there, and a world of
+ * ea.v1 still resolves (K7).
+ */
+export const SHIPPED_SUPPORT: ReadonlyMap<string, string> = new Map(Object.entries(SUPPORT_STATUSES));
 
 /**
  * The H statuses a family may have and still resolve, statically: X never runs in EA3 (Q75 as decided), so this is

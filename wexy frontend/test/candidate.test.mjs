@@ -867,6 +867,8 @@ test('EA-K12 the evidence bounds: history past its bound is dropped oldest first
     assert.deepEqual(bundle.reviews, { records: [], jpegBytes: 0, bound: 600_000, omitted: [] });
     assert.deepEqual(bundle.versions.templates, ['agent.v5', 'module.author.v1']);
     assert.equal(bundle.versions.checker, 'ea4-body.v1');
+    // KR0 (render-kernels §9.3): the line whose kernel made it, the head's, which a replay routes by.
+    assert.equal(bundle.versions.line, 'ea.v1');
     assert.ok(bundle.calls.jobs.every(j => j.charge === 'known'));
     assert.deepEqual(bundle.request, R);
     const text = JSON.stringify(bundle);

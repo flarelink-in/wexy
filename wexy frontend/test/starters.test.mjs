@@ -28,8 +28,10 @@ test('EA9-U11 each shipped starter reseals under this build to its recorded id(C
         const sealed = await sealSaved(text);
         assert.equal(sealed.ok, true, `${starter.id}: ${sealed.reason}`);
         const s = sealed.replay.snapshot;
-        const moved = `${starter.id} seals to another X or id(C) than recorded: a change moved it. If it still opens and runs as it should, `
-            + 're-record it (node --import ./test/register.mjs dev/starters.mjs record)';
+        // A starter opens on its line's kernel for good (render-kernels §9.3): since KR0 nothing the model reads moves it.
+        const moved = `${starter.id} seals to another X or id(C) than recorded, so a change reached ea.v1's kernel, which is released and frozen `
+            + '(render-kernels Q141 (b)): undo it, or build it as the next line once ea.v1 is sealed (§8.1). Re-recording a starter '
+            + '(dev/starters.mjs record) is a choice, to show a new line off, never the way to make this pass';
         assert.equal(s.x.hash, pin.x, moved);
         assert.equal(s.id, pin.candidate, moved);
         assert.deepEqual(s.bodies.map(b => b.module), pin.modules);
@@ -44,7 +46,9 @@ test('EA9-U11 a starter\'s file holds only what a replay reads: this build\'s ve
     for (const starter of STARTER_WORLDS) {
         const file = JSON.parse(fileOf(starter.id));
         assert.deepEqual(Object.keys(file).sort(), ['attempt', 'modules', 'note', 'program', 'request', 'versions'], starter.id);
-        assert.deepEqual(Object.keys(file.versions).sort(), ['abi', 'bundle', 'checker', 'manifest'], starter.id);
+        // The files of 11-05 name no line; one recorded since KR0 names its line beside them (render-kernels §9.3).
+        const versions = Object.keys(file.versions).sort().join();
+        assert.ok(['abi,bundle,checker,manifest', 'abi,bundle,checker,line,manifest'].includes(versions), `${starter.id}: versions ${versions}`);
         assert.deepEqual(Object.keys(file.request).sort(), ['prompt', 'seconds', 'style'], starter.id);
         for (const m of file.modules) assert.deepEqual(Object.keys(m).sort(), ['body', 'codeHash', 'interfaceHash', 'module'], `${starter.id} ${m.module}`);
         assert.ok(!/costMicroUsd|generationId|muse-|"calls"|"evidence"|"reviews"/.test(fileOf(starter.id)), `${starter.id}: no call, charge or review`);
@@ -58,12 +62,13 @@ test('EA9-U11 a starter as the creator meets it: its id a file name, its label s
         assert.ok([...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(starter.title)].length <= TITLE_CHARS, starter.title);
         assert.ok(!/minecraft|mine ?craft/i.test(`${starter.label} ${starter.title}`), 'a world is described, never named after a game');
     }
-    // A file whose versions are another build's is refused, as the castle's replay is: re-recorded, never opened as is.
+    // A file that names no line and whose manifest no line accepts is refused (KR0, render-kernels §9.3): never opened
+    // under the newest line.
     const castle = JSON.parse(fileOf('castle'));
     castle.versions.manifest = '0'.repeat(64);
     const refused = await sealSaved(JSON.stringify(castle));
     assert.equal(refused.ok, false);
-    assert.match(refused.reason, /^it was written against another manifest/);
+    assert.match(refused.reason, /^KR_LEGACY_ROUTE: 0 matches for 000000000000…\//);
 });
 
 // The studio's EA9.4 wiring, which only a browser runs (dev/ea9-e1.mjs): read from main.ts, as EA9-U7 reads its own.
